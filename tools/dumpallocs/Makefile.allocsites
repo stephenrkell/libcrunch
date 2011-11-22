@@ -1,0 +1,30 @@
+# This Makefile maintains a repository of allocation site
+# metadata, shadowing libraries and executables in the system,
+# similar to the /usr/lib/debug hierarchy. 
+
+ALLOCSITES_BASE := $(dir $(last-word $(MAKEFILE_LIST)))
+$(warning ALLOCSITES_BASE is $(ALLOCSITES_BASE))
+
+DUMPALLOCS ?= $(realpath $(last-word $(MAKEFILE_LIST)))/dumpallocs
+OBJDEPS ?= $(realpath $(last-word $(MAKEFILE_LIST)))/objdeps
+
+# By default, remake everything we have already made,
+# but don't make new .allocsites files.
+default: $(shell find $(ALLOCSITES_BASE) -type f -name '*.allocsites*' ! -name 'Makefile.allocsites')
+
+# Remaking a .allocsites file from the analogous file 
+# in the system.
+$(ALLOCSITES_BASE)/%.allocsites: /%
+	$(DUMPALLOCS) "$<" > "$@"
+
+# We also know how to build a lib%-uniqtypes.so for each executable.
+# Which allocsites files does an executable's uniqtypes depend on?
+# We use a generated Makefile to capture this.
+$(ALLOCSITES_BASE)/lib%-uniqtypes.so.d: /%
+	LD_TRACE_LOADED_OBJECTS=1 "$<" | \
+		
+
+include 
+
+# Now we can build the 
+$(ALLOCSITES_BASE)/lib%-uniqtypes.so: /% $( 
