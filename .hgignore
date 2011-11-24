@@ -1,0 +1,7 @@
+syntax: glob
+*.cil.c
+*.o
+*.i
+makefile
+*.orig
+logwrites.ml

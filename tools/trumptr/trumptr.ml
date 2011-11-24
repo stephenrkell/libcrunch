@@ -1,4 +1,7 @@
-(*
+(* Copyright (c) 2011,
+ *  Stephen Kell        <stephen.kell@cs.ox.ac.uk>
+ *
+ * and based on logwrites.ml, which is 
  *
  * Copyright (c) 2001-2002, 
  *  George C. Necula    <necula@cs.berkeley.edu>
