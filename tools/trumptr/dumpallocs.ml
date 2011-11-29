@@ -39,12 +39,50 @@
  *)
 
 open List
+open Str
 open Pretty
 open Cil
 module E = Errormsg
 module H = Hashtbl
 
-class dumpAllocsVisitor = object
+let rec getSizeExpr (e: exp) =
+  match e with
+   |  BinOp(Mult, e1, e2, t) -> begin
+         match (getSizeExpr e1) with
+           | Some(s1) -> Some(s1)
+           | None -> begin match (getSizeExpr e2) with
+              | Some(s2) -> Some(s2)
+              | None -> None
+              end
+         end
+   |  SizeOf(t) -> Some(Pretty.sprint 80 (d_typsig () (typeSig t)))
+   |  SizeOfE(e) -> Some(Pretty.sprint 80 (d_typsig () (typeSig (typeOf e))))
+   |  SizeOfStr(s) -> Some(Pretty.sprint 80 (d_typsig () (typeSig charType)))
+   | _ -> None
+
+let rec getAllocExpr (f: varinfo) (arglist: exp list) =
+  match f.vname with
+    | "malloc" -> Some (f.vname, getSizeExpr (nth arglist 0))
+    | "calloc" -> Some (f.vname, getSizeExpr (nth arglist 1))
+    | "realloc" -> Some (f.vname, getSizeExpr (nth arglist 1))
+    | _ -> if (length arglist > 0) then begin
+         let guessed_result = try 
+         (if (search_forward (regexp "alloc") (f.vname) 0) >= 0 
+              then Some (f.vname, getSizeExpr (nth arglist 0)) else None)
+              with Not_found -> None
+        in
+        guessed_result
+        end 
+        else None
+
+let printAllocFn funvar allocExpr =
+   let msg = Pretty.sprint 80 
+       (Pretty.dprintf "Found an allocation function %a allocating " 
+            d_lval (Var(funvar), NoOffset)) 
+   in
+   prerr_string (msg ^ allocExpr ^ "\n")
+              
+class dumpAllocsVisitor = object(self)
   inherit nopCilVisitor
 
   method vinst (i: instr) : instr list visitAction = 
@@ -52,29 +90,27 @@ class dumpAllocsVisitor = object
       Call(Some lv, f, args, l) -> begin
         (* Check if we need to output *)
         match f with 
-          Lval(Var(v), NoOffset) when v.vglob -> 
+          Lval(Var(v), NoOffset) when v.vglob -> begin
               match v.vtype with
-                  TFun(returnType, optParamList, isVarArgs, attrs) ->
-                      if mem v.vname ["malloc"; "calloc"; "realloc"] then
-                          (* print something out *)
-                          let msg = Pretty.sprint 80 
-                              (Pretty.dprintf "Found an allocation function %a\n" d_lval (Var(v), NoOffset)) in
-                          prerr_string msg;
-                          (* Here we need to identify the size argument and
-                             then do either some hacky pattern matching
-                             or a recursive function on the expr structure:
-                             Sizeof T lets us terminate
-                             Sizeof V also lets us terminate
-                             Mul where an arg is a Sizeof lets us terminate *)
-                          SkipChildren
-                      else SkipChildren
+                  TFun(returnType, optParamList, isVarArgs, attrs) -> begin
+                      (* Here we need to identify the size argument and
+                         then do either some hacky pattern matching
+                         or a recursive function on the expr structure:
+                         Sizeof T lets us terminate
+                         Sizeof V also lets us terminate
+                         Mul where an arg is a Sizeof lets us terminate *)
+                     match (getAllocExpr v args) with
+                        Some(fn1, Some(s)) -> printAllocFn v s; SkipChildren
+                     |  Some(fn2, None) -> printAllocFn v "(unknown)"; SkipChildren
+                     |  _ -> SkipChildren
+                  end
                 | _ -> SkipChildren
-             
+             end
         | _ -> SkipChildren
       end 
     | _ -> SkipChildren
 
-end
+end (* class dumpAllocsVisitor *)
 
 let feature : featureDescr = 
   { fd_name = "dumpallocs";
@@ -84,8 +120,8 @@ let feature : featureDescr =
     fd_doit = 
     (function (f: file) -> 
       let daVisitor = new dumpAllocsVisitor in
-      Cfg.computeFileCFG f;
-      computeAEs f;
+      (* Cfg.computeFileCFG f;
+      computeAEs f; *)
       visitCilFileSameGlobals daVisitor f);
     fd_post_check = true;
   } 
