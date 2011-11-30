@@ -68,6 +68,9 @@ let rec is_bitfield lo = match lo with
   | Field(_,lo) -> is_bitfield lo
   | Index(_,lo) -> is_bitfield lo 
 
+(* CIL doesn't give us a const void * type builtin, so we define one. *)
+let voidConstPtrType = TPtr(TVoid([Attr("const", [])]),[])
+
 (* Return an expression that evaluates to the address of the given lvalue.
  * For most lvalues, this is merely AddrOf(lv). However, for bitfields
  * we do some offset gymnastics. 
@@ -95,6 +98,21 @@ let addr_of_lv (lh,lo) =
     (BinOp(PlusPI, lvPtr, (integer bytes_offset), ulongType))
   end else (AddrOf (lh,lo))
 
+(* This effectively embodies our "default specification" for C code
+ * -- it controls what we assert in "__is_a" tests, and
+ * needs to mirror what we record for allocation sites in dumpallocs *)
+let rec getEffectiveType tsig =
+ match tsig with
+   TSArray(tsig, optSz, attrs) -> getEffectiveType tsig
+ | TSPtr(tsig, attrs) -> TSPtr(getEffectiveType tsig, []) (* stays a pointer, but discard attributes *)
+ | TSComp(isSpecial, name, attrs) -> TSComp(isSpecial, name, [])
+ | TSFun(returnTs, argsTss, isSpecial, attrs) -> TSFun(returnTs, argsTss, isSpecial, [])
+ | TSEnum(enumName, attrs) -> TSEnum(enumName, [])
+ | TSBase(TVoid(attrs)) -> TSBase(TVoid([]))
+ | TSBase(TInt(kind,attrs)) -> TSBase(TInt(kind, []))
+ | TSBase(TFloat(kind,attrs)) -> TSBase(TFloat(kind, []))
+ | _ -> tsig
+
   (* CIL "expressions" are defined to be side-effect-free. Side-effecting
      operations are pushed into "instructions". Since we want to insert
      a call to assert(), which is side-effecting, we need to visit instructions.
@@ -117,14 +135,15 @@ let addr_of_lv (lh,lo) =
    *)
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
-                           fun checkFun ->
+                          (* fun checkFun -> *)
+                          fun checkFunVar ->
                            fun assertFun -> 
                            fun assertFailFun ->
                                object(self)
   inherit nopCilVisitor
   (* Create a prototype for the check function, but don't put it in the 
    * file *)
-  val checkFun =   
+(*  val checkFun =   
     let fdec = emptyFunction "__is_a" in
     fdec.svar.vtype <- TFun(intType, 
                             Some [ ("obj", voidPtrType, []);
@@ -141,7 +160,14 @@ class trumPtrExprVisitor = fun enclosingFile ->
                             ("function", charConstPtrType, [])
                              ], 
                             false, []);
-    assertFailFunDec
+    assertFailFunDec *)
+
+  val currentInst : instr option ref = ref None
+  method vinst (i: instr) : instr list visitAction = begin
+    currentInst := Some(i);
+    DoChildren
+  end
+  
   method vexpr (e: exp) : exp visitAction = 
     match e with 
       (* We need to catch any use of a pointer that might cause a run-time failure.
@@ -150,18 +176,27 @@ class trumPtrExprVisitor = fun enclosingFile ->
          need to check the downcast even though we're not dereferencing it there
          and then. In other words, let's check all the downcasts. *)
       CastE(t, subex) -> begin
+          let location = match !currentInst with
+            None -> {line = -1; file = "(unknown)"; byte = 0}
+          | Some(i) -> begin match i with
+            | Set(lv, e, l) -> l
+            | Call(olv, e, es, l) -> l
+            | Asm(attrs, instrs, locs, u, v, l) -> l
+          end
+          in
           match t with 
             TPtr(ptdt, attrs) -> begin
               (* enqueue the tmp var decl, assignment and assertion *)
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
               let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
-              let typeStr = trim (Pretty.sprint 0 (d_type () ptdt)) in
+              let effectiveType = getEffectiveType (typeSig ptdt) in
+              let typeStr = trim (Pretty.sprint 0 (d_typsig () effectiveType)) in
               self#queueInstr [
                 (* first enqueue an assignment of the whole cast to exprTmpVar *)
                 Set( (Var(exprTmpVar), NoOffset), e, locUnknown );
                 (* next enqueue the is_a call *)
                 Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
-                      (Lval(Var(checkFun.svar),NoOffset)),  (* lvalue of function to call *)
+                      (Lval(Var(checkFunVar),NoOffset)),  (* lvalue of function to call *)
                       [ 
                         (* first arg is the expression result *)
                         Lval(Var(exprTmpVar), NoOffset);
@@ -176,10 +211,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
                       [
                         (* arg is the check result *)
                         Lval(Var(checkTmpVar), NoOffset);
-                        Const(CStr("__is_a(BLAH, BLAH)"));
-                        Const(CStr("BLAH FILE"));
-                        Const(CInt64(Int64.zero, IUInt, None));
-                        Const(CStr("BLAH FUNCTION"))
+                        Const(CStr("__is_a(" ^ exprTmpVar.vname ^ ", \"" ^ typeStr ^ "\")"));
+                        Const(CStr( location.file ));
+                        Const(CInt64(Int64.of_int (if location.line == -1 then 0 else location.line), IUInt, None));
+                        Const(CStr( enclosingFunction.svar.vname ))
                       ],
                       locUnknown
                 )
@@ -196,13 +231,16 @@ class trumPtrFunVisitor = fun fl -> object
   inherit nopCilVisitor
   val mutable assertFun = let assertFunDec = emptyFunction "__inline_assert" in
     assertFunDec
-  val checkFun =   
-    let fdec = emptyFunction "__is_a" in
-    fdec.svar.vtype <- TFun(intType, 
-                            Some [ ("obj", voidPtrType, []);
-                                   ("typestr", charConstPtrType, []) ], 
-                            false, []);
-    fdec
+  val checkFunVar = findOrCreateFunc fl "__is_a" (TFun(intType, 
+                             Some [ ("obj", voidConstPtrType, []);
+                                   ("typestr", charConstPtrType, []) ],
+                            false, [Attr("weak", [])]))
+    
+   (* emptyFunction "__is_a" in
+    checkFunDec.svar.vtype <- TFun(intType, 
+                            None, (* will be filled later using setFunctionTypeMakeFormals*)
+                            false, [Attr("weak", [])]);
+    checkFunDec*)
   val assertFailFun = (* should use findOrCreateFunc here *)
     let assertFailFunDec = emptyFunction "__assert_fail" in
     assertFailFunDec.svar.vtype <- TFun(voidType, 
@@ -228,6 +266,10 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("function", charConstPtrType, [])
                                     ], 
                             false, []));
+    (* setFunctionTypeMakeFormals checkFun  (TFun(intType, 
+                            Some [ ("obj", voidPtrType, []);
+                                   ("typestr", charConstPtrType, []) ], 
+                            false, [Attr("weak", [])])); *)
     assertFun.sbody <- mkBlock (Formatcil.cStmts 
          "if (!cond) __assert_fail(assertion, file, line, function);"
          (fun n t -> makeTempVar assertFun ~name:n t)
@@ -242,9 +284,12 @@ class trumPtrFunVisitor = fun fl -> object
     assertFun.svar.vstorage <- Static;
     (* according to the docs for pushGlobal, non-types go at the end of globals *)
     fl.globals <- [GFun(assertFun, 
-        {line = -1; file = "BLAH FIXME"; byte = 0})] @ fl.globals
+        {line = -1; file = "BLAH FIXME"; byte = 0})] 
+        (* @ [GFun(checkFun, 
+        {line = -1; file = "BLAH FIXME"; byte = 0})] *)
+        @fl.globals
   method vfunc (f: fundec) : fundec visitAction = 
-      let tpExprVisitor = new trumPtrExprVisitor fl f checkFun assertFun assertFailFun in
+      let tpExprVisitor = new trumPtrExprVisitor fl f checkFunVar assertFun assertFailFun in
       ChangeTo(visitCilFunction tpExprVisitor f)
 end
 

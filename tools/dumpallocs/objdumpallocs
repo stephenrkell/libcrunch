@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 . ~/lib/bash/util
 
 # Build a list of allocation sites with the power of objdump.
@@ -16,9 +15,24 @@
 
 # HACK 3: we really ought to deal with qualifiers like const. FIXME.
 
+case $(basename "$0") in
+    (dumpallocs)
+        outputstyle="tab"
+        ;;
+    (*)
+        outputstyle="punc"
+        ;;
+esac
+
+. ~/lib/bash/util
+. $(dirname "$0")/debug-funcs.sh
+
 filetype="$( file -bi "$1" )"
 case "$filetype" in
     (application/x-object*)
+        inputfile="$1"
+    ;;
+    (application/x-executable*)
         inputfile="$1"
     ;;
     (application/octet-stream*|application/x-archive*)
@@ -52,7 +66,6 @@ case "$( file "$inputfile" | grep reloc )" in
         disassembly_opts="-rd"
         ;;
 esac
-        
 
 apply_relocs () {
     # This is a filter for objdump output that 
@@ -76,19 +89,33 @@ apply_relocs )"
 echo "Found allocation sites: " 1>&2
 echo "$allocation_sites" 1>&2
 
+# HACK: sometimes our gnu_debuglink section is wrong, i.e. does not reflect
+# the location of the debug info, e.g. according to Debian policy where
+# the debug info is moved into /usr/lib/debug but the debuglink is stuck
+# with the same-directory path (i.e. plain filename) that was correct when
+# stripping occurred during the build process. 
+
 while read sym offset; do
     # Now use the power of objdump -S to get the source line for that alloc.
     # 1, Build a regexp that will re-locate the current alloc site.
     regexp="<$( escapefn_eregexp "$sym" )\+$( escapefn_eregexp "$offset")>"
     echo "regexp: $regexp" 1>&2
-    # 2. Grab that and 200 lines of pre-context, 
+    # 2. Grab that and 10 lines of pre-context, 
     # which hopefully will include the allocating source line
-    context="$( echo "$objdump_output" | egrep -B200 "$regexp" )" #"
+    # FIXME: to optimise, chomp forward from previous match
+    # ... using a temporary file and tail -n+k
+    context="$( echo "$objdump_output" | egrep -B30 "$regexp" )" #"
     #echo "context: $context" 1>&2
     # 2a. Narrow that context to the last objdump-printed source line.
     # Remember the file/line pair
     with_file_line_header="$( echo "$context" | tac | sed -r '/^\/.*:[0-9]+$/ q' | tac )"
-    file_line_header="$( echo "$with_file_line_header" | head -n1 )"
+    # If we didn't hit a source header line,
+    # what we read next will be garbage, so grep for something that matches the pattern
+    file_line_header="$( echo "$with_file_line_header" | grep '^/.*:[0-9]+$' | head -n1 )"
+    if [[ -z "$file_line_header" ]]; then 
+        echo "Warning: skipping ${sym}+${offset}" 1>&2
+        continue
+    fi
     filename="$( echo "$file_line_header" | sed 's/:[0-9]\+$//' )"
     line_number="$( echo "$file_line_header" | sed 's/.*:\([0-9]\+\)$/\1/' )"
     context_min="$( echo "$with_file_line_header" | tail -n+2 )"
@@ -107,5 +134,15 @@ while read sym offset; do
     echo "token: $token" 1>&2
     # 5. Print the token and the site
     echo "Guessed that site <${sym}+${offset}> allocated: ${token}" 1>&2
-    echo -e "<${sym}+${offset}> @${filename}:${line_number}\t${token}"
+    case "$outputstyle" in
+        (tab)
+            echo "${sym}"$'\t'"${offset}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
+            ;;
+        (punc)
+            echo "<${sym}+${offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
+            ;;
+        (*)
+            echo "<${sym}+${offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
+            ;;
+    esac
 done <<<"$( echo "$allocation_sites" | sed -r 's/\+(0x[0-9a-f]*)$/ \1/' )" #"

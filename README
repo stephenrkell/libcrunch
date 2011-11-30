@@ -1,0 +1,40 @@
+Limitations of __is_a
+
+- does not work for actual parameters passed in varargs
+
+- does not work for address-taken temporaries
+
+- slow for on-stack data
+
+- slow (currently) for static data
+
+- programmer-facing interface is quirky: can't use type declarators directly
+
+- equivalent named types defined in different source locations are wrongly distinguished
+
+- typedefs need some extra handling (but doable in principle, straight from debug info)
+
+
+
+
+Limitations of uniqtypes
+
+- dlsym() requires string comparison
+
+- slow for dynamically loaded code --- need to call helper to merge in uniqtypes
+
+- slow for indirect call sites --- need to call helper to discover allocated types
+
+- requires manual identification of alloc sites (--alloc-fn)
+
+- assume stable load addresses (cf. randomization?)
+
+
+
+Limitations of heap_index_hooks
+
+- requires manual instrumentation of external allocators
+
+- current trailer-based implementation is vulnerable to trashing by overrun
+
+- current size-increment implementation causes clownshoes bugs

@@ -2,29 +2,44 @@
 # metadata, shadowing libraries and executables in the system,
 # similar to the /usr/lib/debug hierarchy. 
 
-ALLOCSITES_BASE := $(dir $(last-word $(MAKEFILE_LIST)))
+ALLOCSITES_BASE := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/allocsites
 $(warning ALLOCSITES_BASE is $(ALLOCSITES_BASE))
+CALLER_RELATIVE_ALLOCSITES_BASE := $(shell find -follow -samefile "$(ALLOCSITES_BASE)" | head -n1 | sed 's|^./||')
+$(warning CALLER_RELATIVE_ALLOCSITES_BASE is $(CALLER_RELATIVE_ALLOCSITES_BASE))
 
-DUMPALLOCS ?= $(realpath $(last-word $(MAKEFILE_LIST)))/dumpallocs
-OBJDEPS ?= $(realpath $(last-word $(MAKEFILE_LIST)))/objdeps
+DUMPALLOCS ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/dumpallocs
+OBJDEPS ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/objdeps
+UNIQTYPES ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/uniqtypes
+LDD_FUNCS ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/ldd-funcs.sh
 
 # By default, remake everything we have already made,
 # but don't make new .allocsites files.
-default: $(shell find $(ALLOCSITES_BASE) -type f -name '*.allocsites*' ! -name 'Makefile.allocsites')
+default: $(shell find $(ALLOCSITES_BASE) -type f -name '*.allocsites*' ! -name 'Makefile.allocsites' )
 
 # Remaking a .allocsites file from the analogous file 
 # in the system.
-$(ALLOCSITES_BASE)/%.allocsites: /%
-	$(DUMPALLOCS) "$<" > "$@"
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allocsites: /%
+	mkdir -p $$(dirname "$@")
+	$(DUMPALLOCS) "$<" | sed "s|.*|$<\t&|" > "$@"
 
 # We also know how to build a lib%-uniqtypes.so for each executable.
 # Which allocsites files does an executable's uniqtypes depend on?
-# We use a generated Makefile to capture this.
-$(ALLOCSITES_BASE)/lib%-uniqtypes.so.d: /%
-	LD_TRACE_LOADED_OBJECTS=1 "$<" | \
-		
+depend = $(shell $(OBJDEPS) "$1" 2>/dev/null | cut -f1 )
 
-include 
+# For each target of the form $(ALLOCSITES_BASE)/lib%-uniqtypes.so
+# that we are building,
+# include its deps makefile.
 
-# Now we can build the 
-$(ALLOCSITES_BASE)/lib%-uniqtypes.so: /% $( 
+# Now we can build the uniqtypes library
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c: /% $(call depend,/%)
+	mkdir -p $$(dirname "$@")
+	sourcefile="$$(mktemp)"; \
+	for obj in $+; do \
+	    cat $(ALLOCSITES_BASE)/"$$obj".allocsites; \
+	done | $(UNIQTYPES) > "$@"
+	
+# We need to define macros for the load addrs of each library
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.so: $(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c
+	$(CC) -shared \
+	$$( . $(LDD_FUNCS) && obj_load_addrs_as_cpp_macros /"$*" ) \
+	-o "$@" "$<"

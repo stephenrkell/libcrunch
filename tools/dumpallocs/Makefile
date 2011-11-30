@@ -1,0 +1,33 @@
+DEPS := 
+
+CXXFLAGS += -std=c++0x -g -O0
+LDLIBS += -ldwarfpp -lboost_regex -lboost_filesystem -lboost_system -lc++fileno -lsrk31c++
+
+CPP_SRC := uniqtypes.cpp
+
+OCAMLOPT ?= ocamlopt
+
+default: uniqtypes
+
+.PHONY: clean
+clean:
+	rm -f *.o .*.d
+
+CPP_DEPS := $(patsubst %.cpp,.%.d,$(CPP_SRC))
+
+DEPS :=$(CPP_DEPS)
+
+$(CPP_DEPS): .%.d : %.cpp
+	$(CXX) -MM $(CXXFLAGS) "$<"  > "$@"
+
+-include $(DEPS)
+
+default: uniqtypes dumpallocs
+
+dumpallocs: dumpallocs.ml dumpallocsMain.ml
+	$(OCAMLOPT) -o dumpallocsMain.cmx -c -I $(CIL)/obj/x86_LINUX $+
+	$(OCAMLOPT) -ccopt -L$(CIL)/obj/x86_LINUX -o dumpallocs unix.cmxa str.cmxa \
+		$(CIL)/obj/x86_LINUX/cil.cmxa dumpallocsMain.cmx
+
+%: %.cpp
+	$(CXX) $(LDFLAGS) $(CXXFLAGS) -o "$@" "$<" $(LDLIBS)

@@ -5,3 +5,12 @@ syntax: glob
 makefile
 *.orig
 logwrites.ml
+tools/dumpallocs/allocstbl
+*.cmx
+*.cma
+*.cmo
+*.cmi
+tools/dumpallocs/allocsites/*
+tools/dumpallocs/uniqtypes
+*.allocs
+*.d
