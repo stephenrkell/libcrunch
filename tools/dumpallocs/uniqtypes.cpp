@@ -536,18 +536,30 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 
 void print_allocsites_output(const allocsites_relation_t& r)
 {
-	cout << "typedef void *entry[2];" << endl;
-	cout << "entry allocsites[] = {" << endl;
+	cout << "struct allocsite_entry\n\
+{ \n\
+	void *next; \n\
+	void *prev; \n\
+	void *allocsite; \n\
+	struct rec *uniqtype; \n\
+};\n";	
+
+	cout << "struct allocsite_entry allocsites[] = {" << endl;
 	for (auto i_site = r.begin(); i_site != r.end(); ++i_site)
 	{
 		if (i_site != r.begin()) cout << ",";
 		
-		cout << "\n\t{ "
+		cout << "\n\t{ (void*)0, (void*)0, "
 			<< "(char*) " << "LOAD_ADDR_" 
 			<< boost::to_upper_copy(mangle_objname(i_site->first.first))
 			<< " + " << i_site->first.second << "UL, " 
 			<< "&" << mangle_typename(i_site->second)
-			<< "}";
+			<< " }";
 	}
+	// output a null terminator entry
+	if (r.size() > 0) cout << ",";
+	cout << "\n\t{ (void*)0, (void*)0, (void*)0, (struct rec *)0 }";
+	
+	// close the list
 	cout << "\n};\n";
 }

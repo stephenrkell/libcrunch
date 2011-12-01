@@ -38,12 +38,17 @@
  *
  *)
 
+open Unix
 open List
 open Str
 open Pretty
 open Cil
 module E = Errormsg
 module H = Hashtbl
+
+(* HACKed realpath for now: *)
+let abspath f =
+   if String.get f 0 = '/' then f else (getcwd ()) ^ "/" ^ f
 
 (* Return the typesig of the type that e is calculating (a multiple of) the size of,
    if any. 
@@ -153,9 +158,9 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
                | TFun(returnType, optParamList, isVarArgs, attrs) -> 
                    let chan = match !outChannel with
                     | Some(s) -> s
-                    | None    -> stderr
+                    | None    -> Pervasives.stderr
                    in
-                   let fileAndLine = l.file ^ "\t" ^ (string_of_int l.line) 
+                   let fileAndLine = (abspath l.file) ^ "\t" ^ (string_of_int l.line) 
                    in
                    begin
                       (* Here we need to identify the size argument and

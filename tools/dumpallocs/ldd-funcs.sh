@@ -21,7 +21,8 @@ mangle_objname () {
 
 obj_load_addrs_as_cpp_macros () {
     #echo "asked for: $1" 1>&2
-    obj_load_addrs "$1" | while read obj base; do 
+    # We MUST output in sorted order, because allocsmt relies on this.
+    obj_load_addrs "$1" | sort | while read obj base; do 
         #echo "obj is: $obj" 1>&2
         #echo "base is $base" 1>&2
         echo "-D$( mangle_objname "${obj}" | tr '[a-z]' '[A-Z]' )"="${base}ULL"

@@ -281,7 +281,14 @@ class trumPtrFunVisitor = fun fl -> object
            ("function", Fv arg4 );
            ("__assert_fail", Fv assertFailFun.svar ) ]);
     assertFun.svar.vinline <- true;
+    
+    (* Don't make it static -- inline is enough. Making it static
+        generates lots of spurious warnings when used from a non-static 
+        inline function. *)
+    (* Actually, do make it static -- C99 inlines are weird and don't eliminate
+       multiple definitions the way we'd like.*)
     assertFun.svar.vstorage <- Static;
+        
     (* according to the docs for pushGlobal, non-types go at the end of globals *)
     fl.globals <- [GFun(assertFun, 
         {line = -1; file = "BLAH FIXME"; byte = 0})] 

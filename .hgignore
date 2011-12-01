@@ -14,3 +14,4 @@ tools/dumpallocs/allocsites/*
 tools/dumpallocs/uniqtypes
 *.allocs
 *.d
+lib/libcrunch.so

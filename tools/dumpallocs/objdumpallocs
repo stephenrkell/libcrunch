@@ -118,6 +118,7 @@ while read sym offset; do
     fi
     filename="$( echo "$file_line_header" | sed 's/:[0-9]\+$//' )"
     line_number="$( echo "$file_line_header" | sed 's/.*:\([0-9]\+\)$/\1/' )"
+    # FIXME: adjust line number to account for the lines we skip back through to the header
     context_min="$( echo "$with_file_line_header" | tail -n+2 )"
     echo "context_min: $context_min" 1>&2
     # 3. Filter out non-source lines., and collapse to a single line
