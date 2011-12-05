@@ -246,7 +246,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 let ptr_and_fun_replaced = Str.global_replace (Str.regexp "\\(\\)=>") "__FUN_" ptr_replaced in
                 "__uniqtype_" ^ header_insert ^ "_" ^ ptr_and_fun_replaced
               end in
-              let symname = symnameFromString typeStr effectiveType "BLAH" in
+              let symname = symnameFromString typeStr effectiveType in
               self#queueInstr [
                 (* first enqueue an assignment of the whole cast to exprTmpVar *)
                 Set( (Var(exprTmpVar), NoOffset), e, locUnknown );
