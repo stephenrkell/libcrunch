@@ -38,11 +38,15 @@ extern allocsmt_entry_type *allocsmt;
 #define ALLOCSMT_FUN(op, ...)    MEMTABLE_ ## op ## _WITH_TYPE(allocsmt, allocsmt_entry_type, \
     allocsmt_entry_coverage, (void*)0, (void*)STACK_BEGIN, ## __VA_ARGS__ )
 
+extern _Bool allocsmt_initialized;
+void init_allocsites_memtable(void);
+
 // slow(er) path
 struct rec *typestr_to_uniqtype(const char *typestr);
 
 inline struct rec *allocsite_to_uniqtype(const void *allocsite)
 {
+	if (!allocsmt_initialized) init_allocsites_memtable();
 	struct allocsite_entry **bucketpos = ALLOCSMT_FUN(ADDR, allocsite);
 	struct allocsite_entry *bucket = *bucketpos;
 	for (struct allocsite_entry *p = bucket; p; p = p->next)
@@ -103,7 +107,7 @@ inline enum object_memory_kind get_object_memory_kind(const void *obj)
 // slow-path initialization handler
 int initialize_handle(void);
 
-inline int check_init(void)
+inline int __libcrunch_check_init(void)
 {
 	if (__builtin_expect(!&__uniqtypes_handle, 0))
 	{
@@ -134,7 +138,7 @@ inline int __is_a(const void *obj, const char *typestr)
 	 * constructor, because this code is supposed to be inlineable.
 	 * Adding one constructor per object file would be a waste, with 
 	 * potential for nontrivial startup time cost. */
-	if (check_init() == -1) goto abort;
+	if (__libcrunch_check_init() == -1) goto abort;
 	
 	/* Now we have a working handle with which to lookup uniqued types, */
 	/* we can look up the uniqtype by name. */
@@ -145,13 +149,17 @@ inline int __is_a(const void *obj, const char *typestr)
 
 	__assert_fail("unreachable", __FILE__, __LINE__, __func__);
 abort:
-	warnx("Aborted __is_a(%p, %p) at %p\n", obj, r, &&abort /* we are inlined, right? */);
+	warnx("Aborted __is_a(%p, %p) at %p, reason: %s\n", obj, r, 
+		&&abort /* we are inlined, right? */, "init failure");
 	return 1;
 }
 
 /* Optimised version, for when you already know the uniqtype address. */
 int __is_aU(const void *obj, const struct rec *uniqtype)
 {
+	const char *reason = NULL; // if we abort, set this to a string lit
+	_Bool suppress_warning = 0;
+	
 	/* A null pointer always satisfies is_a. */
 	if (!obj) return 1;
 	
@@ -168,6 +176,8 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 	{
 		case STACK:
 		{
+			reason = "stack object";
+			suppress_warning = 1;
 			goto abort;
 			//void *uniqtype = stack_frame_to_uniqtype(frame_base, file_relative_ip);
 		}
@@ -183,6 +193,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			 * are discovered, e.g. indirect ones.)
 			 */			
 			struct trailer *heap_info = lookup_object_info(obj, &object_start);
+			reason = "unindexed heap object";
 			if (!heap_info) goto abort;
 
 			// now we have an allocsite
@@ -195,9 +206,15 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 		case STATIC:
 		{
 			//void *uniqtype = static_obj_to_uniqtype(object_start);
+			reason = "static object";
 			goto abort;
 		}
-		case UNKNOWN: goto abort;
+		case UNKNOWN:
+		default:
+		{
+			reason = "unknown object storage";
+			goto abort;
+		}
 	}
 	
 	/* Now search iteratively for a match at the offset within the toplevel
@@ -253,7 +270,8 @@ check_failed:
 	return 1;
 
 abort:
-	warnx("Aborted __is_aU(%p, %p) at %p\n", obj, uniqtype, &&abort /* we are inlined, right? */);
+	if (!suppress_warning) warnx("Aborted __is_aU(%p, %p) at %p, reason: %s\n", obj, uniqtype,
+		&&abort /* we are inlined, right? */, reason);
 	return 1;
 }
 

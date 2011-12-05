@@ -63,6 +63,7 @@ inline int read_allocs_line(
 	unsigned& offset,
 	string& cuname,
 	unsigned& line,
+	unsigned& end_line,
 	string& alloc_typename
 )
 {
@@ -70,6 +71,7 @@ inline int read_allocs_line(
 
 	string offsetstr;
 	string linestr;
+	string endlinestr;
 
 	#define report_error(fieldname, buf) \
 	do { cerr << "Error reading field '" #fieldname "' from line: " << (buf) << endl; \
@@ -84,6 +86,7 @@ inline int read_allocs_line(
 	std::getline(s, offsetstr, '\t'); check_error(s, offset, str);
 	std::getline(s, cuname, '\t'); check_error(s, cuname, str);
 	std::getline(s, linestr, '\t'); check_error(s, line, str);
+	std::getline(s, endlinestr, '\t'); check_error(s, endline, str);
 	std::getline(s, alloc_typename, '\t'); check_error(s, alloc_typename, str);
 	// don't bother reading rest -- the line below doesn't work
 	//std::getline(s, rest, '\n'); check_error(s, rest);
@@ -94,8 +97,8 @@ inline int read_allocs_line(
 		report_error(offset, offsetstr);
 	}
 	istringstream offsetstream(offsetstr.substr(2)); offsetstream >> std::hex >> offset; check_error(offsetstream, offset, offsetstr);
-	istringstream linestream(linestr); linestream >> std::hex >> offset; check_error(linestream, line, linestr);
-
+	istringstream linestream(linestr); linestream >> line; check_error(linestream, line, linestr);
+	istringstream endlinestream(endlinestr); endlinestream >> end_line; check_error(endlinestream, end_line, endlinestr);
 	return 0;
 }
 

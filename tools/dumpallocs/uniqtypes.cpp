@@ -31,6 +31,9 @@ using boost::make_shared;
 using std::ios;
 using std::ifstream;
 using boost::dynamic_pointer_cast;
+using boost::optional;
+//using boost::shared_ptr;
+using std::ostringstream;
 using namespace dwarf;
 using boost::filesystem::path;
 using dwarf::spec::compile_unit_die;
@@ -203,48 +206,131 @@ void print_allocsites_output(const allocsites_relation_t& r);
 master_relation_t::key_type
 key_from_type(shared_ptr<type_die> t)
 {
-	auto cu = t->enclosing_compile_unit();
-	
-	string file_to_use = (t->get_decl_file() && *t->get_decl_file() != 0) 
-	                                      ? cu->source_file_name(*t->get_decl_file()) : "";
-	string name_to_use = t->get_name() ? *t->get_name() : offset_to_string(t->get_offset());
-	
-	uniqued_name n = make_pair(file_to_use, name_to_use);
+	uniqued_name n;
+	t = t->get_concrete_type();
+	if (t->get_tag() != DW_TAG_pointer_type)
+	{
+		auto cu = t->enclosing_compile_unit();
+
+		string file_to_use = (t->get_decl_file() && *t->get_decl_file() != 0) 
+		                                     ? cu->source_file_name(*t->get_decl_file()) : "";
+		string name_to_use = t->get_name() ? *t->get_name() : offset_to_string(t->get_offset());
+
+		n = make_pair(file_to_use, name_to_use);
+	}
+	else
+	{
+		auto opt_target_type = dynamic_pointer_cast<spec::pointer_type_die>(t)->get_type();
+		string opt_target_type_name;
+		if (!opt_target_type) opt_target_type_name = "void";
+		else
+		{
+			opt_target_type_name = opt_target_type->get_name() ? 
+				*opt_target_type->get_name() 
+			: offset_to_string(opt_target_type->get_offset());
+		}
+		/* We roll with: no header file, and the name with __PTR_ for '^'/
+		 * OR, HMM, the header file of the ultimate pointee? YES, it should be this.
+		 * FIXME FIXME FIXME! */
+
+		string& s = opt_target_type_name;
+		
+		ostringstream os(std::ios::out | std::ios::binary);
+		std::ostream_iterator<char, char> oi(os);
+		boost::regex_replace(oi, s.begin(), s.end(),
+			boost::regex("(\\^)"), "(__PTR_)", 
+			boost::match_default | boost::format_all);
+		n = make_pair("", os.str());
+	}
 	
 	return n;
 }
 
-void recursively_add_type(shared_ptr<spec::type_die> t, master_relation_t& r)
+shared_ptr<type_die>
+find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 {
-	if (!t) return;
+	/* For the most part, we just do named_child.
+	 * BUT, for base types, we widen the search! */
+	
+	typedef const char *equiv_class_t[5];
+	equiv_class_t equivs[] = {
+		{ "signed char", "char", NULL},
+		{ "signed int", "int", "signed", NULL },
+		{ "unsigned int", "unsigned", NULL },
+		{ "signed long int", "signed long", "long", "long int", NULL },
+		{ "unsigned long int", "unsigned long", NULL },
+		{ "signed long long int", "signed long long", "long long int", , "long long", NULL },
+		{ "unsigned long long int", "unsigned long long", NULL }
+	};
+	
+	for (equiv_class_t *i_equiv = &equivs[0]; i_equiv < &equivs[sizeof equivs / sizeof(equiv_class_t)]; ++i_equiv)
+	{
+		for (const char **i_el = i_equiv[0]; *i_el != NULL; ++i_el)
+		{
+			assert(i_el < i_equiv[4]);
+			if (name == string(*i_el))
+			{
+				/* We try every element in the class */
+				for (const char **i_attempt = i_equiv[0]; *i_attempt != NULL; ++i_attempt)
+				{
+					auto found = p_cu->named_child(string(*i_attempt));
+					auto found_type = dynamic_pointer_cast<type_die>(found);
+					if (found_type) return found_type;
+				}
+			}
+		}
+	}
+	
+	// if we got here, just try named_child
+	return dynamic_pointer_cast<type_die>(p_cu->named_child(name)); //shared_ptr<type_die>();
+}
+
+uniqued_name recursively_add_type(shared_ptr<spec::type_die> t, master_relation_t& r)
+{
+	if (!t) return make_pair("", "");
+	t = t->get_concrete_type();
 	
 	/* If it's a base type, we might not have a decl_file, */
 	if (!t->get_decl_file() || *t->get_decl_file() == 0)
 	{
-		if (t->get_tag() != DW_TAG_base_type)
+		if (t->get_tag() != DW_TAG_base_type
+		 && t->get_tag() != DW_TAG_pointer_type
+		 && t->get_tag() != DW_TAG_array_type)
 		{
-			cerr << "Warning: skipping non-base type named ";
-			if (t->get_name()) cerr << t->get_name();
-			else cerr << "(unknown, offset: " << std::hex << t->get_offset() << std::dec << ")";
-			cerr << " because no file is recorded for its declaration." << endl;
+			cerr << "Warning: skipping non-base non-pointer non-array type described by " << *t //
+			//if (t->get_name()) cerr << t->get_name();
+			//else cerr << "(unknown, offset: " << std::hex << t->get_offset() << std::dec << ")";
+			/*cerr */ << " because no file is recorded for its definition." << endl;
+			return make_pair("", "");
 		}
+		// else it's a base type, so we go with the blank type
+		// FIXME: should canonicalise base types here
+		// (to the same as the ikind/fkinds come out from Cil.Pretty)
 	}
-	
 	uniqued_name n = key_from_type(t);
-	if (r.find(n) != r.end())
-	cerr << "adding type " << n.second << " defined (or declared? FIXME) in file " << n.first << endl;
-	if (r.find(n) != r.end())
-	cerr << "warning: type named " << n.second << " already exists!" << endl;
+	
+	boost::smatch m;
+	//uniqued_name n = key_from_type(t);
+	//if (r.find(n) != r.end())
+	//cerr << "adding type " << n.second << " defined (or declared? FIXME) in file " << n.first << endl;
+	if (r.find(n) != r.end()
+		&& t->get_tag() != DW_TAG_base_type
+		&& !boost::regex_match(n.second, m, boost::regex(".*__PTR_.*")))
+	{
+		//cerr << "warning: non-base non-pointer type named " << n.second << " already exists!" << endl;
+	}
 	r[n] = t;
 	
 	/* Now recurse on members */
 	auto has_data_members = dynamic_pointer_cast<with_data_members_die>(t);
-	if (!has_data_members) return;
+	if (!has_data_members) return n;
 	for (auto i_child = has_data_members->member_children_begin();
 		i_child != has_data_members->member_children_end(); ++i_child)
 	{
 		recursively_add_type((*i_child)->get_type(), r);
 	}
+	
+	return n;
 }
 
 int main(int argc, char **argv)
@@ -276,11 +362,12 @@ int main(int argc, char **argv)
 	string objname;
 	string symname;
 	unsigned offset;
-	string cuname; 
+	string sourcefile; 
 	unsigned line;
+	unsigned end_line;
 	string alloc_typename;
 	while (in.getline(buf, sizeof buf - 1)
-		&& 0 == read_allocs_line(string(buf), objname, symname, offset, cuname, line, alloc_typename))
+		&& 0 == read_allocs_line(string(buf), objname, symname, offset, sourcefile, line, end_line, alloc_typename))
 	{
 		/* Open the dieset */
 		if (ifstreams.find(objname) == ifstreams.end())
@@ -305,34 +392,6 @@ int main(int argc, char **argv)
 		assert(ifstreams.find(objname) != ifstreams.end());
 		assert(files.find(objname) != files.end());
 		assert(diesets.find(objname) != diesets.end());		
-		
-		/* Build the containment structure and topsort it. 
-		 * It only needs to reflect the allocated types. So,
-		 * traverse the type depthfirst. */
-		
-		shared_ptr<compile_unit_die> found_cu;
-		/* Find a CU such that its comp_dir + name == cuname. */ 
-		for (auto i_cu = diesets[objname]->toplevel()->compile_unit_children_begin();
-			 i_cu != diesets[objname]->toplevel()->compile_unit_children_end();
-			 ++i_cu)
-		{
-			if ((*i_cu)->get_name() && (*i_cu)->get_comp_dir())
-			{
-				auto cu_die_name = *(*i_cu)->get_name();
-				auto cu_comp_dir = *(*i_cu)->get_comp_dir();
-				auto fullpath = path(cu_comp_dir) / path(cu_die_name);
-				if (path(cuname) == fullpath)
-				{
-					// matched
-					found_cu = *i_cu;
-				}
-			}
-		}
-		if (!found_cu)
-		{
-			cerr << "source file " << cuname << " had no match in " << objname << endl;
-			continue;
-		}
 		
 		/* alloc_typename is in C declarator form.
 		   What to do about this?
@@ -375,29 +434,39 @@ int main(int argc, char **argv)
 				}
 			}
 		}
-		cerr << "After nonconsting, typename " << alloc_typename << " is " << nonconst_typename << endl;
+		//cerr << "After nonconsting, typename " << alloc_typename << " is " << nonconst_typename << endl;
 		string clean_typename;
 		
 		boost::smatch match;
-		const boost::regex ident("[[:blank:]]*([a-zA-Z_][a-zA-Z0-9]*)[[:blank:]]*");
-		const boost::regex ident_ptr("[[:blank:]]*([a-zA-Z_][a-zA-Z0-9]*)(([[:blank:]]*\\*)*)[[:blank:]]*");
+		// HACK: we allow embedded spaces to allow "unsigned int" et al
+		const boost::regex ident("[[:blank:]]*([a-zA-Z_][a-zA-Z0-9_ ]*)[[:blank:]]*");
+		//const boost::regex ident_ptr("[[:blank:]]*([a-zA-Z_][a-zA-Z0-9]*)(([[:blank:]]*\\*)*)[[:blank:]]*");
 		if (boost::regex_match(nonconst_typename, match, ident))
 		{
 			clean_typename = match[0];
 		}
-		else if (boost::regex_match(nonconst_typename, match, ident_ptr))
+		//else if (boost::regex_match(nonconst_typename, match, ident_ptr))
+		else if (boost::regex_match(nonconst_typename, match, boost::regex("^(\\^+)(.*)")))
 		{
-			clean_typename = match[0];
-			unsigned stars_count = 0; 
-			size_t pos = 0; 
-			size_t foundpos;
-			string matched_string = match[1];
-			while ((foundpos = matched_string.find_first_of("*", pos)) != string::npos)
-			{
-				++stars_count;
-				++foundpos;
-			}
-			for (int i = 0; i < stars_count; ++i) clean_typename += '*';
+			// this is a pointer. we need to fix on a single typename for these guys,
+			// then (below) look in the dieset for an instance,
+			// and assuming it's found (FIXME: it might not be present, theoretically)
+			// generate it a unique name
+			
+			// with the new caret-based name, it's already clean! 
+			clean_typename = nonconst_typename;
+			
+// 			clean_typename = match[0];
+// 			unsigned stars_count = 0; 
+// 			size_t pos = 0; 
+// 			size_t foundpos;
+// 			string matched_string = match[1];
+// 			while ((foundpos = matched_string.find_first_of("*", pos)) != string::npos)
+// 			{
+// 				++stars_count;
+// 				++foundpos;
+// 			}
+// 			for (int i = 0; i < stars_count; ++i) clean_typename += '*';
 		}
 		else if (boost::regex_match(nonconst_typename, match, boost::regex("\\$FAILED\\$")))
 		{
@@ -408,33 +477,121 @@ int main(int argc, char **argv)
 		}
 		else
 		{
-			cerr << "warning: didn't understand typename " << nonconst_typename << endl;
+			cerr << "warning: bad typename " << nonconst_typename 
+				<< " from " << sourcefile << ":" << line << "-" << end_line << endl;
 			continue;
+		}
+		boost::trim(clean_typename);
+		
+		/* Build the containment structure and topsort it. 
+		 * It only needs to reflect the allocated types. So,
+		 * traverse the type depthfirst. */
+		
+		shared_ptr<compile_unit_die> found_cu;
+		optional<path> found_sourcefile_path;
+		shared_ptr<type_die> found_type;
+		/* Find a CU such that 
+		 - one of its source files is named sourcefile, taken relative to comp_dir if necessary;
+		 - that file defines a type of the name we want
+		 */ 
+		
+		std::vector<shared_ptr<compile_unit_die> > embodying_cus;
+		
+		for (auto i_cu = diesets[objname]->toplevel()->compile_unit_children_begin();
+			 i_cu != diesets[objname]->toplevel()->compile_unit_children_end();
+			 ++i_cu)
+		{
+			if ((*i_cu)->get_name() && (*i_cu)->get_comp_dir())
+			{
+				auto cu_die_name = *(*i_cu)->get_name();
+				auto cu_comp_dir = *(*i_cu)->get_comp_dir();
+				
+				for (unsigned i_srcfile = 1; i_srcfile <= (*i_cu)->source_file_count(); i_srcfile++)
+				{
+					/* Does this source file have a matching name? */
+					path current_sourcepath;
+					string cu_srcfile_mayberelative = (*i_cu)->source_file_name(i_srcfile);
+					//cerr << "CU " << *(*i_cu)->get_name() << " sourcefile " << i_srcfile << " is " <<
+					//	cu_srcfile_mayberelative << endl;
+					if (!path(cu_srcfile_mayberelative).has_root_directory())
+					{ 
+						current_sourcepath = path(cu_comp_dir) / path(cu_srcfile_mayberelative);
+					}
+					else current_sourcepath = path(cu_srcfile_mayberelative);
+					
+					// FIXME: smarter search
+					// FIXME: look around a bit, since sizeof isn't enough to keep DIE in the object file
+					if (current_sourcepath == path(sourcefile))
+					{ 
+						// YES this CU embodies the source file, so we can search for the type
+						embodying_cus.push_back(*i_cu);
+						
+						// handle pointers here
+						// HACK: find *any* pointer type,
+						// and use that, with empty sourcefile.
+						if (clean_typename.size() > 0 && *clean_typename.begin() == '^')
+						{
+							if ((*i_cu)->pointer_type_children_begin()
+								== (*i_cu)->pointer_type_children_end())
+							{
+								cerr << "Warning: no pointer type children in CU! Trying the next one." << endl;
+								continue;
+							}
+							else
+							{
+								found_cu = *i_cu;
+								found_type = *(*i_cu)->pointer_type_children_begin();
+								found_sourcefile_path = current_sourcepath;
+								goto cu_loop_exit;
+							}
+						}
+						else
+						{
+							found_type = find_type_in_cu(*i_cu, clean_typename);
+							if (found_type/* && (
+										found_type->get_tag() == DW_TAG_base_type ||
+										(found_type->get_decl_file()
+											&& *found_type->get_decl_file() == i_srcfile))*/)
+							{
+								found_cu = *i_cu;
+								found_sourcefile_path = current_sourcepath;
+								goto cu_loop_exit;
+							}
+							else found_type = shared_ptr<type_die>();
+						}
+					}
+				}
+			}
 		}
 		
-		// FIXME: smarter search
-		// FIXME: look around a bit, since sizeof isn't enough to keep DIE in the object file
-		auto found_type = found_cu->named_child(clean_typename);
+	cu_loop_exit:
 		if (!found_type)
 		{
-			cerr << "CU " << *found_cu->get_name() << " did not define a type named " << clean_typename << endl;
-			continue;
-		}
-		auto is_type = dynamic_pointer_cast<spec::type_die>(found_type);
-		if (!is_type)
-		{
-			cerr << "CU " << *found_cu->get_name() << " element " << *found_type << " is not a type." << endl;
+			cerr << "Warning: no type named " << clean_typename 
+				<< " in CUs (found " << embodying_cus.size() << ":";
+				for (auto i_cu = embodying_cus.begin(); i_cu != embodying_cus.end(); ++i_cu)
+				{
+					if (i_cu != embodying_cus.begin()) cerr << ", ";
+					cerr << *(*i_cu)->get_name();
+				}
+				cerr << ") embodying " 
+				<< sourcefile << ":" << line << "-" << end_line
+				<< " (allocsite: " << objname 
+				<< "<" << symname << "+0x" << std::hex << offset << std::dec << ">)" << endl;
 			continue;
 		}
 		// now we found the type
-		cerr << "SUCCESS: found type: " << *is_type << endl;
-		recursively_add_type(is_type, master_relation);
+		//cerr << "SUCCESS: found type: " << *found_type << endl;
+		
+		uniqued_name name_used = recursively_add_type(found_type, master_relation);
 		
 		// add to the allocsites table too
+		// recall: this is the mapping from allocsites to uniqtype addrs
+		// the uniqtype addrs are given as idents, so we just have to use the same name
 		allocsites_relation.insert(
 			make_pair(
 				make_pair(objname, offset),
-				key_from_type(is_type)
+				name_used
 			)
 		);
 		
@@ -502,7 +659,9 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 				<< i_vert->first.second
 				<< " is incomplete, treated as zero-size." << endl;
 		}
-		
+
+		cout << "\n/* uniqtype for " << i_vert->first.second 
+			<< " defined in " << i_vert->first.first << " */\n";
 		cout << "struct rec " << mangle_typename(i_vert->first)
 			<< " = {\n\t\"" << i_vert->first.second << "\",\n\t"
 			<< (opt_sz ? *opt_sz : 0) << " /* sz " << (opt_sz ? "" : "(incomplete) ") << "*/,\n\t"
@@ -513,6 +672,7 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 		{
 			/* if we're not the first, write a comma */
 			if (i_edge != out_edges.first) cout << ",\n\t\t";
+			
 			/* begin the struct */
 			cout << "{ ";
 			
@@ -549,8 +709,10 @@ void print_allocsites_output(const allocsites_relation_t& r)
 	{
 		if (i_site != r.begin()) cout << ",";
 		
+		cout << "\n\t/* allocsite info for " << i_site->first.second 
+			<< " defined in " << i_site->first.first << " */";
 		cout << "\n\t{ (void*)0, (void*)0, "
-			<< "(char*) " << "LOAD_ADDR_" 
+			<< "(char*) " << "__LOAD_ADDR_" 
 			<< boost::to_upper_copy(mangle_objname(i_site->first.first))
 			<< " + " << i_site->first.second << "UL, " 
 			<< "&" << mangle_typename(i_site->second)

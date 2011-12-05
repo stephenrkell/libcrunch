@@ -32,12 +32,15 @@ depend = $(shell $(OBJDEPS) "$1" 2>/dev/null | cut -f1 )
 # include its deps makefile.
 
 # Now we can build the uniqtypes library
-$(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c: /% $(call depend,/%)
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs: /% $(call depend,/%)
 	mkdir -p $$(dirname "$@")
 	sourcefile="$$(mktemp)"; \
 	for obj in $+; do \
 	    cat $(ALLOCSITES_BASE)/"$$obj".allocsites; \
-	done | $(MERGE_ALLOCS) $(UNIQTYPES) > "$@"
+	done | $(MERGE_ALLOCS) > "$@"
+
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c: $(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs
+	$(UNIQTYPES) "$<" > "$@"
 	
 # We need to define macros for the load addrs of each library
 $(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.so: $(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c

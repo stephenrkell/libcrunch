@@ -40,6 +40,8 @@
 
 open Pretty
 open Cil
+open Map
+module NamedTypeMap = Map.Make(String)
 module E = Errormsg
 module H = Hashtbl
 
@@ -70,6 +72,19 @@ let rec is_bitfield lo = match lo with
 
 (* CIL doesn't give us a const void * type builtin, so we define one. *)
 let voidConstPtrType = TPtr(TVoid([Attr("const", [])]),[])
+
+(* HACK: pasted from dumpallocs *)
+let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getEffectiveType ts)) *)
+ match tsig with
+   TSArray(tsig, optSz, attrs) -> "impossible"
+ | TSPtr(tsig, attrs) -> "^" ^ (stringFromSig tsig)
+ | TSComp(isSpecial, name, attrs) -> name
+ | TSFun(returnTs, argsTss, isSpecial, attrs) -> "()=>" ^ (stringFromSig tsig)
+ | TSEnum(enumName, attrs) -> enumName
+ | TSBase(TVoid(attrs)) -> "void"
+ | TSBase(TInt(kind,attrs)) -> trim (Pretty.sprint 80 (d_ikind () kind))
+ | TSBase(TFloat(kind,attrs)) -> trim (Pretty.sprint 80 (d_fkind () kind))
+ | _ -> "impossible"
 
 (* Return an expression that evaluates to the address of the given lvalue.
  * For most lvalues, this is merely AddrOf(lv). However, for bitfields
@@ -168,6 +183,20 @@ class trumPtrExprVisitor = fun enclosingFile ->
     DoChildren
   end
   
+  (* Remember the named types we've seen, so that we can map them back to
+   * source code locations.
+   * HACK: for now, don't bother maintaining separate namespaces for enums, structs and unions. *)
+  val namedTypesMap : location NamedTypeMap.t ref = ref NamedTypeMap.empty
+
+  method vglob (g: global) : global list visitAction =
+    match g with
+      GCompTag(ci, l) -> namedTypesMap := (NamedTypeMap.add ci.cname l !namedTypesMap); DoChildren
+    | GCompTagDecl(ci, l) -> namedTypesMap := (NamedTypeMap.add ci.cname l !namedTypesMap); DoChildren
+    | GEnumTag(ei, l) -> namedTypesMap := (NamedTypeMap.add ei.ename l !namedTypesMap); DoChildren
+    | GEnumTagDecl(ei, l) -> namedTypesMap := (NamedTypeMap.add ei.ename l !namedTypesMap); DoChildren
+    | _ -> DoChildren
+   
+  
   method vexpr (e: exp) : exp visitAction = 
     match e with 
       (* We need to catch any use of a pointer that might cause a run-time failure.
@@ -190,7 +219,34 @@ class trumPtrExprVisitor = fun enclosingFile ->
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
               let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
               let effectiveType = getEffectiveType (typeSig ptdt) in
-              let typeStr = trim (Pretty.sprint 0 (d_typsig () effectiveType)) in
+              let typeStr = stringFromSig effectiveType in
+            (* The string representation needs tweaking to make it a symname:
+               - prepend "__uniqtype_" 
+               - insert the defining header file, with the usual munging for slashes, hyphens, dots, and spaces
+               - FIXME: fix up base types specially!
+               - replace '^' with '__PTR_' 
+               - replace '()=>' with '__FUN_'.
+
+               We can't get the declaring file/line ("location" in CIL-speak) from a typesig,
+               nor from its type -- we need the global.  *)
+             let symnameFromString s ts = begin
+                let defining_file = match ts with 
+                  TSComp(isSpecial, name, attrs) -> begin try
+                      let l = NamedTypeMap.find name !namedTypesMap in l.file 
+                      with Not_found -> output_string Pervasives.stderr ("missing decl for " ^ name ^ "\n"); "" (* raise Not_found *)
+                  end
+                | TSEnum(name, attrs) -> begin try
+                      let l = NamedTypeMap.find name !namedTypesMap in l.file 
+                      with Not_found -> output_string Pervasives.stderr ("missing decl for " ^ name ^ "\n"); "" (* raise Not_found *)
+                  end
+                | _ -> ""
+                in 
+                let header_insert = Str.global_replace (Str.regexp "[. /-]") "_" defining_file in
+                let ptr_replaced = Str.global_replace (Str.regexp "\\^") "__PTR" s in
+                let ptr_and_fun_replaced = Str.global_replace (Str.regexp "\\(\\)=>") "__FUN_" ptr_replaced in
+                "__uniqtype_" ^ header_insert ^ "_" ^ ptr_and_fun_replaced
+              end in
+              let symname = symnameFromString typeStr effectiveType "BLAH" in
               self#queueInstr [
                 (* first enqueue an assignment of the whole cast to exprTmpVar *)
                 Set( (Var(exprTmpVar), NoOffset), e, locUnknown );
@@ -201,7 +257,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                         (* first arg is the expression result *)
                         Lval(Var(exprTmpVar), NoOffset);
                         (* second argument is a string computed from ptdt *)
-                        Const(CStr(typeStr))
+                        Const(CStr(symname))
                       ],
                       locUnknown
                 );
@@ -289,7 +345,9 @@ class trumPtrFunVisitor = fun fl -> object
        multiple definitions the way we'd like.*)
     assertFun.svar.vstorage <- Static;
         
-    (* according to the docs for pushGlobal, non-types go at the end of globals *)
+    (* according to the docs for pushGlobal, non-types go at the end of globals --
+     * but if we do this, our function definition appears at the end, which is wrong.
+     * So just put it at the front -- seems to work. *)
     fl.globals <- [GFun(assertFun, 
         {line = -1; file = "BLAH FIXME"; byte = 0})] 
         (* @ [GFun(checkFun, 

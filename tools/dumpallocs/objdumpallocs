@@ -16,7 +16,7 @@
 # HACK 3: we really ought to deal with qualifiers like const. FIXME.
 
 case $(basename "$0") in
-    (dumpallocs)
+    (*dumpallocs)
         outputstyle="tab"
         ;;
     (*)
@@ -95,30 +95,48 @@ echo "$allocation_sites" 1>&2
 # with the same-directory path (i.e. plain filename) that was correct when
 # stripping occurred during the build process. 
 
+tmpfile="$(mktemp)"
+echo "$objdump_output" > "$tmpfile"
+bytes_consumed=0
+
 while read sym offset; do
     # Now use the power of objdump -S to get the source line for that alloc.
     # 1, Build a regexp that will re-locate the current alloc site.
     regexp="<$( escapefn_eregexp "$sym" )\+$( escapefn_eregexp "$offset")>"
     echo "regexp: $regexp" 1>&2
-    # 2. Grab that and 10 lines of pre-context, 
+    # 2. Grab that and some lines of pre-context, 
     # which hopefully will include the allocating source line
     # FIXME: to optimise, chomp forward from previous match
-    # ... using a temporary file and tail -n+k
-    context="$( echo "$objdump_output" | egrep -B30 "$regexp" )" #"
+    # ... using a temporary file and tail -c+k
+    
+    #context="$( echo "$objdump_output" | egrep -B30 "$regexp" )" #"
+    #echo "context the slow way: $context" 1>&2
+    # instead of this, use sed
+    next_chunk="$( tail -c+"$bytes_consumed" "$tmpfile" | sed -r "/$regexp/ q" )"
+    echo "fast way, next chunk: $next_chunk" 1>&2
+    bytes_consumed=$(( $bytes_consumed + $( echo "$next_chunk" | wc -c ) ))
+    echo "bytes_consumed is now $bytes_consumed" 1>&2
+    context="$( echo "$next_chunk" | tail -n31 )"
+    echo "fast way, context: $context" 1>&2
+    
     #echo "context: $context" 1>&2
     # 2a. Narrow that context to the last objdump-printed source line.
-    # Remember the file/line pair
+    # Remember the file/line pair.
     with_file_line_header="$( echo "$context" | tac | sed -r '/^\/.*:[0-9]+$/ q' | tac )"
     # If we didn't hit a source header line,
     # what we read next will be garbage, so grep for something that matches the pattern
-    file_line_header="$( echo "$with_file_line_header" | grep '^/.*:[0-9]+$' | head -n1 )"
+    file_line_header="$( echo "$with_file_line_header" | egrep '^/.*:[0-9]+$' | head -n1 )"
     if [[ -z "$file_line_header" ]]; then 
-        echo "Warning: skipping ${sym}+${offset}" 1>&2
+        echo "Warning: could not find source line for ${sym}+${offset}, skipping" 1>&2
+        echo "Context attempt was:"$'\n'"$with_file_line_header" 1>&2
         continue
     fi
     filename="$( echo "$file_line_header" | sed 's/:[0-9]\+$//' )"
     line_number="$( echo "$file_line_header" | sed 's/.*:\([0-9]\+\)$/\1/' )"
-    # FIXME: adjust line number to account for the lines we skip back through to the header
+    # How many source lines are in the chunk?
+    # We grep -v out the header and anything that looks like an instruction disassembly line
+    source_lines_count="$( echo "$file_line_header" | egrep -v '^/.*:[0-9]+$' | egrep -v \
+        '^[0-9a-f]+[[:blank:]]*<.+>\+(0x[0-9a-f]+)?>.*' | wc -l )"
     context_min="$( echo "$with_file_line_header" | tail -n+2 )"
     echo "context_min: $context_min" 1>&2
     # 3. Filter out non-source lines., and collapse to a single line
@@ -137,7 +155,7 @@ while read sym offset; do
     echo "Guessed that site <${sym}+${offset}> allocated: ${token}" 1>&2
     case "$outputstyle" in
         (tab)
-            echo "${sym}"$'\t'"${offset}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
+            echo "${sym}"$'\t'"${offset}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'$(( $line_number + $source_lines_count ))$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
             ;;
         (punc)
             echo "<${sym}+${offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
@@ -147,3 +165,5 @@ while read sym offset; do
             ;;
     esac
 done <<<"$( echo "$allocation_sites" | sed -r 's/\+(0x[0-9a-f]*)$/ \1/' )" #"
+
+rm -f "$tmpfile"

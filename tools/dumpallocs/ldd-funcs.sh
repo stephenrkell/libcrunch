@@ -25,6 +25,10 @@ obj_load_addrs_as_cpp_macros () {
     obj_load_addrs "$1" | sort | while read obj base; do 
         #echo "obj is: $obj" 1>&2
         #echo "base is $base" 1>&2
-        echo "-D$( mangle_objname "${obj}" | tr '[a-z]' '[A-Z]' )"="${base}ULL"
+        echo "-D__LOAD_ADDR_$( mangle_objname "${obj}" | tr '[a-z]' '[A-Z]' )"="${base}ULL"
+        min_obj_load_addr=0x7eff00000000
+        if [[ $base -gt $min_obj_load_addr ]] && ! [[ $base -eq 0 ]]; then
+            echo "Warning: library $obj has a load address $base violating the assumed minimum $min_obj_load_addr" 1>&2
+        fi
     done
 }

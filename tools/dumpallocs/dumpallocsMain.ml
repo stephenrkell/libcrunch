@@ -110,7 +110,7 @@ let theMain () =
   begin
     (* this point in the code is the program entry point *)
 
-    Stats.reset Stats.HardwareIfAvail;
+    (* Stats.reset Stats.HardwareIfAvail; *)
 
     (* parse the command-line arguments *)
     Arg.parse (Arg.align argDescr) recordFile usageMsg;

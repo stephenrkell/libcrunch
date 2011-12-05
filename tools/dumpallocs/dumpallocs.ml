@@ -54,10 +54,31 @@ let abspath f =
    if any. 
    We understand multiplications. 
    We also want to detect buffer/string-size calculations, which do not use sizeof. 
-   How? 
-   HMM. Some hack will probably suffice, but for now it's a FIXME.
 *)
+let rec sizeExprHasNoSizeof (e: exp) =
+  match e with 
+ | Const(c) -> true
+ | Lval((Var(v),o)) -> true
+ | Lval((Mem(ex),o)) -> sizeExprHasNoSizeof ex
+ | SizeOf(t) -> false
+ | SizeOfE(ex) -> false
+ | SizeOfStr(s) -> false
+ | AlignOf(t) -> true
+ | AlignOfE(t) -> true
+ | UnOp(u, e1, t) -> sizeExprHasNoSizeof e1
+ | BinOp(b, e1, e2, t) -> (sizeExprHasNoSizeof e1) && (sizeExprHasNoSizeof e2)
+ | CastE(t, ex) -> sizeExprHasNoSizeof ex
+ | AddrOf((Var(v),o)) -> true
+ | AddrOf((Mem(ex),o)) -> sizeExprHasNoSizeof ex
+ | StartOf((Var(v),o)) -> true
+ | StartOf((Mem(ex),o)) -> sizeExprHasNoSizeof ex
+
+(* FIXME: split this into a "toplevel" that does the HasNoSizeof check,
+   and a recursive part which recurses *without* recursively doing the
+   HasNoSizeof check. *)
 let rec getSizeExpr (e: exp) =
+  if sizeExprHasNoSizeof e then Some(typeSig charType)
+  else begin
   match e with
    |  BinOp(Mult, e1, e2, t) -> begin
          match (getSizeExpr e1) with
@@ -71,6 +92,7 @@ let rec getSizeExpr (e: exp) =
    |  SizeOfE(e) -> Some(typeSig (typeOf e))
    |  SizeOfStr(s) -> Some(typeSig charType)
    | _ -> None
+  end
 
 (*   |  SizeOf(t) -> Some(Pretty.sprint 80 (d_typsig () (typeSig t)))
    |  SizeOfE(e) -> Some(Pretty.sprint 80 (d_typsig () (typeSig (typeOf e))))
@@ -119,8 +141,32 @@ let rec getEffectiveType tsig =
  | TSBase(TFloat(kind,attrs)) -> TSBase(TFloat(kind, []))
  | _ -> tsig
  
+(* stolen from StackOverflow:  http://stackoverflow.com/questions/1584758/
+   -- eventually want to change to use Ocaml Batteries Included *)
+let trim str =   if str = "" then "" else   let search_pos init p next =
+    let rec search i =
+      if p i then raise(Failure "empty") else
+      match str.[i] with
+      | ' ' | '\n' | '\r' | '\t' -> search (next i)
+      | _ -> i
+    in
+    search init   in   let len = String.length str in   try
+    let left = search_pos 0 (fun i -> i >= len) (succ)
+    and right = search_pos (len - 1) (fun i -> i < 0) (pred)
+    in
+    String.sub str left (right - left + 1)   with   | Failure "empty" -> "" ;;
 
-let rec stringFromSig ts = Pretty.sprint 80 (d_typsig () (getEffectiveType ts))
+let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getEffectiveType ts)) *)
+ match tsig with
+   TSArray(tsig, optSz, attrs) -> "impossible"
+ | TSPtr(tsig, attrs) -> "^" ^ (stringFromSig tsig)
+ | TSComp(isSpecial, name, attrs) -> name
+ | TSFun(returnTs, argsTss, isSpecial, attrs) -> "()=>" ^ (stringFromSig tsig)
+ | TSEnum(enumName, attrs) -> enumName
+ | TSBase(TVoid(attrs)) -> "void"
+ | TSBase(TInt(kind,attrs)) -> trim (Pretty.sprint 80 (d_ikind () kind))
+ | TSBase(TFloat(kind,attrs)) -> trim (Pretty.sprint 80 (d_fkind () kind))
+ | _ -> "impossible"
 
 (* I so do not understand Pretty.dprintf *)
 let printAllocFn fileAndLine chan funvar allocExpr =
@@ -156,6 +202,20 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
           Lval(Var(v), NoOffset) when v.vglob -> begin
               match v.vtype with
                | TFun(returnType, optParamList, isVarArgs, attrs) -> 
+                   (* Where to write our output? We want the .allocs to be output 
+                      right alongside the .c file (say) that does the allocation.
+                      PROBLEM 1: this varies, because we're reading a .i file, i.e.
+                      preprocessed temporary, that is NOT NECESSARILY IN THE SAME DIRECTORY
+                      the C file.
+                      PROBLEM 2: allocs might be in a header file, in which case we
+                      won't have permission to write the output.
+                      Our solution to both is a non-solution. We create the .allocs file
+                      wherever the .i is .
+                      This makes sense because our allocs data is a per translation unit thing
+                      (e.g. could conceivably be different for two different compilations
+                      both including the same header file, so can't write a single ".allocs"
+                      for that header).
+                    *)
                    let chan = match !outChannel with
                     | Some(s) -> s
                     | None    -> Pervasives.stderr
