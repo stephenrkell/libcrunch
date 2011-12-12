@@ -252,14 +252,15 @@ find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 	/* For the most part, we just do named_child.
 	 * BUT, for base types, we widen the search! */
 	
-	typedef const char *equiv_class_t[5];
+#define BIGGEST_EQUIV 5
+	typedef const char *equiv_class_t[BIGGEST_EQUIV];
 	equiv_class_t equivs[] = {
 		{ "signed char", "char", NULL},
 		{ "signed int", "int", "signed", NULL },
 		{ "unsigned int", "unsigned", NULL },
 		{ "signed long int", "signed long", "long", "long int", NULL },
 		{ "unsigned long int", "unsigned long", NULL },
-		{ "signed long long int", "signed long long", "long long int", , "long long", NULL },
+		{ "signed long long int", "signed long long", "long long int", "long long", NULL },
 		{ "unsigned long long int", "unsigned long long", NULL }
 	};
 	
@@ -267,7 +268,7 @@ find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 	{
 		for (const char **i_el = i_equiv[0]; *i_el != NULL; ++i_el)
 		{
-			assert(i_el < i_equiv[4]);
+			assert(i_el < i_equiv[BIGGEST_EQUIV]);
 			if (name == string(*i_el))
 			{
 				/* We try every element in the class */
@@ -280,7 +281,7 @@ find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 			}
 		}
 	}
-	
+#undef BIGGEST_EQUIV
 	// if we got here, just try named_child
 	return dynamic_pointer_cast<type_die>(p_cu->named_child(name)); //shared_ptr<type_die>();
 }
@@ -648,7 +649,14 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 		struct rec *ptr; \n\
 	} contained[]; \n\
 };\n";
-	
+	/* DWARF doesn't reify void, but we do. So output a rec for void first of all. */
+	cout << "\n/* uniqtype for void */\n";
+	cout << "struct rec " << mangle_typename(make_pair(string(""), string("void")))
+		<< " = {\n\t\"" << "void" << "\",\n\t"
+		<< "0" << " /* sz " << "(void) */,\n\t"
+		<< "0" << " /* len */,\n\t"
+		<< "/* contained */ { }\n};";
+
 	for (auto i_vert = c.begin(); i_vert != c.end(); ++i_vert)
 	{
 		auto opt_sz = i_vert->second->calculate_byte_size();

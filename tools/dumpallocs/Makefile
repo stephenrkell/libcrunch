@@ -1,7 +1,7 @@
 DEPS := 
 
 CXXFLAGS += -std=c++0x -g -O0
-LDLIBS += -ldwarfpp -ldwarf -lboost_regex -lboost_filesystem -lboost_system -lc++fileno -lsrk31c++ 
+LDLIBS += -ldwarfpp -ldwarf -lboost_regex -lboost_filesystem -lboost_system -lc++fileno -lsrk31c++ -lelf
 
 CPP_SRC := uniqtypes.cpp
 

@@ -79,12 +79,12 @@ let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getEffectiveTyp
    TSArray(tsig, optSz, attrs) -> "impossible"
  | TSPtr(tsig, attrs) -> "^" ^ (stringFromSig tsig)
  | TSComp(isSpecial, name, attrs) -> name
- | TSFun(returnTs, argsTss, isSpecial, attrs) -> "()=>" ^ (stringFromSig tsig)
+ | TSFun(returnTs, argsTss, isSpecial, attrs) -> "()=>" ^ (stringFromSig returnTs)
  | TSEnum(enumName, attrs) -> enumName
  | TSBase(TVoid(attrs)) -> "void"
  | TSBase(TInt(kind,attrs)) -> trim (Pretty.sprint 80 (d_ikind () kind))
  | TSBase(TFloat(kind,attrs)) -> trim (Pretty.sprint 80 (d_fkind () kind))
- | _ -> "impossible"
+ | _ -> "impossible" 
 
 (* Return an expression that evaluates to the address of the given lvalue.
  * For most lvalues, this is merely AddrOf(lv). However, for bitfields
