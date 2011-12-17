@@ -113,18 +113,21 @@ let rec getAllocExpr (i: instr) (f: varinfo) (arglist: exp list) =
     | "malloc" -> Some (f.vname, getSizeExpr (nth arglist 0))
     | "calloc" -> Some (f.vname, getSizeExpr (nth arglist 1))
     | "realloc" -> Some (f.vname, getSizeExpr (nth arglist 1))
-    | _ -> if (length arglist > 0) then begin
-         let guessedSizeArg = 
-          if try_match f.vname "calloc" then Some(nth arglist 1)
-          else if try_match f.vname "realloc" then Some(nth arglist  1)
-          else if try_match f.vname "[aA][lL][lL][oO][cC]" then Some(nth arglist 0)
-          else None
-        in match guessedSizeArg with
-             Some(a) -> Some(f.vname, getSizeExpr a)
-           | None -> None
-      end 
-      else None
-      
+    | _ -> if try_match f.vname "[aA][lL][lL][oO][cC]" then begin (* we *might* want to output something *)
+               if (length arglist) > 0 then 
+                 Some(f.vname, 
+                   if try_match f.vname "calloc" && (length arglist) > 1
+                      then getSizeExpr (nth arglist 1)
+                   else if try_match f.vname "realloc" && (length arglist) > 1
+                      then getSizeExpr (nth arglist 1)
+                   else getSizeExpr (nth arglist 0)
+                 )
+               else (* takes no arguments, so we output a "(none)" line. *)
+                  Some(f.vname, None) (* We eliminate these lines in merge-allocs, rather than
+                     here, so we can safely pass over the false positive from objdumpallocs. *)
+           end else None
+      (* (output_string Pervasives.stderr ("call to function " ^ f.vname ^ " is not an allocation because of empty arglist\n"); None) *)
+
 (* HACK: copied from trumptr *)
 (* This effectively embodies our "default specification" for C code
  * -- it controls what we assert in "__is_a" tests, and
@@ -196,7 +199,7 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
 
   method vinst (i: instr) : instr list visitAction = 
     match i with 
-      Call(Some lv, f, args, l) -> begin
+      Call(_, f, args, l) -> begin
         (* Check if we need to output *)
         match f with 
           Lval(Var(v), NoOffset) when v.vglob -> begin
@@ -216,6 +219,7 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
                       both including the same header file, so can't write a single ".allocs"
                       for that header).
                     *)
+                   (* (output_string Pervasives.stderr ("processing a function " ^ v.vname ^ "\n"); *)
                    let chan = match !outChannel with
                     | Some(s) -> s
                     | None    -> Pervasives.stderr
@@ -231,14 +235,16 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
                          Mul where an arg is a Sizeof lets us terminate *)
                      match (getAllocExpr i v args) with
                         Some(fn1, Some(ts)) -> printAllocFn fileAndLine chan v (stringFromSig ts); SkipChildren
-                     |  Some(fn2, None) -> printAllocFn fileAndLine chan v "(unknown)"; SkipChildren
+                     |  Some(fn2, None) -> let placeholder = if (length args) > 0 then "(unknown)" else "(none)"
+                         in printAllocFn fileAndLine chan v placeholder; SkipChildren
                      |  _ -> SkipChildren (* this means it's not an allocation function *)
-                   end
-                | _ -> SkipChildren
+                   end (* ) *)
+                | _ (* match v.vtype *) -> (output_string Pervasives.stderr ("skipping call to non-function var " ^ v.vname ^ "\n"); SkipChildren)
              end
-        | _ -> SkipChildren
+        | _ (* match f *) -> (output_string Pervasives.stderr ("skipping call to non-lvalue at " ^ l.file ^ ":" ^ (string_of_int l.line) ^ "\n"); SkipChildren)
       end 
-    | _ -> SkipChildren
+    | Set(lv, e, l) -> (* (output_string Pervasives.stderr ("skipping assignment at " ^ l.file ^ ":" ^ (string_of_int l.line) ^ "\n" ); *) SkipChildren (* ) *)
+    | Asm(_, _, _, _, _, l) -> (* (output_string Pervasives.stderr ("skipping assignment at " ^ l.file ^ ":" ^ (string_of_int l.line) ^ "\n" ); *) SkipChildren (* ) *)
 
 end (* class dumpAllocsVisitor *)
 

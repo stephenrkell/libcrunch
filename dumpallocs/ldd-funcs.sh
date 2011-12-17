@@ -7,7 +7,8 @@
 # In short, in this file, stay POSIX-compatible!
 
 obj_load_addrs () {
-    LD_TRACE_LOADED_OBJECTS=1 "$1" 2>&1 | grep '=>' | grep -v 'linux-vdso' | \
+    setarch $( uname -m ) -R sh -c 'LD_TRACE_LOADED_OBJECTS=1 '"$1" 2>&1 | \
+    grep '=>' | grep -v 'linux-vdso' | grep -v 'not found' | \
     sed 's/.*=> //' | tr -d '()' | \
     tr -s '[:blank:]' '\t'
     /bin/echo -n "$( readlink -f "$1" )"
@@ -19,16 +20,28 @@ mangle_objname () {
     echo "$1" | tr '/ .-' '_'
 }
 
+# Not necessary for bash, but necessary for sh
+hex_to_dec () {
+    printf "%d" $( echo "$1" | sed 's/^[^0][^xX].*/0x&/' )
+}
+
 obj_load_addrs_as_cpp_macros () {
     #echo "asked for: $1" 1>&2
     # We MUST output in sorted order, because allocsmt relies on this.
+    # HACK: this is for debugging weird process layout that we get when
+    # running ldd from dash. Have hacked around it for now....
+    #printenv 1>&2
+    #cat /proc/$$/maps 1>&2
+    #cat /proc/$PPID/maps 1>&2
+    #ldd "$1" 1>&2
     obj_load_addrs "$1" | sort | while read obj base; do 
         #echo "obj is: $obj" 1>&2
         #echo "base is $base" 1>&2
         echo "-D__LOAD_ADDR_$( mangle_objname "${obj}" | tr '[a-z]' '[A-Z]' )"="${base}ULL"
-        min_obj_load_addr=0x7eff00000000
-        if [[ $base -gt $min_obj_load_addr ]] && ! [[ $base -eq 0 ]]; then
-            echo "Warning: library $obj has a load address $base violating the assumed minimum $min_obj_load_addr" 1>&2
+        #min_obj_load_addr=0x7eff00000000
+        min_obj_load_addr=0x2aaa00000000
+        if [ $( hex_to_dec $base ) -lt $( hex_to_dec $min_obj_load_addr ) ] && ! [ $( hex_to_dec $base ) -eq 0 ]; then
+            echo "Warning: library $obj has a load address $base less than the assumed minimum $min_obj_load_addr" 1>&2
         fi
     done
 }

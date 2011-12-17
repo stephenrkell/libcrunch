@@ -19,7 +19,9 @@ default: $(shell find $(ALLOCSITES_BASE) -type f -name '*.allocsites*' ! -name '
 
 # Remaking a .allocsites file from the analogous file 
 # in the system.
-$(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allocsites: /%
+prefix_exactly_one_slash = $(shell echo "$1" | sed 's|^/*\(.*\)|/\1|' )
+$(warning $(CALLER_RELATIVE_ALLOCSITES_BASE)/usr/local/src/git-1.7.5.4/git depends on $(call prefix_exactly_one_slash,usr/local/src/git-1.7.5.4/git))
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allocsites: $(call prefix_exactly_one_slash,%)
 	mkdir -p $$(dirname "$@")
 	$(OBJDUMPALLOCS) "$<" | sed "s|.*|$<\t&|" > "$@"
 
@@ -27,19 +29,19 @@ $(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allocsites: /%
 # Which allocsites files does an executable's uniqtypes depend on?
 depend = $(shell $(OBJDEPS) "$1" 2>/dev/null | cut -f1 )
 
-# For each target of the form $(ALLOCSITES_BASE)/lib%-uniqtypes.so
-# that we are building,
-# include its deps makefile.
+# Note that $1 is always '/'-prefixed here, so we don't insert another L-- here
+allocsites_from_obj = $(patsubst %,$(CALLER_RELATIVE_ALLOCSITES_BASE)%.allocsites,$1)
+
+all_allocsites_for_obj = $(foreach f,$1 $(call depend,$1),$(call allocsites_from_obj,$(f)))
+#$(warning /usr/local/src/git-1.7.5.4/git has allocsites $(call all_allocsites_for_obj,/usr/local/src/git-1.7.5.4/git))
+# Merge the allocsites from each object into a single file,
+# where we also look for dumpallocs-generated allocs files in the build dir.
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs: $(call all_allocsites_for_obj,/%)
+	mkdir -p $$(dirname "$@")
+	cat $+ | $(MERGE_ALLOCS) > "$@" 2>"$@.rej"
 
 # Now we can build the uniqtypes library
-$(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs: /% $(call depend,/%)
-	mkdir -p $$(dirname "$@")
-	sourcefile="$$(mktemp)"; \
-	for obj in $+; do \
-	    cat $(ALLOCSITES_BASE)/"$$obj".allocsites; \
-	done | $(MERGE_ALLOCS) > "$@"
-
-$(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c: $(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs
+$(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c: $(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs uniqtypes
 	$(UNIQTYPES) "$<" > "$@"
 	
 # We need to define macros for the load addrs of each library

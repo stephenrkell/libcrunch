@@ -8,42 +8,93 @@
 # We can't easily predict where the .allocs file will be for a given source file.
 # (see dumpallocs.ml for the reason).
 
+pad_numbers () {
+    cat | tr '\n' '\f' | \
+    sed 's/\f/\f\n/g' | \
+    tr '\t' '\n' | \
+    sed -r "s/^[[:space:]]*[0-9]+[[:space:]]*\$/printf '%06d' '&'/e" | \
+    tr '\n' '\t' | \
+    sed 's/\f\t/\n/g'
+}
+#    # translate tabs to newlines
+#
+#    # match a whole line
+#    sed -r 's/(.*)\t([0-9]+)\t(.*)/printf "%s\t%06d\t%s\n" "\1" "\2" "\3"/e' | \
+#    sed -r 's/(.*)\t([0-9]+)\t(.*)/printf "%s\t%06d\t%s\n" "\1" "\2" "\3"/e' 
+#    # do it twice so we can replace up to two fields!
+#}
+
 input="$(cat)"
+all_obj_allocs_file="$(mktemp)"
+echo "$input" | pad_numbers | sort -t$'\t' -k4 -k5 > "$all_obj_allocs_file"
 
 lexicographic_compare_le () {
     sorted="$( echo "$1"$'\n'"$2" | LANG=C sort )"
     if [[ "$sorted" == "$1"$'\n'"$2" ]]; then
-        echo "strings compare le" 1>&2
+        echo "strings $1 and $2 compare le" 1>&2
         return 0 # true
     elif [[ "$sorted" == "$2"$'\n'"$1" ]]; then
-        echo "strings compare gt" 1>&2
+        echo "strings $1 and $2 compare gt" 1>&2
         return 1 # false
     else
         echo "lexicographic_compare_le: internal error" 1>&2
         return 99
     fi
 }
+lexicographic_compare_lt () { # is $1 lt $2?
+    if [[ "$1" == "$2" ]]; then
+        #echo "strings compare eq" 1>&2
+        return 1 # false
+    else
+        lexicographic_compare_le "$1" "$2"
+    fi
+}
+
+lexicographic_compare_gt () {
+    if ! lexicographic_compare_le "$1" "$2"; then 
+        # true
+        return 0
+    else
+        # false
+        return 1
+    fi
+}
+
+lexicographic_compare_ge () {
+    if ! lexicographic_compare_lt "$1" "$2"; then 
+        # true
+        return 0
+    else
+        # false
+        return 1
+    fi
+
+}
 
 # first pass over the input: gather all the .allocs files we might want
-all_allocs_file="$(mktemp)"
+all_source_allocs_file="$(mktemp)"
 while read obj func offset sourcefile rest; do
     echo "$( dirname "$sourcefile" )"
-done <<< "$input" | sort | uniq | while read dir; do find $dir -name '*.allocs'; done | \
-( echo "Found allocs files:" >/dev/null; tee /dev/stderr) | xargs cat | sort -t$'\t' -k1 -k2 > "$all_allocs_file"
+done < "$all_obj_allocs_file" | sort | uniq | while read dir; do find $dir -name '*.allocs'; done | \
+xargs cat | pad_numbers | sort -t$'\t' -k1 -k2 > "$all_source_allocs_file"
 
-echo "all_allocs_file: $all_allocs_file" 1>&2
+echo "all_source_allocs_file: $all_source_allocs_file" 1>&2
+echo "all_obj_allocs_file: $all_obj_allocs_file" 1>&2
 
 # second pass -- we read input grouped by source file then line number
-keep_old_line=0
+keep_old_source_line=0
+have_matched_this_source_line=0
 while read obj func offset sourcefile sourceline sourceline_end alloctype rest; do
     #echo "read line for obj $obj sourcefile $sourcefile" 1>&2
     
     # We have our source-level allocs data on fd 3
     while true; do 
-        # read a line of allocs data, unless the last line is still good
-        if [[ $keep_old_line -eq 0 ]]; then
+        # read a line of source-level allocs data, unless the last line is still good
+        if [[ $keep_old_source_line -eq 0 ]]; then
             #echo "reading some more" 1>&2
+            have_matched_this_source_line=0
             read alloc_sourcefile alloc_sourceline alloc_fun alloc_ciltype <&3 #|| break 2
+            #echo "Setting have_matched_this_source_line to 0 for sourcefile $alloc_sourcefile line $alloc_sourceline" 1>&2
             #echo "read returned $?, new sourceline is $alloc_sourceline" 1>&2
         else
             #echo "retained old line" 1>&2
@@ -57,69 +108,65 @@ while read obj func offset sourcefile sourceline sourceline_end alloctype rest; 
         # (There is no "this follows our toplevel line" case, because we sorted
         # both inputs.)
         # Detecting 1 is easy; if so, we advance both inputs.
+        #  ... NO! We can have >1 call instr for a given source-level call, so just advance obj.
         # Detecting 2: if it has source line < toplevel, we can safely skip it as it will never be needed.
         # Else if its source line is in our window, it's a match
         # Else we have case 3, so we need to advance toplevel.
-        if [[ "$(readlink -f "$alloc_sourcefile")" == "$( readlink -f "$sourcefile" )" ]] && \
-           [[ "$alloc_sourceline" -ge "$sourceline" ]] && \
-           [[ "$alloc_sourceline" -lt "$(( $sourceline + $sourceline_end ))" ]]; then
-           # matched -- output, and advance both inputs
-           #echo "matched, so advancing both" 1>&2
-           echo "$obj"$'\t'"$func"$'\t'"$offset"$'\t'"$sourcefile"$'\t'"$sourceline"$'\t'"$sourceline_end"$'\t'"$alloc_ciltype"$'\t' 
-           keep_old_line=0
-           continue 2
-        # lexicographic compare...
-        elif lexicographic_compare_le "$(readlink -f "$alloc_sourcefile")" "$( readlink -f "$sourcefile" )" ||
-         ( [[ "$(readlink -f "$alloc_sourcefile")" == "$( readlink -f "$sourcefile" )" ]] && \
-           [[ "$alloc_sourceline" -lt "$sourceline" ]] ); then
-           # we will never use this line, so skip it
-           echo "warning: skipping source allocs line: $alloc_sourcefile"$'\t'"$alloc_sourceline"$'\t'"$alloc_ciltype" 1>&2
-           keep_old_line=0
-           continue
-        
-        else 
-            # Try advancing the outer loop and re-testing
-            # We might have a match for the next iteration of the outer loop
-            # PROBLEM: we might not!
-            # Each time we advance the outer, we are giving up on matching that line. 
-            echo "warning: skipping objdump allocs line: $obj $func $offset $sourcefile $sourceline $sourceline_end $alloctype $rest" 1>&2
-            keep_old_line=1
+        if [[ "$(readlink -f "$alloc_sourcefile" )" == "$( readlink -f "$sourcefile" )" ]] && \
+           lexicographic_compare_ge "$alloc_sourceline" "$sourceline" && \
+           lexicographic_compare_lt "$alloc_sourceline" "$sourceline_end"; then
+#           [[ "$alloc_sourceline" -lt "$(( $sourceline + $sourceline_end ))" ]]; then
+            # matched -- output, and advance both inputs
+            #echo "matched, so advancing both" 1>&2
+            # if we got "(none)" as the type, it's dumpallocs's way of telling us
+            # that it's definitely not an allocation function after all, so just
+            # skip without printing
+            case "$alloc_ciltype" in
+                ('(none)')
+                    true
+                ;;
+                (*)
+                    #echo "Outputting match for sourcefile $alloc_sourcefile line $alloc_sourceline" 1>&2
+                    echo "$obj"$'\t'"$func"$'\t'"$offset"$'\t'"$sourcefile"$'\t'"$sourceline"$'\t'"$sourceline_end"$'\t'"$alloc_ciltype"$'\t' 
+                ;;
+            esac
+            #echo "Setting have_matched_this_source_line to 1 for sourcefile $alloc_sourcefile line $alloc_sourceline" 1>&2
+            have_matched_this_source_line=1
+            
+            # We might want to keep the old source line, because there might be other
+            # call instructions that it matches. But we can definitely consume the objdump line
+            keep_old_source_line=1
             continue 2
+        # lexicographic compare...
+        else
+            echo found "$(readlink -f "$alloc_sourcefile" )" != "$( readlink -f "$sourcefile" )" or \
+           NOT lexicographic_compare_ge "$alloc_sourceline" "$sourceline" or \
+           NOT lexicographic_compare_lt "$alloc_sourceline" "$sourceline_end" 1>&2
+            if lexicographic_compare_lt "$(readlink -f "$alloc_sourcefile")" "$( readlink -f "$sourcefile" )" || \
+             ( [[ "$(readlink -f "$alloc_sourcefile")" == "$( readlink -f "$sourcefile" )" ]] && \
+               lexicographic_compare_lt "$alloc_sourceline" "$sourceline_end" ); then
+               # we will not use this source line [again], so skip it
+               # warn only if we have not used this source line
+               if ! [[ $have_matched_this_source_line -eq 1 ]]; then
+                   #echo "Found have_matched_this_source_line not equal to 1" 1>&2
+                   echo "warning: skipping source allocs line, comparing lt next obj entry (which has file ${sourcefile}, lines ${sourceline}-${sourceline_end}, address ${obj}<${func}+${offset}>): $alloc_sourcefile"$'\t'"$alloc_sourceline"$'\t'"$alloc_ciltype" 1>&2
+               fi
+               keep_old_source_line=0
+               # we have not yet consumed the obj line, so don't grab a new obj line
+               continue 1
+            else 
+                # This means we didn't match, and the source line is not LT the obj line. 
+                # Try advancing the outer loop and re-testing
+                # We might have a match for the next iteration of the outer loop
+                # Each time we advance the outer, we are giving up on matching that line. 
+                # (We can say "comparing lt" because the equality case was handled in the first test.)
+                echo "warning: skipping objdump allocs line, comparing lt next source entry (which has file ${alloc_sourcefile}, line ${alloc_sourceline}): $obj $func $offset $sourcefile $sourceline $sourceline_end $alloctype $rest" 1>&2
+                keep_old_source_line=1
+                continue 2
+            fi
         fi
     done
    
-    
-    
-    # build a regexp matching any line in the range 
-#    file_regexp="$( echo "$sourcefile" | escape_regexp )"
-#    line_regexp="$( seq $sourceline $sourceline_end | tr '[:blank:]' '\n' | make_match_any_line_regexp )"
-#    grep_output="$( grep "${file_regexp}\t${line_regexp}" "$attempt" )"
-#    grep_status=$? 
-#    if [[ "$( echo "$grep_output" | wc -l )" -gt 1 ]]; then
-#        echo "Warning: multiple matching lines in $attempt:"$'\n'"$grep_output" 1>&2
-#    fi
-    
-#    # look for the source-level allocs file 
-#    for attempt in \
-#    $( echo "$sourcefile" | sed 's/\.c/.i.allocs/' ) \
-#    $( echo "$sourcefile".allocs ) \
-#    $( echo "$sourcefile" | sed 's/\.[^\.]*$/.allocs/' ) \
-#    $( echo "$sourcefile" | sed 's/\.[^\.]*$/.i.allocs/' ); do
-#        if [[ -r "$attempt" ]]; then
-#            echo "attempt $attempt exists" 1>&2
-#            # build a regexp matching any line in the range 
-#            file_regexp="$( echo "$sourcefile" | escape_regexp )"
-#            line_regexp="$( seq $sourceline $sourceline_end | tr '[:blank:]' '\n' | make_match_any_line_regexp )"
-#            grep_output="$( grep "${file_regexp}\t${line_regexp}" "$attempt" )"
-#            grep_status=$? 
-#            if [[ "$( echo "$grep_output" | wc -l )" -gt 1 ]]; then
-#                echo "Warning: multiple matching lines in $attempt:"$'\n'"$grep_output" 1>&2
-#            fi
-#            echo "$grep_output" | head -n1 | \
-#                read matched_sourcefile matched_sourceline matched_func typestring \
-#                && echo "$obj"$'\t'"$func"$'\t'"$offset"$'\t'"$sourcefile"$'\t'"$sourceline"$'\t'"$sourceline_end"$'\t'"$typestring"$'\t' \
-#                && continue || echo "attempt $attempt did not match sourcefile $sourcefile line $sourceline" 1>&2
-#        fi
-#    done
-done <<<"$( echo "$input" | sort -t$'\t' -k4 -k5 )" 3<"$all_allocs_file"
-#rm -f "$all_allocs_file"
+done <"$all_obj_allocs_file" 3<"$all_source_allocs_file"
+#rm -f "$all_source_allocs_file"
+#rm -f "$all_obj_allocs_file"

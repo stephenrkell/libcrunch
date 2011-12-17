@@ -14,3 +14,4 @@ dumpallocs/uniqtypes
 *.allocs
 *.d
 lib/libcrunch.so
+src/libcrunch.so

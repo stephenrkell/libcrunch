@@ -15,6 +15,14 @@ Limitations of __is_a
 - typedefs need some extra handling (but doable in principle, straight from debug info)
 
 
+Limitations of trumptr
+
+- only instruments casts
+
+- ... so misses implicit strengthenings of void*, even in C99
+
+- ... misses more for C89, -fpermissive, ...
+(fix this by using CIL's C++ifying transformation to insert casts)
 
 
 Limitations of uniqtypes

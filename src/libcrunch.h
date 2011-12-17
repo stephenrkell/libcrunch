@@ -76,11 +76,14 @@ enum object_memory_kind
 	STACK,
 	HEAP
 };
-/* HACK: on my system, shared libraries are always loaded at the top. */
-#define SHARED_LIBRARY_MIN_ADDRESS 0x7eff00000000UL
+/* HACK: on my system, shared libraries are always loaded at the top,
+ * from 0x7eff00000000....
+ * EXCEPT when we run ldd from a Makefile running dash, in which case
+ * they show up at 0x2aaaa00000000+delta, which is weird. I should really
+ * check the source of ld-linux.so, but for now, go with the lower addr. */
+#define SHARED_LIBRARY_MIN_ADDRESS 0x2aaa00000000UL
 inline enum object_memory_kind get_object_memory_kind(const void *obj)
 {
-	
 	/* For x86-64, we do this in a rough-and-ready way. 
 	 * In particular, SHARED_LIBRARY_MIN_ADDRESS is not guaranteed. 
 	 * However, we can detect violations of this statically using our ldd output. */

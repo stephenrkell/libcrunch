@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <set>
 #include <string>
 #include <cctype>
 #include <boost/shared_ptr.hpp>
@@ -17,6 +18,7 @@
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/algorithm/string.hpp>
 #include <srk31/algorithm.hpp>
+#include <srk31/ordinal.hpp>
 #include <dwarfpp/spec_adt.hpp>
 #include <dwarfpp/adt.hpp>
 #include <fileno.hpp>
@@ -252,16 +254,16 @@ find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 	/* For the most part, we just do named_child.
 	 * BUT, for base types, we widen the search! */
 	
-#define BIGGEST_EQUIV 5
+#define BIGGEST_EQUIV 6
 	typedef const char *equiv_class_t[BIGGEST_EQUIV];
 	equiv_class_t equivs[] = {
 		{ "signed char", "char", NULL},
 		{ "signed int", "int", "signed", NULL },
 		{ "unsigned int", "unsigned", NULL },
-		{ "signed long int", "signed long", "long", "long int", NULL },
-		{ "unsigned long int", "unsigned long", NULL },
-		{ "signed long long int", "signed long long", "long long int", "long long", NULL },
-		{ "unsigned long long int", "unsigned long long", NULL }
+		{ "signed long int", "long signed int", "signed long", "long", "long int", NULL },
+		{ "unsigned long int", "long unsigned int", "unsigned long", NULL },
+		{ "signed long long int", "long long signed int", "signed long long", "long long int", "long long", NULL },
+		{ "unsigned long long int", "long long unsigned int", "unsigned long long", NULL }
 	};
 	
 	for (equiv_class_t *i_equiv = &equivs[0]; i_equiv < &equivs[sizeof equivs / sizeof(equiv_class_t)]; ++i_equiv)
@@ -667,6 +669,13 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 				<< i_vert->first.second
 				<< " is incomplete, treated as zero-size." << endl;
 		}
+		if (i_vert->first.second == string("void"))
+		{
+			cerr << "Warning: skipping explicitly declared void type from CU "
+				<< *i_vert->second->enclosing_compile_unit()->get_name()
+				<< endl;
+			continue;
+		}
 
 		cout << "\n/* uniqtype for " << i_vert->first.second 
 			<< " defined in " << i_vert->first.first << " */\n";
@@ -676,8 +685,12 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 			<< boost::out_degree(*i_vert, g) << " /* len */,\n\t"
 			<< /* contained[0] */ "/* contained */ {\n\t\t";
 		auto out_edges = boost::out_edges(*i_vert, g);
+		unsigned i_member = 0;
+		std::set<lib::Dwarf_Unsigned> used_offsets;
 		for (auto i_edge = out_edges.first; i_edge != out_edges.second; ++i_edge)
 		{
+			++i_member;
+		
 			/* if we're not the first, write a comma */
 			if (i_edge != out_edges.first) cout << ",\n\t\t";
 			
@@ -685,10 +698,42 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 			cout << "{ ";
 			
 			// compute offset
-			lib::Dwarf_Unsigned offset = lib::evaluator(
-				(*i_edge)->get_data_member_location()->at(0), (*i_edge)->get_ds().get_spec(),
-				// push zero as the initial stack value
-				std::stack<lib::Dwarf_Unsigned>(std::deque<lib::Dwarf_Unsigned>(1, 0UL))).tos();
+			lib::Dwarf_Unsigned offset;
+			if ((*i_edge)->get_data_member_location() 
+				&& (*i_edge)->get_data_member_location()->size() > 0)
+			{
+				
+				if ((*i_edge)->get_data_member_location()->size() > 1)
+				{
+					cerr << "Warning: ignoring all but first location expression for "
+						<< i_member << srk31::ordinal_suffix(i_member) << " data member of " 
+						<< i_vert->first.second << endl;
+				}
+				offset = lib::evaluator(
+					(*i_edge)->get_data_member_location()->at(0), (*i_edge)->get_ds().get_spec(),
+					// push zero as the initial stack value
+					std::stack<lib::Dwarf_Unsigned>(std::deque<lib::Dwarf_Unsigned>(1, 0UL))).tos();
+			}
+			else 
+			{
+				cerr << "Warning: "
+					<< i_member << srk31::ordinal_suffix(i_member) << " data member of " 
+					<< i_vert->first.second 
+					<< " has no location description; assuming zero-offset." 
+					<< endl;
+				offset = 0UL;
+			}
+			// check whether this subobject overlaps another
+			if (used_offsets.find(offset) != used_offsets.end())
+			{
+				// FIXME: do overlapment check
+				cerr << "Warning: "
+					<< i_member << srk31::ordinal_suffix(i_member) << " data member of " 
+					<< i_vert->first.second 
+					<< " shares offset with a previous member." 
+					<< endl;
+			}
+			
 			cout << offset << ", ";
 			
 			// compute and print destination name

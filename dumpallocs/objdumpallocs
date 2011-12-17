@@ -102,8 +102,8 @@ bytes_consumed=0
 while read sym offset; do
     # Now use the power of objdump -S to get the source line for that alloc.
     # 1, Build a regexp that will re-locate the current alloc site.
-    regexp="<$( escapefn_eregexp "$sym" )\+$( escapefn_eregexp "$offset")>"
-    echo "regexp: $regexp" 1>&2
+    regexp="^[0-9a-f]+[[:blank:]]*<$( escapefn_eregexp "$sym" )\+$( escapefn_eregexp "$offset")>"
+    #echo "regexp: $regexp" 1>&2
     # 2. Grab that and some lines of pre-context, 
     # which hopefully will include the allocating source line
     # FIXME: to optimise, chomp forward from previous match
@@ -112,12 +112,12 @@ while read sym offset; do
     #context="$( echo "$objdump_output" | egrep -B30 "$regexp" )" #"
     #echo "context the slow way: $context" 1>&2
     # instead of this, use sed
-    next_chunk="$( tail -c+"$bytes_consumed" "$tmpfile" | sed -r "/$regexp/ q" )"
-    echo "fast way, next chunk: $next_chunk" 1>&2
+    next_chunk="$( tail -c+$(( $bytes_consumed + 1 )) "$tmpfile" | sed -r "/$regexp/ q" )"
+    #echo "fast way, next chunk: $next_chunk" 1>&2
     bytes_consumed=$(( $bytes_consumed + $( echo "$next_chunk" | wc -c ) ))
-    echo "bytes_consumed is now $bytes_consumed" 1>&2
+    #echo "bytes_consumed is now $bytes_consumed" 1>&2
     context="$( echo "$next_chunk" | tail -n31 )"
-    echo "fast way, context: $context" 1>&2
+    #echo "fast way, context: $context" 1>&2
     
     #echo "context: $context" 1>&2
     # 2a. Narrow that context to the last objdump-printed source line.
@@ -135,24 +135,31 @@ while read sym offset; do
     line_number="$( echo "$file_line_header" | sed 's/.*:\([0-9]\+\)$/\1/' )"
     # How many source lines are in the chunk?
     # We grep -v out the header and anything that looks like an instruction disassembly line
-    source_lines_count="$( echo "$file_line_header" | egrep -v '^/.*:[0-9]+$' | egrep -v \
-        '^[0-9a-f]+[[:blank:]]*<.+>\+(0x[0-9a-f]+)?>.*' | wc -l )"
+    source_lines="$( echo "$with_file_line_header" | egrep -v '^/.*:[0-9]+$' | egrep -v \
+        '^[0-9a-f]+[[:blank:]]*<.+(\+0x[0-9a-f]+)?>.*' )"
+    source_lines_count="$( echo "$source_lines" | wc -l )"
+    # HACK: if we didn't get anything, make sure we output a 1-line interval anyway
+    if [[ $source_lines_count -eq 0 ]]; then
+        echo "Warning: context for ${sym}+${offset} appears to contain zero source lines. Context follows." 1>&2
+        echo "$source_lines" 1>&2
+        source_lines_count=1
+    fi
     context_min="$( echo "$with_file_line_header" | tail -n+2 )"
-    echo "context_min: $context_min" 1>&2
+    #echo "context_min: $context_min" 1>&2
     # 3. Filter out non-source lines., and collapse to a single line
     source="$( echo "$context_min" | egrep -v "$line_regexp" | tr '\n' ' ' )" #"
     #echo "source: $source" 1>&2
     # 3a. collapse to a single line
     source_oneline="$( echo "$source" | tr '\n' ' ' )"
-    echo "source_oneline: $source_oneline" 1>&2
+    #echo "source_oneline: $source_oneline" 1>&2
     # 4. Get the first ident following the last occurrence of "new" or "sizeof"
     token="$( echo "$source_oneline" | \
     egrep '(new|sizeof)([^0-9a-z_]|$)' | \
     sed -r 's/.*(new|sizeof)([^0-9a-zA-Z_]|$)/\2/' | \
     sed -r 's/[^0-9a-zA-Z_]*([a-zA-Z0-9_ \*]+).*/\1/' | tr -s '[:blank:]' ' ' )" #"
-    echo "token: $token" 1>&2
+    #echo "token: $token" 1>&2
     # 5. Print the token and the site
-    echo "Guessed that site <${sym}+${offset}> allocated: ${token}" 1>&2
+    #echo "Guessed that site <${sym}+${offset}> allocated: ${token}" 1>&2
     case "$outputstyle" in
         (tab)
             echo "${sym}"$'\t'"${offset}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'$(( $line_number + $source_lines_count ))$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
