@@ -45,7 +45,7 @@ inline string mangle_typename(const pair<string, string>& p)
 
 	replace(second_mangled.begin(), second_mangled.end(), ' ', '_');
 	
-	return "__uniqtypes_" + first_mangled + "_" + second_mangled;
+	return "__uniqtype_" + first_mangled + "_" + second_mangled;
 }
 
 

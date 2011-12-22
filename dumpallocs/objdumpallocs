@@ -158,17 +158,29 @@ while read sym offset; do
     sed -r 's/.*(new|sizeof)([^0-9a-zA-Z_]|$)/\2/' | \
     sed -r 's/[^0-9a-zA-Z_]*([a-zA-Z0-9_ \*]+).*/\1/' | tr -s '[:blank:]' ' ' )" #"
     #echo "token: $token" 1>&2
+    # 4a. We want the *return address*, not the site of the call per se. Fix this up.
+    instr_line_regexp='[0-9a-f]+[[:blank:]]*<([^\+]+)(\+(0x[0-9a-f]+))?>.*'
+    next_line="$( tail -c+$(( $bytes_consumed + 1 )) "$tmpfile" | sed -rn "/^${instr_line_regexp}/ { s/$instr_line_regexp/\1\t\3/ ; p; q }" )"
+    read return_addr_sym return_addr_offset <<<"$next_line"
+    #return_addr_sym="$sym"
+    #return_addr_offset="$offset"
+    echo "return_addr_sym is $return_addr_sym" 1>&2
+    echo "return_addr_offset is $return_addr_offset" 1>&2
+    if [[ "$return_addr_sym" != "$sym" ]]; then
+        echo "Warning: return address for alloc site ${sym}+${offset} does not appear to be in same function, but at ${return_addr_sym}+${return_addr_offset}." 1>&2
+        # we continue
+    fi
     # 5. Print the token and the site
     #echo "Guessed that site <${sym}+${offset}> allocated: ${token}" 1>&2
     case "$outputstyle" in
         (tab)
-            echo "${sym}"$'\t'"${offset}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'$(( $line_number + $source_lines_count ))$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
+            echo "${return_addr_sym}"$'\t'"${return_addr_offset}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'$(( $line_number + $source_lines_count ))$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
             ;;
         (punc)
-            echo "<${sym}+${offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
+            echo "<${return_addr_sym}+${return_addr_offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
             ;;
         (*)
-            echo "<${sym}+${offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
+            echo "<${return_addr_sym}+${return_addr_offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
             ;;
     esac
 done <<<"$( echo "$allocation_sites" | sed -r 's/\+(0x[0-9a-f]*)$/ \1/' )" #"

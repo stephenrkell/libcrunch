@@ -22,7 +22,7 @@ Limitations of trumptr
 - ... so misses implicit strengthenings of void*, even in C99
 
 - ... misses more for C89, -fpermissive, ...
-(fix this by using CIL's C++ifying transformation to insert casts)
+(TODO: fix this by using CIL's C++ifying transformation to insert casts)
 
 
 Limitations of uniqtypes
@@ -33,7 +33,7 @@ Limitations of uniqtypes
 
 - slow for indirect call sites --- need to call helper to discover allocated types
 
-- requires manual identification of alloc sites (--alloc-fn)
+- requires manual identification of alloc sites (--alloc-fn) (*)
 
 - assume stable load addresses (cf. randomization?)
 
@@ -42,6 +42,8 @@ Limitations of uniqtypes
 Limitations of heap_index_hooks
 
 - requires manual instrumentation of external allocators
+
+- requires manual identification of malloc wrappers (which must pass through return addrs) (a.k.a. *)
 
 - current trailer-based implementation is vulnerable to trashing by overrun
 

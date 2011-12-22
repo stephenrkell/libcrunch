@@ -201,10 +201,15 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 
 			// now we have an allocsite
 			obj_uniqtype = allocsite_to_uniqtype(heap_info->alloc_site);
+			if (!obj_uniqtype) 
+			{
+				reason = "unrecognised allocsite";
+				goto abort;
+			}
 			unsigned chunk_size = malloc_usable_size(object_start);
 			block_element_count = chunk_size / obj_uniqtype->sz;
 			__libcrunch_private_assert(chunk_size % obj_uniqtype->sz == 0,
-				"chunk size is multiple of element size", __FILE__, __LINE__, __func__);
+				"chunk size should be multiple of element size", __FILE__, __LINE__, __func__);
 		}
 		case STATIC:
 		{

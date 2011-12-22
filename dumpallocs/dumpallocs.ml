@@ -125,8 +125,8 @@ let rec getAllocExpr (i: instr) (f: varinfo) (arglist: exp list) =
                else (* takes no arguments, so we output a "(none)" line. *)
                   Some(f.vname, None) (* We eliminate these lines in merge-allocs, rather than
                      here, so we can safely pass over the false positive from objdumpallocs. *)
-           end else None
-      (* (output_string Pervasives.stderr ("call to function " ^ f.vname ^ " is not an allocation because of empty arglist\n"); None) *)
+           end else (* None *)
+      (output_string Pervasives.stderr ("call to function " ^ f.vname ^ " is not an allocation because of empty arglist\n"); None)
 
 (* HACK: copied from trumptr *)
 (* This effectively embodies our "default specification" for C code
@@ -172,7 +172,8 @@ let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getEffectiveTyp
  | _ -> "impossible"
 
 (* I so do not understand Pretty.dprintf *)
-let printAllocFn fileAndLine chan funvar allocExpr =
+let printAllocFn fileAndLine chan funvar allocExpr = 
+   output_string Pervasives.stderr ("printing alloc for " ^ fileAndLine ^ ", funvar " ^ funvar.vname ^ "\n");
    output_string chan fileAndLine;
    let msg = Pretty.sprint 80 
        (Pretty.dprintf  "\t%a\t"
@@ -198,7 +199,13 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
         raise (Arg.Bad ("Cannot open file " ^ allocFileName))
 
   method vinst (i: instr) : instr list visitAction = 
-    match i with 
+    ( output_string Pervasives.stderr ("considering instruction " ^ (
+       match i with 
+          Call(_, _, _, l) -> "(call) at " ^ l.file ^ ", line: " ^ (string_of_int l.line)
+        | Set(_, _, l) -> "(assignment) at " ^ l.file ^ ", line: " ^ (string_of_int l.line)
+        | Asm(_, _, _, _, _, l) -> "(assembly) at " ^ l.file ^ ", line: " ^ (string_of_int l.line)
+      ) ^ "\n");  
+      match i with 
       Call(_, f, args, l) -> begin
         (* Check if we need to output *)
         match f with 
@@ -212,8 +219,14 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
                       the C file.
                       PROBLEM 2: allocs might be in a header file, in which case we
                       won't have permission to write the output.
-                      Our solution to both is a non-solution. We create the .allocs file
-                      wherever the .i is .
+                      Our solution:
+                      - tried: just write to where the .i file goes. This doesn't work because
+                      e.g. git has ./builtin/bundle.c and ./bundle.c; the allocs for the latter
+                      overwrite the former.
+                      - next attempt: we find out which file is the toplevel input, and use that.
+                      Problem: toplevel input was handled by cilly, our parent process.
+                      
+                      
                       This makes sense because our allocs data is a per translation unit thing
                       (e.g. could conceivably be different for two different compilations
                       both including the same header file, so can't write a single ".allocs"
@@ -234,18 +247,23 @@ class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
                          Sizeof V also lets us terminate
                          Mul where an arg is a Sizeof lets us terminate *)
                      match (getAllocExpr i v args) with
-                        Some(fn1, Some(ts)) -> printAllocFn fileAndLine chan v (stringFromSig ts); SkipChildren
-                     |  Some(fn2, None) -> let placeholder = if (length args) > 0 then "(unknown)" else "(none)"
+                        Some(fn1, Some(ts)) -> 
+                         printAllocFn fileAndLine chan v (stringFromSig ts); SkipChildren
+                     |  Some(fn2, None) -> 
+                         let placeholder = if (length args) > 0 then "(unknown)" else "(none)"
                          in printAllocFn fileAndLine chan v placeholder; SkipChildren
-                     |  _ -> SkipChildren (* this means it's not an allocation function *)
+                     |  _ -> 
+                         (output_string Pervasives.stderr (
+                            "skipping call to function " ^ v.vname ^ " since getAllocExpr returned None\n"
+                         ) ; SkipChildren) (* this means it's not an allocation function *)
                    end (* ) *)
                 | _ (* match v.vtype *) -> (output_string Pervasives.stderr ("skipping call to non-function var " ^ v.vname ^ "\n"); SkipChildren)
              end
         | _ (* match f *) -> (output_string Pervasives.stderr ("skipping call to non-lvalue at " ^ l.file ^ ":" ^ (string_of_int l.line) ^ "\n"); SkipChildren)
       end 
-    | Set(lv, e, l) -> (* (output_string Pervasives.stderr ("skipping assignment at " ^ l.file ^ ":" ^ (string_of_int l.line) ^ "\n" ); *) SkipChildren (* ) *)
+    | Set(lv, e, l) -> (output_string Pervasives.stderr ("skipping assignment at " ^ l.file ^ ":" ^ (string_of_int l.line) ^ "\n" ); SkipChildren )
     | Asm(_, _, _, _, _, l) -> (* (output_string Pervasives.stderr ("skipping assignment at " ^ l.file ^ ":" ^ (string_of_int l.line) ^ "\n" ); *) SkipChildren (* ) *)
-
+    )
 end (* class dumpAllocsVisitor *)
 
 let feature : featureDescr = 

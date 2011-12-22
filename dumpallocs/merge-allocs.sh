@@ -76,7 +76,10 @@ all_source_allocs_file="$(mktemp)"
 while read obj func offset sourcefile rest; do
     echo "$( dirname "$sourcefile" )"
 done < "$all_obj_allocs_file" | sort | uniq | while read dir; do find $dir -name '*.allocs'; done | \
-xargs cat | pad_numbers | sort -t$'\t' -k1 -k2 > "$all_source_allocs_file"
+xargs cat | pad_numbers | sort -t$'\t' -k1 -k2 | uniq > "$all_source_allocs_file"
+# FIXME: I'm not sure why we need the uniq here: why does dumpallocs sometimes output
+# multiple lines for the same malloc call? 
+# e.g. for /usr/local/src/git-1.7.5.4/builtin/log.c line 1268
 
 echo "all_source_allocs_file: $all_source_allocs_file" 1>&2
 echo "all_obj_allocs_file: $all_obj_allocs_file" 1>&2
