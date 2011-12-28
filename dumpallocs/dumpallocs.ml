@@ -179,7 +179,8 @@ let printAllocFn fileAndLine chan funvar allocExpr =
        (Pretty.dprintf  "\t%a\t"
             d_lval (Var(funvar), NoOffset)) 
    in
-   output_string chan (msg ^ allocExpr ^ "\n")
+   output_string chan (msg ^ allocExpr ^ "\n");
+   flush chan
               
 class dumpAllocsVisitor = fun (fl: Cil.file) -> object(self)
   inherit nopCilVisitor

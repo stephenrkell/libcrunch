@@ -71,15 +71,43 @@ lexicographic_compare_ge () {
 
 }
 
-# first pass over the input: gather all the .allocs files we might want
 all_source_allocs_file="$(mktemp)"
-while read obj func offset sourcefile rest; do
-    echo "$( dirname "$sourcefile" )"
-done < "$all_obj_allocs_file" | sort | uniq | while read dir; do find $dir -name '*.allocs'; done | \
-xargs cat | pad_numbers | sort -t$'\t' -k1 -k2 | uniq > "$all_source_allocs_file"
-# FIXME: I'm not sure why we need the uniq here: why does dumpallocs sometimes output
-# multiple lines for the same malloc call? 
-# e.g. for /usr/local/src/git-1.7.5.4/builtin/log.c line 1268
+# first pass over the input: gather all the .allocs files we might want.
+# NOTE: previously we just took all the directories containing source files,
+# then looked for .i.allocs files within those. This results in false positives
+# when multiple executables/libraries are built within the same source tree,
+# because some .allocs files refer to compilation units that only went into
+# one or other of those objects. Instead, we exploit the fact that we now have
+# a one-to-one correspondence between compiler input files and .i.allocs files:
+# we get the CU names for every compiler input, and look for a similarly-named
+# .i.allocs file.
+
+#while read obj func offset sourcefile rest; do
+#    echo "$( dirname "$sourcefile" )"
+#done < "$all_obj_allocs_file" | sort | uniq | while read dir; do find $dir -name '*.allocs'; done | \
+#xargs cat | pad_numbers | sort -t$'\t' -k1 -k2 | uniq > "$all_source_allocs_file"
+## FIXME: I'm not sure why we need the uniq here: why does dumpallocs sometimes output
+## multiple lines for the same malloc call? 
+## e.g. for /usr/local/src/git-1.7.5.4/builtin/log.c line 1268
+
+cat "$all_obj_allocs_file" | cut -f1 | sort | uniq | while read obj rest; do
+    all_cus_info="$( readelf -wi "$obj" | grep -A7 'DW_TAG_compile_unit' | tr '\n' '\f' | sed 's/\f--\f/\n/g' )"
+    echo "$all_cus_info" | while read cu_info; do
+        cu_fname="$( echo "$cu_info" | tr '\f' '\n' | grep DW_AT_name | head -n1 | sed 's/.*DW_AT_name[[:blank:]]*:[[:blank:]]*(.*, offset: 0x[0-9a-f]*): \(.*\)/\1/' | sed 's/[[:blank:]]*$//')"
+        echo "Note: found CU $cu_fname" 1>&2
+        echo "CU info is: $cu_info" 1>&2
+        echo "comp_dir line of CU info is $( echo "$cu_info" | tr '\f' '\n' | grep DW_AT_comp_dir )" 1>&2
+        cu_compdir="$( echo "$cu_info" | tr '\f' '\n'  | grep DW_AT_comp_dir | sed 's/.*DW_AT_comp_dir[[:blank:]]*:[[:blank:]]*(.*, offset: 0x[0-9a-f]*): \(.*\)/\1/' | sed 's/[[:blank:]]*$//' )"
+        echo "Note: found comp_dir $cu_compdir" 1>&2
+        cu_sourcepath="${cu_compdir}/${cu_fname}"
+        cu_allocspath="$( echo "$cu_sourcepath" | grep '\.cil\.c$' | sed 's/\.cil\.c/.i.allocs/' )"
+        if [[ ! -r "$cu_allocspath" ]]; then
+            echo "Warning: missing expected allocs file ($cu_allocspath) for source file: $cu_sourcepath" 1>&2
+        else
+            cat "$cu_allocspath"
+        fi
+    done
+done | pad_numbers | sort -t$'\t' -k1 -k2 | uniq > "$all_source_allocs_file"
 
 echo "all_source_allocs_file: $all_source_allocs_file" 1>&2
 echo "all_obj_allocs_file: $all_obj_allocs_file" 1>&2
@@ -87,7 +115,7 @@ echo "all_obj_allocs_file: $all_obj_allocs_file" 1>&2
 # second pass -- we read input grouped by source file then line number
 keep_old_source_line=0
 have_matched_this_source_line=0
-while read obj func offset sourcefile sourceline sourceline_end alloctype rest; do
+while read obj func addr sourcefile sourceline sourceline_end alloctype rest; do
     #echo "read line for obj $obj sourcefile $sourcefile" 1>&2
     
     # We have our source-level allocs data on fd 3
@@ -130,7 +158,7 @@ while read obj func offset sourcefile sourceline sourceline_end alloctype rest; 
                 ;;
                 (*)
                     #echo "Outputting match for sourcefile $alloc_sourcefile line $alloc_sourceline" 1>&2
-                    echo "$obj"$'\t'"$func"$'\t'"$offset"$'\t'"$sourcefile"$'\t'"$sourceline"$'\t'"$sourceline_end"$'\t'"$alloc_ciltype"$'\t' 
+                    echo "$obj"$'\t'"$func"$'\t'"$addr"$'\t'"$sourcefile"$'\t'"$sourceline"$'\t'"$sourceline_end"$'\t'"$alloc_ciltype"$'\t' 
                 ;;
             esac
             #echo "Setting have_matched_this_source_line to 1 for sourcefile $alloc_sourcefile line $alloc_sourceline" 1>&2
@@ -152,7 +180,7 @@ while read obj func offset sourcefile sourceline sourceline_end alloctype rest; 
                # warn only if we have not used this source line
                if ! [[ $have_matched_this_source_line -eq 1 ]]; then
                    #echo "Found have_matched_this_source_line not equal to 1" 1>&2
-                   echo "warning: skipping source allocs line, comparing lt next obj entry (which has file ${sourcefile}, lines ${sourceline}-${sourceline_end}, address ${obj}<${func}+${offset}>): $alloc_sourcefile"$'\t'"$alloc_sourceline"$'\t'"$alloc_ciltype" 1>&2
+                   echo "warning: skipping source allocs line, comparing lt next obj entry (which has file ${sourcefile}, lines ${sourceline}-${sourceline_end}, address ${obj}<${func}> @${addr}): $alloc_sourcefile"$'\t'"$alloc_sourceline"$'\t'"$alloc_ciltype" 1>&2
                fi
                keep_old_source_line=0
                # we have not yet consumed the obj line, so don't grab a new obj line
@@ -163,7 +191,7 @@ while read obj func offset sourcefile sourceline sourceline_end alloctype rest; 
                 # We might have a match for the next iteration of the outer loop
                 # Each time we advance the outer, we are giving up on matching that line. 
                 # (We can say "comparing lt" because the equality case was handled in the first test.)
-                echo "warning: skipping objdump allocs line, comparing lt next source entry (which has file ${alloc_sourcefile}, line ${alloc_sourceline}): $obj $func $offset $sourcefile $sourceline $sourceline_end $alloctype $rest" 1>&2
+                echo "warning: skipping objdump allocs line, comparing lt next source entry (which has file ${alloc_sourcefile}, line ${alloc_sourceline}): $obj $func $addr $sourcefile $sourceline $sourceline_end $alloctype $rest" 1>&2
                 keep_old_source_line=1
                 continue 2
             fi

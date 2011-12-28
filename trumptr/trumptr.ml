@@ -367,6 +367,8 @@ let feature : featureDescr =
     fd_doit = 
     (function (fl: file) -> 
       let tpFunVisitor = new trumPtrFunVisitor fl in
+      output_string Pervasives.stderr ("command line args are:\n"
+       ^ (String.concat ", " (Array.to_list Sys.argv) ) );
       visitCilFileSameGlobals tpFunVisitor fl);
     fd_post_check = true;
   } 

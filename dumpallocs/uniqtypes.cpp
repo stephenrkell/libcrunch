@@ -364,13 +364,13 @@ int main(int argc, char **argv)
 	char buf[4096];
 	string objname;
 	string symname;
-	unsigned offset;
+	unsigned file_addr;
 	string sourcefile; 
 	unsigned line;
 	unsigned end_line;
 	string alloc_typename;
 	while (in.getline(buf, sizeof buf - 1)
-		&& 0 == read_allocs_line(string(buf), objname, symname, offset, sourcefile, line, end_line, alloc_typename))
+		&& 0 == read_allocs_line(string(buf), objname, symname, file_addr, sourcefile, line, end_line, alloc_typename))
 	{
 		/* Open the dieset */
 		if (ifstreams.find(objname) == ifstreams.end())
@@ -475,7 +475,7 @@ int main(int argc, char **argv)
 		{
 			cerr << "skipping unidentified type at allocsite " 
 			     << objname << "<" << symname << ">" 
-				 << "+0x" << std::hex << offset << std::dec << endl;
+				 << "@ 0x" << std::hex << file_addr << std::dec << endl;
 			continue;
 		}
 		else
@@ -580,7 +580,7 @@ int main(int argc, char **argv)
 				cerr << ") embodying " 
 				<< sourcefile << ":" << line << "-" << end_line
 				<< " (allocsite: " << objname 
-				<< "<" << symname << "+0x" << std::hex << offset << std::dec << ">)" << endl;
+				<< "<" << symname << "> @" << std::hex << file_addr << std::dec << ">)" << endl;
 			continue;
 		}
 		// now we found the type
@@ -593,7 +593,7 @@ int main(int argc, char **argv)
 		// the uniqtype addrs are given as idents, so we just have to use the same name
 		allocsites_relation.insert(
 			make_pair(
-				make_pair(objname, offset),
+				make_pair(objname, file_addr),
 				name_used
 			)
 		);
@@ -762,8 +762,8 @@ void print_allocsites_output(const allocsites_relation_t& r)
 	{
 		if (i_site != r.begin()) cout << ",";
 		
-		cout << "\n\t/* allocsite info for " << i_site->first.second 
-			<< " defined in " << i_site->first.first << " */";
+		cout << "\n\t/* allocsite info for " << i_site->first.first << "+"
+			<< std::hex << "0x" << i_site->first.second << std::dec << " */";
 		cout << "\n\t{ (void*)0, (void*)0, "
 			<< "(char*) " << "__LOAD_ADDR_" 
 			<< boost::to_upper_copy(mangle_objname(i_site->first.first))

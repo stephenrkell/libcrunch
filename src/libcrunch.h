@@ -196,8 +196,11 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			 * are discovered, e.g. indirect ones.)
 			 */			
 			struct trailer *heap_info = lookup_object_info(obj, &object_start);
-			reason = "unindexed heap object";
-			if (!heap_info) goto abort;
+			if (!heap_info)
+			{
+				reason = "unindexed heap object";
+				goto abort;
+			}
 
 			// now we have an allocsite
 			obj_uniqtype = allocsite_to_uniqtype(heap_info->alloc_site);
@@ -210,6 +213,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			block_element_count = chunk_size / obj_uniqtype->sz;
 			__libcrunch_private_assert(chunk_size % obj_uniqtype->sz == 0,
 				"chunk size should be multiple of element size", __FILE__, __LINE__, __func__);
+			break;
 		}
 		case STATIC:
 		{

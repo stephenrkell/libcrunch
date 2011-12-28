@@ -1,0 +1,62 @@
+#!/usr/bin/env python
+
+# Compiler wrapper for libcrunch.
+# We identify the input source file in the commandline,
+# and export it as an environment variable.
+# We then delegate to cilly,
+# passing --save-temps=$( dirname "$inputfile" )
+# i.e. to ensure that temporaries get created in the source file's location
+# FIXME: This might break some builds using a separate objdir.
+# The Right Thing to do is to somehow replicate the source directory structure
+# rooted at the current directory. But it's not clear how to do this in general.
+
+# based on klee/scripts/klee-gcc
+# Changes:
+# 1. add -use-gold-plugin
+# 2a. detect and bail on bad cc option "-V" (not the same as llvm-gcc's "-V")
+#   -- some configure scripts will try this and should fail back
+# 2b. (useless for now) preserve "-V is at start of command line" property for ll
+#   -- this is a different meaning of "-V" than some configure scripts expect!
+# 3. support linking as library
+# 4. support different argv[0] for g++ etc.
+# 5. ensure barf on inline asm, using -D__asm__=__error__ etc 
+#   --- DISABLEd for now, because it braaks headers
+#   --- we want to insert the #define at the start of the source file; neat way to do this?
+# 6. work harder to detect link commands
+# 7. add dce and globaldce optimisations to link pass
+# 8. ignore more llvm-ld arguments (anything beginning -W or -O, various others)
+
+import os, sys
+
+def main():
+    # change "-V" to some other undefined option
+    skipNext = False
+    saveTempsArgs = ['-save-temps']
+    for num in range(0,len(sys.argv)):
+        if skipNext: 
+            skipNext = False
+            continue
+        if sys.argv[num] == "-V":
+            sys.argv[num] = "-0"
+        if sys.argv[num] == "-o":
+            skipNext = True
+        if sys.argv[num].startswith('-'):
+            continue
+        if num == 0:
+            continue # this means we have "crunchcc" as the arg
+        if sys.argv[num].endswith('.a') or sys.argv[num].endswith('.o') or \
+           sys.argv[num].endswith('.so'):
+            # it's a linker input; not the source file
+            continue
+        else:
+            sys.stderr.write("guessed that source file is " + sys.argv[num] + "\n")
+            dirname = os.path.dirname(sys.argv[num])
+            if dirname != "":
+                saveTempsArgs = ["--save-temps=" + dirname]
+    
+    os.execvp("cilly", ["cilly"] + ["--dotrumptr","--dodumpallocs"] + saveTempsArgs + sys.argv[1:])
+    return 1
+
+if __name__ == '__main__':
+    main()
+

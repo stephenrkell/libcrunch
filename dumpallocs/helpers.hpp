@@ -60,7 +60,7 @@ inline int read_allocs_line(
 	const string& str,
 	string& objname,
 	string& symname,
-	unsigned& offset,
+	unsigned& file_addr,
 	string& cuname,
 	unsigned& line,
 	unsigned& end_line,
@@ -69,7 +69,7 @@ inline int read_allocs_line(
 {
 	istringstream s(str);
 
-	string offsetstr;
+	string file_addrstr;
 	string linestr;
 	string endlinestr;
 
@@ -91,12 +91,12 @@ inline int read_allocs_line(
 	// don't bother reading rest -- the line below doesn't work
 	//std::getline(s, rest, '\n'); check_error(s, rest);
 
-	if (offsetstr.substr(0, 2) != "0x") 
+	if (file_addrstr.substr(0, 2) != "0x") 
 	{
-		cerr << "str is " << str << "\noffsetstr is " << offsetstr << endl;
-		report_error(offset, offsetstr);
+		cerr << "str is " << str << "\nfile_addrstr is " << file_addrstr << endl;
+		report_error(file_addr, file_addrstr);
 	}
-	istringstream offsetstream(offsetstr.substr(2)); offsetstream >> std::hex >> offset; check_error(offsetstream, offset, offsetstr);
+	istringstream offsetstream(file_addrstr.substr(2)); offsetstream >> std::hex >> file_addr; check_error(offsetstream, file_addr, file_addrstr);
 	istringstream linestream(linestr); linestream >> line; check_error(linestream, line, linestr);
 	istringstream endlinestream(endlinestr); endlinestream >> end_line; check_error(endlinestream, end_line, endlinestr);
 	return 0;

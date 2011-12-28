@@ -53,7 +53,7 @@ case "$filetype" in
     ;;
 esac
 
-line_regexp='^[0-9a-f]* <([^>]*)>'
+line_regexp='^([0-9a-f]*) <([^>]*)>'
 alloc_site_regexp="${line_regexp}.*"'call.*alloc'
 
 case "$( file "$inputfile" | grep reloc )" in
@@ -80,7 +80,7 @@ apply_relocs () {
 allocation_sites="$( objdump --prefix-addresses ${disassembly_opts} "$inputfile" | \
 apply_relocs | \
 egrep "$alloc_site_regexp" | \
-sed -r "s/${alloc_site_regexp}.*/\1/" )" #"
+sed -r "s/${alloc_site_regexp}.*/\1\t\2/" )" #"
 
 # read the whole objdump in, to avoid re-disassembling
 objdump_output="$( objdump --line-numbers --prefix-addresses ${disassembly_opts} -S "$inputfile" | \
@@ -99,10 +99,13 @@ tmpfile="$(mktemp)"
 echo "$objdump_output" > "$tmpfile"
 bytes_consumed=0
 
-while read sym offset; do
+while read address sym offset; do
     # Now use the power of objdump -S to get the source line for that alloc.
     # 1, Build a regexp that will re-locate the current alloc site.
-    regexp="^[0-9a-f]+[[:blank:]]*<$( escapefn_eregexp "$sym" )\+$( escapefn_eregexp "$offset")>"
+    
+    #regexp="^[0-9a-f]+[[:blank:]]*<$( escapefn_eregexp "$sym" )\+$( escapefn_eregexp "$offset")>"
+    regexp="^${address}[[:blank:]]*<"
+    
     #echo "regexp: $regexp" 1>&2
     # 2. Grab that and some lines of pre-context, 
     # which hopefully will include the allocating source line
@@ -159,11 +162,12 @@ while read sym offset; do
     sed -r 's/[^0-9a-zA-Z_]*([a-zA-Z0-9_ \*]+).*/\1/' | tr -s '[:blank:]' ' ' )" #"
     #echo "token: $token" 1>&2
     # 4a. We want the *return address*, not the site of the call per se. Fix this up.
-    instr_line_regexp='[0-9a-f]+[[:blank:]]*<([^\+]+)(\+(0x[0-9a-f]+))?>.*'
-    next_line="$( tail -c+$(( $bytes_consumed + 1 )) "$tmpfile" | sed -rn "/^${instr_line_regexp}/ { s/$instr_line_regexp/\1\t\3/ ; p; q }" )"
-    read return_addr_sym return_addr_offset <<<"$next_line"
+    instr_line_regexp='([0-9a-f]+)[[:blank:]]*<([^\+]+)(\+(0x[0-9a-f]+))?>.*'
+    next_line="$( tail -c+$(( $bytes_consumed + 1 )) "$tmpfile" | sed -rn "/^${instr_line_regexp}/ { s/$instr_line_regexp/\1\t\2\t\4/ ; p; q }" )"
+    read return_addr return_addr_sym return_addr_offset <<<"$next_line"
     #return_addr_sym="$sym"
     #return_addr_offset="$offset"
+    echo "return_addr is $return_addr" 1>&2
     echo "return_addr_sym is $return_addr_sym" 1>&2
     echo "return_addr_offset is $return_addr_offset" 1>&2
     if [[ "$return_addr_sym" != "$sym" ]]; then
@@ -174,7 +178,7 @@ while read sym offset; do
     #echo "Guessed that site <${sym}+${offset}> allocated: ${token}" 1>&2
     case "$outputstyle" in
         (tab)
-            echo "${return_addr_sym}"$'\t'"${return_addr_offset}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'$(( $line_number + $source_lines_count ))$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
+            echo "${return_addr_sym}"$'\t'"0x${return_addr}"$'\t'"${filename}"$'\t'"${line_number}"$'\t'$(( $line_number + $source_lines_count ))$'\t'"${token:-\$FAILED\$}"$'\t'"${source_oneline}"
             ;;
         (punc)
             echo "<${return_addr_sym}+${return_addr_offset}> @${filename}:${line_number}"$'\t'"${token:-\$FAILED\$}"
