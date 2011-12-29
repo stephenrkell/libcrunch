@@ -103,7 +103,68 @@ let rec try_match vname pattern =
         then true
         else false
     with Not_found -> false
-   
+
+let rec warnIfLikelyAllocFn (i: instr) (f: varinfo) (arglist: exp list) =
+ if try_match f.vname "[aA][lL][lL][oO][cC]" then begin (* we *might* want to output something *)
+               if (length arglist) > 0 then 
+                (* Some(f.vname, *)
+                   if try_match f.vname "calloc" && (length arglist) > 1
+                      then (* getSizeExpr (nth arglist 1) *)
+                      output_string Pervasives.stderr ("call to function " ^ f.vname ^ " looks like an allocation, but does not match any in LIBCRUNCH_ALLOC_FNS\n")
+                   else if try_match f.vname "realloc" && (length arglist) > 1
+                      then (* getSizeExpr (nth arglist 1) *)
+                      output_string Pervasives.stderr ("call to function " ^ f.vname ^ " looks like an allocation, but does not match any in LIBCRUNCH_ALLOC_FNS\n")
+                      else (* getSizeExpr (nth arglist 0) *)
+                         output_string Pervasives.stderr ("call to function " ^ f.vname ^ " looks like an allocation, but does not match any in LIBCRUNCH_ALLOC_FNS\n")
+               else () (*  ) 
+               else (* takes no arguments, so we output a "(none)" line. *)
+                  Some(f.vname, None) (* We eliminate these lines in merge-allocs, rather than
+                     here, so we can safely pass over the false positive from objdumpallocs. *)
+         *)  end else (* None *)
+      (output_string Pervasives.stderr ("call to function " ^ f.vname ^ " is not an allocation because of empty arglist\n"); (* None *) () )
+
+let rec extractUserAllocMatchingSignature i f arglist signature = 
+ (* destruct the signature string *)
+ (output_string Pervasives.stderr ("Warning: matching against signature " ^ signature ^ "\n");
+ let signatureFunction = 
+       if string_match (regexp "[^\\(]+") signature 0 
+       then (* (output_string Pervasives.stderr ("Info: signature " ^ signature ^ " did contain a function name\n"); *) matched_string signature (* ) *)
+       else (* (output_string Pervasives.stderr ("Warning: signature " ^ signature ^ " did not contain a function name\n"); *) "" (* ) *)
+ in if f.vname <> signatureFunction then (* (output_string Pervasives.stderr ("Warning: extracted function name " ^ signatureFunction ^ " from signature\n"); *) None (* ) *)
+ else begin let signatureArgSpec = 
+       if string_match (regexp "\\(.*\\)") signature (String.length signatureFunction) 
+       then (* (output_string Pervasives.stderr ("Info: signature " ^ signature ^ " did contain a function arg spec\n"); ( *) matched_string signature (* ) ) *)
+       else (output_string Pervasives.stderr ("Warning: signature " ^ signature ^ " did not contain an arg spec\n"); "")
+ in let sizeArgPos = 
+       if string_match (regexp "[^A-Z]*[A-Z]") signatureArgSpec 0 
+       then Some((String.length (matched_string signatureArgSpec)) - 1 (* for the bracket*) - 1 (* because we want zero-based *))
+       else (output_string Pervasives.stderr ("Warning: signature " ^ signature ^ " did not contain a capitalized arg spec element\n"); None)
+ in match sizeArgPos with
+    Some(s) -> if (length arglist) > s then Some(f.vname, getSizeExpr (nth arglist s))
+     else (output_string Pervasives.stderr ("Warning: signature " ^ signature 
+     ^ " wrongly predicts allocation function " ^ f.vname ^ " will have at least " 
+     ^ (string_of_int s) ^ " arguments, where here it has only " ^ (string_of_int (length arglist)) ^"\n"); None)
+   | None -> None
+ end)
+
+let rec getUserAllocExpr (i: instr) (f: varinfo) (arglist: exp list) = 
+  let userVerdict = try begin
+    let candidates = Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_ALLOC_FNS") in
+    (* match f.vname with each candidate *) 
+    let rec firstMatchingSignature cands =
+      match cands with
+        [] -> (* (output_string Pervasives.stderr ("Warning: exhausted candidate signatures in LIBCRUNCH_ALLOC_FNS matching function "  ^ f.vname ^ "\n"); *) None(* ) *)
+      | s::ss -> begin match extractUserAllocMatchingSignature i f arglist s with
+           None -> (* (output_string Pervasives.stderr ("Warning: signature " ^ s ^ " did not match function " ^ f.vname ^ "\n"); *) firstMatchingSignature ss (* ) *)
+         | Some(s) -> Some(s)
+        end
+    in firstMatchingSignature candidates
+  end with Not_found -> (output_string Pervasives.stderr ("Warning: function " ^ f.vname ^ " did not match any user allocation function descriptor\n"); None)
+  in
+  match userVerdict with
+  |  None -> (warnIfLikelyAllocFn i f arglist; None)
+  |  Some(s) -> Some(s)
+
 (* Work out whether this call is an allocation call. If it is,
    return Some(fn, optionalTypeSig)
    where fn is the function varinfo
@@ -113,20 +174,7 @@ let rec getAllocExpr (i: instr) (f: varinfo) (arglist: exp list) =
     | "malloc" -> Some (f.vname, getSizeExpr (nth arglist 0))
     | "calloc" -> Some (f.vname, getSizeExpr (nth arglist 1))
     | "realloc" -> Some (f.vname, getSizeExpr (nth arglist 1))
-    | _ -> if try_match f.vname "[aA][lL][lL][oO][cC]" then begin (* we *might* want to output something *)
-               if (length arglist) > 0 then 
-                 Some(f.vname, 
-                   if try_match f.vname "calloc" && (length arglist) > 1
-                      then getSizeExpr (nth arglist 1)
-                   else if try_match f.vname "realloc" && (length arglist) > 1
-                      then getSizeExpr (nth arglist 1)
-                   else getSizeExpr (nth arglist 0)
-                 )
-               else (* takes no arguments, so we output a "(none)" line. *)
-                  Some(f.vname, None) (* We eliminate these lines in merge-allocs, rather than
-                     here, so we can safely pass over the false positive from objdumpallocs. *)
-           end else (* None *)
-      (output_string Pervasives.stderr ("call to function " ^ f.vname ^ " is not an allocation because of empty arglist\n"); None)
+    | _ -> getUserAllocExpr i f arglist 
 
 (* HACK: copied from trumptr *)
 (* This effectively embodies our "default specification" for C code
