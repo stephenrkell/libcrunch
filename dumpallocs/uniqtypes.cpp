@@ -41,10 +41,13 @@ using boost::filesystem::path;
 using dwarf::spec::compile_unit_die;
 using dwarf::spec::type_die;
 using dwarf::spec::with_data_members_die;
+using dwarf::spec::with_dynamic_location_die;
+using dwarf::spec::type_chain_die;
 
 // this encodes only the uniqued set of types, not the relations between them!
 typedef std::map< uniqued_name, shared_ptr< spec::type_die > > master_relation_t;
 typedef std::map< pair< string, unsigned long >, uniqued_name > allocsites_relation_t;
+typedef std::set< shared_ptr< spec::subprogram_die > > subprograms_list_t;
 
 master_relation_t::key_type
 key_from_type(shared_ptr<type_die> t);
@@ -203,7 +206,19 @@ typedef std::vector<
 > container;
 
 void print_uniqtypes_output(const master_relation_t& g, const container& c);
+void print_stacktypes_output(const subprograms_list_t& l);
 void print_allocsites_output(const allocsites_relation_t& r);
+#define BIGGEST_EQUIV 6
+	typedef const char *equiv_class_t[BIGGEST_EQUIV];
+	equiv_class_t equivs[] = {
+		{ "signed char", "char", NULL},
+		{ "signed int", "int", "signed", NULL },
+		{ "unsigned int", "unsigned", NULL },
+		{ "signed long int", "long signed int", "signed long", "long", "long int", NULL },
+		{ "unsigned long int", "long unsigned int", "unsigned long", NULL },
+		{ "signed long long int", "long long signed int", "signed long long", "long long int", "long long", NULL },
+		{ "unsigned long long int", "long long unsigned int", "unsigned long long", NULL }
+	};
 
 master_relation_t::key_type
 key_from_type(shared_ptr<type_die> t)
@@ -216,13 +231,42 @@ key_from_type(shared_ptr<type_die> t)
 
 		string file_to_use = (t->get_decl_file() && *t->get_decl_file() != 0) 
 		                                     ? cu->source_file_name(*t->get_decl_file()) : "";
-		string name_to_use = t->get_name() ? *t->get_name() : offset_to_string(t->get_offset());
+		
+		// for named base types, we use equivalence classes
+		string name_to_use; 
+		if (!t->get_name() || t->get_tag() != DW_TAG_base_type)
+		{
+			name_to_use = t->get_name() ? *t->get_name() : offset_to_string(t->get_offset());
+		}
+		else // t->get_name() && t->get_tag == DW_TAG_base_type
+		{
+			string name_to_search_for = *t->get_name();
+			// search equiv classes for a type of this name
+			for (equiv_class_t *i_equiv = &equivs[0]; i_equiv < &equivs[sizeof equivs / sizeof(equiv_class_t)]; ++i_equiv)
+			{
+				for (const char **i_el = i_equiv[0]; *i_el != NULL; ++i_el)
+				{
+					assert(i_el < i_equiv[BIGGEST_EQUIV]);
+					if (name_to_search_for == string(*i_el))
+					{
+						name_to_use = (*i_equiv)[0];
+						break;
+					}
+				}
+				if (name_to_use != "") break; // we've got it
+			}
+			
+			// if we've still not got it....
+			if (name_to_use == "") name_to_use = name_to_search_for;
+		}
 
+		assert(name_to_use != "char"); // ... for example. It should be "signed char" of course!
 		n = make_pair(file_to_use, name_to_use);
 	}
-	else
+	else // DW_TAG_pointer_type
 	{
-		auto opt_target_type = dynamic_pointer_cast<spec::pointer_type_die>(t)->get_type();
+		shared_ptr<type_die> opt_target_type = dynamic_pointer_cast<spec::pointer_type_die>(t)->get_type();
+		if (opt_target_type) opt_target_type = opt_target_type->get_concrete_type();
 		string opt_target_type_name;
 		if (!opt_target_type) opt_target_type_name = "void";
 		else
@@ -233,16 +277,57 @@ key_from_type(shared_ptr<type_die> t)
 		}
 		/* We roll with: no header file, and the name with __PTR_ for '^'/
 		 * OR, HMM, the header file of the ultimate pointee? YES, it should be this.
-		 * FIXME FIXME FIXME! */
+		 * Let's do it. */
+		int levels_of_indirection = 0;
+		shared_ptr<type_die> ultimate_pointee_type = t->get_concrete_type();
+		shared_ptr<type_chain_die> type_chain;
+		do
+		{
+			type_chain = dynamic_pointer_cast<type_chain_die>(ultimate_pointee_type);
+			if (type_chain) 
+			{
+				++levels_of_indirection;
+				ultimate_pointee_type = type_chain->get_type();
+				if (ultimate_pointee_type) ultimate_pointee_type = ultimate_pointee_type->get_concrete_type();
+			}
+		} while (type_chain);
+		
+		assert(levels_of_indirection >= 1);
+		
+		string defining_header;
+		if (!ultimate_pointee_type)
+		{
+			// we have the "void" type, possibly indirected over multiple levels
+			defining_header = "";
+		}
+		else 
+		{
+			defining_header = 
+			(ultimate_pointee_type->get_decl_file() && *ultimate_pointee_type->get_decl_file() != 0) 
+			   ? ultimate_pointee_type->enclosing_compile_unit()->source_file_name(
+			      *ultimate_pointee_type->get_decl_file()) 
+			   : "";
+		}
 
-		string& s = opt_target_type_name;
+		string target_typename_to_use = opt_target_type ? key_from_type(opt_target_type).second : "void";
 		
 		ostringstream os(std::ios::out | std::ios::binary);
 		std::ostream_iterator<char, char> oi(os);
-		boost::regex_replace(oi, s.begin(), s.end(),
-			boost::regex("(\\^)"), "(__PTR_)", 
-			boost::match_default | boost::format_all);
-		n = make_pair("", os.str());
+		
+		// here we are translating a dumpallocs-style type descriptor name...
+		// ... into a uniqtypes-style name. BUT WHY? 
+		//boost::regex_replace(oi, s.begin(), s.end(),
+		//	boost::regex("(\\^)"), "(__PTR_)", 
+		//	boost::match_default | boost::format_all);
+		//assert(os.str() != "char"); // ... for example
+		
+		for (int i = 0; i < levels_of_indirection; ++i)
+		{
+			os << "__PTR_";
+		}
+		os << target_typename_to_use;
+		
+		n = make_pair(defining_header, os.str());
 	}
 	
 	return n;
@@ -252,20 +337,7 @@ shared_ptr<type_die>
 find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 {
 	/* For the most part, we just do named_child.
-	 * BUT, for base types, we widen the search! */
-	
-#define BIGGEST_EQUIV 6
-	typedef const char *equiv_class_t[BIGGEST_EQUIV];
-	equiv_class_t equivs[] = {
-		{ "signed char", "char", NULL},
-		{ "signed int", "int", "signed", NULL },
-		{ "unsigned int", "unsigned", NULL },
-		{ "signed long int", "long signed int", "signed long", "long", "long int", NULL },
-		{ "unsigned long int", "long unsigned int", "unsigned long", NULL },
-		{ "signed long long int", "long long signed int", "signed long long", "long long int", "long long", NULL },
-		{ "unsigned long long int", "long long unsigned int", "unsigned long long", NULL }
-	};
-	
+	 * BUT, for base types, we widen the search, using our equivalence classes. */
 	for (equiv_class_t *i_equiv = &equivs[0]; i_equiv < &equivs[sizeof equivs / sizeof(equiv_class_t)]; ++i_equiv)
 	{
 		for (const char **i_el = i_equiv[0]; *i_el != NULL; ++i_el)
@@ -360,6 +432,7 @@ int main(int argc, char **argv)
 	
 	master_relation_t master_relation;
 	allocsites_relation_t allocsites_relation;
+	subprograms_list_t subprograms_list;
 	
 	char buf[4096];
 	string objname;
@@ -504,6 +577,22 @@ int main(int argc, char **argv)
 			 i_cu != diesets[objname]->toplevel()->compile_unit_children_end();
 			 ++i_cu)
 		{
+// 			/* Add this CU's subprograms to the subprograms list */
+// 			for (auto i_subp = (*i_cu)->subprogram_children_begin();
+// 			          i_subp != (*i_cu)->subprogram_children_end();
+// 			        ++i_subp)
+// 			{
+// 				// FIXME: what if subprograms are not immediate children of their CU?
+// 				
+// 				// only add real, defined subprograms to the list
+// 				if ( 
+// 						( !(*i_subp)->get_declaration() || !*(*i_subp)->get_declaration() )
+// 				   )
+// 				{
+// 					subprograms_list.insert(*i_subp);
+// 				}
+// 			}
+		
 			if ((*i_cu)->get_name() && (*i_cu)->get_comp_dir())
 			{
 				auto cu_die_name = *(*i_cu)->get_name();
@@ -627,6 +716,7 @@ int main(int argc, char **argv)
 	
 	// now print .c file in topsorted order
 	print_uniqtypes_output(master_relation, topsorted_container);
+	// print_stacktypes_output(subprograms_list);
 	print_allocsites_output(allocsites_relation);
 	
 	// success! 
@@ -676,7 +766,7 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 				<< endl;
 			continue;
 		}
-
+		
 		cout << "\n/* uniqtype for " << i_vert->first.second 
 			<< " defined in " << i_vert->first.first << " */\n";
 		cout << "struct rec " << mangle_typename(i_vert->first)
@@ -744,6 +834,61 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c)
 		}
 		cout << "\n\t}"; /* end contained */
 		cout << "\n};\n"; /* end struct rec */
+	}
+}
+
+void print_stacktypes_output(const subprograms_list_t& l)
+{
+	/* For each subprogram, for each vaddr range for which its
+	 * stack frame is laid out differently, output a uniqtype record.
+	 * We do this by
+	 * - collecting all local variables and formal parameters on a depthfirst walk;
+	 * - collecting their vaddr ranges into a partition, splitting any overlapping ranges
+	     and building a mapping from each range to the variables/parameters valid in it;
+	 * - when we're finished, outputting a distinct uniqtype for each range;
+	 * - also, output a table of IPs-to-uniqtypes.  */
+	for (auto i_subp = l.begin(); i_subp != l.end(); ++i_subp)
+	{
+		typedef pair<lib::Dwarf_Unsigned, lib::Dwarf_Unsigned> interval_t;
+		std::set< interval_t > intervals; // CU- or file-relative?
+		// what is the complete vaddr range of this subprogram?
+		interval_t subp_interval;
+		// if we have a high PC and a low PC, use those
+		if ((*i_subp)->get_high_pc() && (*i_subp)->get_low_pc())
+		{
+			subp_interval = make_pair((lib::Dwarf_Unsigned) (*i_subp)->get_low_pc()->addr,
+			                          (lib::Dwarf_Unsigned) (*i_subp)->get_high_pc()->addr);
+		}
+		else
+		{
+			assert(false);
+		}
+		
+// HACK while our iterator interfaces don't directly provide a depth method
+#define GET_DEPTH(i)  ((i).base().path_from_root.size())
+		auto start_dfs = (*i_subp)->iterator_here(); // gets a *dfs* iterator
+		unsigned start_depth = GET_DEPTH(start_dfs);
+		for (auto i_dfs = start_dfs; 
+		    i_dfs == start_dfs || GET_DEPTH(i_dfs) > start_depth;
+		    ++i_dfs)
+		{
+			shared_ptr<with_dynamic_location_die> wdl
+			 = dynamic_pointer_cast<with_dynamic_location_die>(*i_dfs);
+			if (wdl)
+			{
+				// HACK: further splitting shouldn't be necessary, but is for now.
+				// we actually really need it to be either a variable or a fp
+				if (wdl->get_tag() == DW_TAG_formal_parameter)
+				{
+					
+				}
+				else if (wdl->get_tag() == DW_TAG_variable)
+				{
+					
+				}
+			}
+		}
+#undef GET_DEPTH
 	}
 }
 

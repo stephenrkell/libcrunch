@@ -2,6 +2,10 @@
 # metadata, shadowing libraries and executables in the system,
 # similar to the /usr/lib/debug hierarchy. 
 
+# HACK! for spaces
+nullstring :=
+space := $(nullstring) # end
+
 ALLOCSITES_BASE := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/allocsites
 $(warning ALLOCSITES_BASE is $(ALLOCSITES_BASE))
 CALLER_RELATIVE_ALLOCSITES_BASE := $(shell find -follow -samefile "$(ALLOCSITES_BASE)" | head -n1 | sed 's|^./||')
@@ -44,8 +48,26 @@ $(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs: $(call all_allocsites_for_obj,/%
 $(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c: $(CALLER_RELATIVE_ALLOCSITES_BASE)/%.allallocs uniqtypes
 	$(UNIQTYPES) "$<" > "$@"
 	
+comma := ,
 # We need to define macros for the load addrs of each library
 $(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.so: $(CALLER_RELATIVE_ALLOCSITES_BASE)/%-uniqtypes.c
+	# HACK: use ld --defsym to define alias symbols, based on the following table from uniqtypes.cpp:
+	# 	equiv_class_t equivs[] = {
+	#	{ "signed char", "char", NULL},
+	#	{ "signed int", "int", "signed", NULL },
+	#	{ "unsigned int", "unsigned", NULL },
+	#	{ "signed long int", "long signed int", "signed long", "long", "long int", NULL },
+	#	{ "unsigned long int", "long unsigned int", "unsigned long", NULL },
+	#	{ "signed long long int", "long long signed int", "signed long long", "long long int", "long long", NULL },
+	#	{ "unsigned long long int", "long long unsigned int", "unsigned long long", NULL }
 	$(CC) -shared \
 	$$( . $(LDD_FUNCS) && obj_load_addrs_as_cpp_macros /"$*" ) \
+	$(patsubst %,-Wl$(comma)--defsym$(space)-Wl$(comma)__uniqtype__%=__uniqtype__signed_char,char) \
+	$(patsubst %,-Wl$(comma)--defsym$(space)-Wl$(comma)__uniqtype__%=__uniqtype__signed_int,int signed) \
+	$(patsubst %,-Wl$(comma)--defsym$(space)-Wl$(comma)__uniqtype__%=__uniqtype__unsigned_int,unsigned) \
+	$(patsubst %,-Wl$(comma)--defsym$(space)-Wl$(comma)__uniqtype__%=__uniqtype__signed_long_int,long_signed_int signed_long long long_int) \
+	$(patsubst %,-Wl$(comma)--defsym$(space)-Wl$(comma)__uniqtype__%=__uniqtype__unsigned_long_int,long_unsigned_int unsigned_long) \
+	$(patsubst %,-Wl$(comma)--defsym$(space)-Wl$(comma)__uniqtype__%=__uniqtype__signed_long_long_int,long_long_signed_int signed_long_long long_long_int long_long) \
+	$(patsubst %,-Wl$(comma)--defsym$(space)-Wl$(comma)__uniqtype__%=__uniqtype__unsigned_long_long_int,long_long_unsigned_int unsigned_long_long) \
 	-o "$@" "$<"
+

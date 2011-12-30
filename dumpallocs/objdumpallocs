@@ -55,10 +55,11 @@ esac
 
 line_regexp='^([0-9a-f]*) <([^>]*)>'
 alloc_site_regexp="${line_regexp}.*call.*<($( 
-    ( echo -ne 'malloc\ncalloc\nrealloc\nmemalign\nposix_memalign\nvalloc\n'
-      echo -n "$LIBCRUNCH_ALLOC_FNS" | sed 's/([^)]*) */\n/g'
-    ) | make_match_any_line_floating_eregexp
-))"
+    echo -ne 'malloc\ncalloc\nrealloc\nmemalign\nposix_memalign\nvalloc' | \
+    make_match_any_line_floating_eregexp )|$( 
+    echo -n "$LIBCRUNCH_ALLOC_FNS" | sed 's/\([a-zA-Z0-9_]\+\)([^)]*) */\1\n__wrap_\1\n/g' | 
+    make_match_any_line_floating_eregexp ))"
+    
 echo "alloc_site_regexp is: $alloc_site_regexp" 1>&2
 
 case "$( file "$inputfile" | grep reloc )" in

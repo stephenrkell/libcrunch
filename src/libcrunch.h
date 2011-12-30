@@ -35,8 +35,8 @@ struct allocsite_entry
 #define allocsmt_entry_type          struct allocsite_entry *
 #define allocsmt_entry_coverage      256
 extern allocsmt_entry_type *allocsmt;
-#define ALLOCSMT_FUN(op, ...)    MEMTABLE_ ## op ## _WITH_TYPE(allocsmt, allocsmt_entry_type, \
-    allocsmt_entry_coverage, (void*)0, (void*)STACK_BEGIN, ## __VA_ARGS__ )
+#define ALLOCSMT_FUN(op, ...)    (MEMTABLE_ ## op ## _WITH_TYPE(allocsmt, allocsmt_entry_type, \
+    allocsmt_entry_coverage, (void*)0, (void*)STACK_BEGIN, ## __VA_ARGS__ ))
 
 extern _Bool allocsmt_initialized;
 void init_allocsites_memtable(void);
@@ -157,14 +157,27 @@ abort:
 	return 1;
 }
 
+extern const struct rec *__libcrunch_uniqtype_void;
+
 /* Optimised version, for when you already know the uniqtype address. */
 int __is_aU(const void *obj, const struct rec *uniqtype)
 {
 	const char *reason = NULL; // if we abort, set this to a string lit
+	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	_Bool suppress_warning = 0;
 	
 	/* A null pointer always satisfies is_a. */
 	if (!obj) return 1;
+	/* Any pointer satisfies void. We do this both here and in typestr_to_uniqtype,
+	 * in case we're not called through the __is_a typestr-based interface. */
+	if (!__libcrunch_uniqtype_void)
+	{
+		if (strcmp(uniqtype->name, "void") == 0)
+		{
+			__libcrunch_uniqtype_void = uniqtype;
+		}
+	}
+	if (__libcrunch_uniqtype_void && uniqtype == __libcrunch_uniqtype_void) return 1;
 	
 	/* It's okay to assume we're inited, otherwise how did the caller
 	 * get the uniqtype in the first place? */
@@ -180,6 +193,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 		case STACK:
 		{
 			reason = "stack object";
+			reason_ptr = obj;
 			suppress_warning = 1;
 			goto abort;
 			//void *uniqtype = stack_frame_to_uniqtype(frame_base, file_relative_ip);
@@ -199,6 +213,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			if (!heap_info)
 			{
 				reason = "unindexed heap object";
+				reason_ptr = obj;
 				goto abort;
 			}
 
@@ -207,6 +222,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			if (!obj_uniqtype) 
 			{
 				reason = "unrecognised allocsite";
+				reason_ptr = heap_info->alloc_site;
 				goto abort;
 			}
 			unsigned chunk_size = malloc_usable_size(object_start);
@@ -219,34 +235,43 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 		{
 			//void *uniqtype = static_obj_to_uniqtype(object_start);
 			reason = "static object";
+			reason_ptr = obj;
 			goto abort;
 		}
 		case UNKNOWN:
 		default:
 		{
-			reason = "unknown object storage";
+			reason = "object of unknown storage";
+			reason_ptr = obj;
 			goto abort;
 		}
 	}
-	
+		
 	/* Now search iteratively for a match at the offset within the toplevel
 	 * object. Nonzero offsets "recurse" immediately, using binary search. */
-	unsigned target_offset = ((char*) object_start - (char*) obj) % uniqtype->sz;
-
+	unsigned target_offset = ((char*) obj - (char*) object_start) % 
+		(uniqtype->sz ? uniqtype->sz : 1);
+	
 	signed descend_to_ind;
 	do
 	{
 		/* If we have offset == 0, we can check at this uniqtype. */
-		if (obj_uniqtype == uniqtype) return 1;
+		if (obj_uniqtype == uniqtype) 
+		{
+		temp_label: // HACK: remove this printout once stable
+			warnx("Check __is_aU(%p, %p) succeeded at %p.\n", obj, uniqtype, &&temp_label);
+			return 1;
+		}
 	
-		/* calculate the offset to descend to, if any */
+		/* calculate the offset to descend to, if any 
+		 * FIXME: refactor into find_subobject_spanning(offset) */
 		unsigned num_contained = uniqtype->len;
-		unsigned lower_ind = 0;
-		unsigned upper_ind = num_contained;
+		int lower_ind = 0;
+		int upper_ind = num_contained;
 		while (lower_ind < (upper_ind - 1))
 		{
 			/* Bisect the interval */
-			unsigned bisect_ind = (upper_ind - lower_ind) / 2;
+			int bisect_ind = (upper_ind - lower_ind) / 2;
 			if (uniqtype->contained[bisect_ind].offset > target_offset)
 			{
 				/* Our solution lies in the lower half of the interval */
@@ -256,7 +281,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 		if (lower_ind == (upper_ind - 1))
 		{
 			/* We found one offset */
-			__libcrunch_private_assert(uniqtype->contained[lower_ind].offset < target_offset,
+			__libcrunch_private_assert(uniqtype->contained[lower_ind].offset <= target_offset,
 				"offset underappoximates", __FILE__, __LINE__, __func__);
 			descend_to_ind = lower_ind;
 		}
@@ -278,12 +303,15 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 	
 	__assert_fail("unreachable", __FILE__, __LINE__, __func__);
 check_failed:
-	warnx("Failed check __is_aU(%p, %p) at %p\n", obj, uniqtype, &&check_failed /* we are inlined, right? */);
+	warnx("Failed check __is_aU(%p, %p a.k.a. \"%s\") at %p, allocation was a %p (a.k.a. \"%s\")\n", 
+		obj, uniqtype, uniqtype->name,
+		&&check_failed /* we are inlined, right? */,
+		obj_uniqtype, obj_uniqtype->name);
 	return 1;
 
 abort:
-	if (!suppress_warning) warnx("Aborted __is_aU(%p, %p) at %p, reason: %s\n", obj, uniqtype,
-		&&abort /* we are inlined, right? */, reason);
+	if (!suppress_warning) warnx("Aborted __is_aU(%p, %p) at %p, reason: %s (%p)\n", obj, uniqtype,
+		&&abort /* we are inlined, right? */, reason, reason_ptr);
 	return 1;
 }
 

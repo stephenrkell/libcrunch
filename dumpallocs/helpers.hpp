@@ -83,7 +83,7 @@ inline int read_allocs_line(
 	   } while (0)		
 	std::getline(s, objname, '\t'); check_error(s, objname, str);
 	std::getline(s, symname, '\t'); check_error(s, symname, str);
-	std::getline(s, offsetstr, '\t'); check_error(s, offset, str);
+	std::getline(s, file_addrstr, '\t'); check_error(s, offset, str);
 	std::getline(s, cuname, '\t'); check_error(s, cuname, str);
 	std::getline(s, linestr, '\t'); check_error(s, line, str);
 	std::getline(s, endlinestr, '\t'); check_error(s, endline, str);
