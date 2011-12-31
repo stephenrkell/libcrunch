@@ -61,6 +61,7 @@ void __assert_fail(const char *assertion,
 void warnx(const char *fmt, ...);
 extern unsigned long end; // NOTE: man page just uses "extern end", meaning "int"!
 unsigned long malloc_usable_size (void *ptr);
+int strcmp(const char *, const char *);
 
 /* our own private assert */
 static inline void __libcrunch_private_assert(_Bool cond, const char *reason, 
@@ -131,9 +132,23 @@ inline int __libcrunch_check_init(void)
 // forward decl
 inline int __is_aU(const void *obj, const struct rec *uniqtype);
 
-/* Version based on dlsym(). We make this *non*-inline because we want to
-   instantiate it in libcrunch.c. */
-inline int __is_a(const void *obj, const char *typestr)
+extern const struct rec *__libcrunch_uniqtype_void;
+/* counters */
+extern unsigned long __libcrunch_begun;
+extern unsigned long __libcrunch_aborted_init;
+extern unsigned long __libcrunch_aborted_stack;
+extern unsigned long __libcrunch_aborted_static;
+extern unsigned long __libcrunch_aborted_unknown_storage;
+extern unsigned long __libcrunch_aborted_unindexed_heap;
+extern unsigned long __libcrunch_aborted_unrecognised_allocsite;
+extern unsigned long __libcrunch_failed;
+extern unsigned long __libcrunch_trivially_succeeded_null;
+extern unsigned long __libcrunch_trivially_succeeded_void;
+extern unsigned long __libcrunch_succeeded;
+
+/** This version lets the caller supply a local (cached) location 
+ * where the uniqtype will be stored if set. */
+inline int __is_a3(const void *obj, const char *typestr, const struct rec **maybe_uniqtype)
 {
 	/* All we do is convert typestr to a uniqtype. For this, we need to
 	 * ensure we have a handle on the uniqtypes library. We do this 
@@ -141,43 +156,80 @@ inline int __is_a(const void *obj, const char *typestr)
 	 * constructor, because this code is supposed to be inlineable.
 	 * Adding one constructor per object file would be a waste, with 
 	 * potential for nontrivial startup time cost. */
+	const struct rec *r = NULL;
 	if (__libcrunch_check_init() == -1) goto abort;
 	
 	/* Now we have a working handle with which to lookup uniqued types, */
 	/* we can look up the uniqtype by name. */
-	struct rec *r = typestr_to_uniqtype(typestr);
+	if (maybe_uniqtype)
+	{
+		/* the uniqtype may be cached there... */
+		if (*maybe_uniqtype)
+		{
+			r = *maybe_uniqtype;
+		}
+		else // not cached
+		{
+			r = *maybe_uniqtype = typestr_to_uniqtype(typestr);
+		}
+	}
+	else r = typestr_to_uniqtype(typestr);
+	
+	// if we get a null result, it means we got a typestring that
+	// doesn't denote any type that was reified as a uniqtype. In turn, 
+	// this might be because it wasn't heap-allocated (or static- or
+	// stack-, once I get round to it) by any allocation that we've seen. 
+	// BUT if there is some allocation that we didn't see, 
+	// OR if we're not doing is_a matching, but, say "__like_a" on some
+	// type that is never instantiated (i.e. only structually-equiv ones are),
+	// this might arise. 
+	// We should handle this by dumping some extra information from trumptr,
+	// listing all the typestrings that are actually used, so that we can
+	// ensure they all have uniqtypes. For now, we will just see how it goes....
 	
 	/* Now delegate. */
+	assert(r);
 	return __is_aU(obj, r);
 
 	__assert_fail("unreachable", __FILE__, __LINE__, __func__);
 abort:
+	++__libcrunch_begun;
+	++__libcrunch_aborted_init;
 	warnx("Aborted __is_a(%p, %p) at %p, reason: %s\n", obj, r, 
 		&&abort /* we are inlined, right? */, "init failure");
 	return 1;
+
 }
 
-extern const struct rec *__libcrunch_uniqtype_void;
+/* Version based on dlsym(). */
+inline int __is_a(const void *obj, const char *typestr)
+{
+	return __is_a3(obj, typestr, (void*)0);
+}
 
 /* Optimised version, for when you already know the uniqtype address. */
-int __is_aU(const void *obj, const struct rec *uniqtype)
+int __is_aU(const void *obj, const struct rec *test_uniqtype)
 {
 	const char *reason = NULL; // if we abort, set this to a string lit
 	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	_Bool suppress_warning = 0;
 	
+	// NOTE: we handle separately the path where __is_a fails because of init failure
+	++__libcrunch_begun;
+	
 	/* A null pointer always satisfies is_a. */
-	if (!obj) return 1;
+	if (!obj) { ++__libcrunch_trivially_succeeded_null; return 1; }
 	/* Any pointer satisfies void. We do this both here and in typestr_to_uniqtype,
 	 * in case we're not called through the __is_a typestr-based interface. */
 	if (!__libcrunch_uniqtype_void)
 	{
-		if (strcmp(uniqtype->name, "void") == 0)
+		if (strcmp(test_uniqtype->name, "void") == 0)
 		{
-			__libcrunch_uniqtype_void = uniqtype;
+			__libcrunch_uniqtype_void = test_uniqtype;
 		}
 	}
-	if (__libcrunch_uniqtype_void && uniqtype == __libcrunch_uniqtype_void) return 1;
+	if (__libcrunch_uniqtype_void && test_uniqtype == __libcrunch_uniqtype_void)
+	{ ++__libcrunch_trivially_succeeded_void; return 1; }
 	
 	/* It's okay to assume we're inited, otherwise how did the caller
 	 * get the uniqtype in the first place? */
@@ -187,7 +239,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 	void *object_start;
 	unsigned offset;
 	unsigned block_element_count = 1;
-	struct rec *obj_uniqtype = (struct rec *)0;
+	struct rec *alloc_uniqtype = (struct rec *)0;
 	switch(get_object_memory_kind(obj))
 	{
 		case STACK:
@@ -195,6 +247,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			reason = "stack object";
 			reason_ptr = obj;
 			suppress_warning = 1;
+			++__libcrunch_aborted_stack;
 			goto abort;
 			//void *uniqtype = stack_frame_to_uniqtype(frame_base, file_relative_ip);
 		}
@@ -214,20 +267,22 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			{
 				reason = "unindexed heap object";
 				reason_ptr = obj;
+				++__libcrunch_aborted_unindexed_heap;
 				goto abort;
 			}
 
 			// now we have an allocsite
-			obj_uniqtype = allocsite_to_uniqtype(heap_info->alloc_site);
-			if (!obj_uniqtype) 
+			alloc_uniqtype = allocsite_to_uniqtype(heap_info->alloc_site);
+			if (!alloc_uniqtype) 
 			{
 				reason = "unrecognised allocsite";
 				reason_ptr = heap_info->alloc_site;
+				++__libcrunch_aborted_unrecognised_allocsite;
 				goto abort;
 			}
 			unsigned chunk_size = malloc_usable_size(object_start);
-			block_element_count = chunk_size / obj_uniqtype->sz;
-			__libcrunch_private_assert(chunk_size % obj_uniqtype->sz == 0,
+			block_element_count = chunk_size / alloc_uniqtype->sz;
+			__libcrunch_private_assert(chunk_size % alloc_uniqtype->sz == 0,
 				"chunk size should be multiple of element size", __FILE__, __LINE__, __func__);
 			break;
 		}
@@ -236,6 +291,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 			//void *uniqtype = static_obj_to_uniqtype(object_start);
 			reason = "static object";
 			reason_ptr = obj;
+			++__libcrunch_aborted_static;
 			goto abort;
 		}
 		case UNKNOWN:
@@ -243,36 +299,41 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 		{
 			reason = "object of unknown storage";
 			reason_ptr = obj;
+			++__libcrunch_aborted_unknown_storage;
 			goto abort;
 		}
 	}
 		
 	/* Now search iteratively for a match at the offset within the toplevel
 	 * object. Nonzero offsets "recurse" immediately, using binary search. */
+	assert(alloc_uniqtype);
 	unsigned target_offset = ((char*) obj - (char*) object_start) % 
-		(uniqtype->sz ? uniqtype->sz : 1);
+		(alloc_uniqtype->sz ? alloc_uniqtype->sz : 1);
 	
+	struct rec *cur_obj_uniqtype = alloc_uniqtype;
 	signed descend_to_ind;
 	do
 	{
 		/* If we have offset == 0, we can check at this uniqtype. */
-		if (obj_uniqtype == uniqtype) 
+		if (cur_obj_uniqtype == test_uniqtype) 
 		{
 		temp_label: // HACK: remove this printout once stable
-			warnx("Check __is_aU(%p, %p) succeeded at %p.\n", obj, uniqtype, &&temp_label);
+			warnx("Check __is_aU(%p, %p a.k.a. \"%s\") succeeded at %p.\n", 
+				obj, test_uniqtype, test_uniqtype->name, &&temp_label);
+			++__libcrunch_succeeded;
 			return 1;
 		}
 	
 		/* calculate the offset to descend to, if any 
 		 * FIXME: refactor into find_subobject_spanning(offset) */
-		unsigned num_contained = uniqtype->len;
+		unsigned num_contained = cur_obj_uniqtype->len;
 		int lower_ind = 0;
 		int upper_ind = num_contained;
 		while (lower_ind < (upper_ind - 1))
 		{
 			/* Bisect the interval */
 			int bisect_ind = (upper_ind - lower_ind) / 2;
-			if (uniqtype->contained[bisect_ind].offset > target_offset)
+			if (cur_obj_uniqtype->contained[bisect_ind].offset > target_offset)
 			{
 				/* Our solution lies in the lower half of the interval */
 				upper_ind = bisect_ind + 1;
@@ -281,7 +342,7 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 		if (lower_ind == (upper_ind - 1))
 		{
 			/* We found one offset */
-			__libcrunch_private_assert(uniqtype->contained[lower_ind].offset <= target_offset,
+			__libcrunch_private_assert(cur_obj_uniqtype->contained[lower_ind].offset <= target_offset,
 				"offset underappoximates", __FILE__, __LINE__, __func__);
 			descend_to_ind = lower_ind;
 		}
@@ -295,24 +356,25 @@ int __is_aU(const void *obj, const struct rec *uniqtype)
 		
 		/* Terminate or recurse. */
 	} while (descend_to_ind != -1 
-	    && (uniqtype = uniqtype->contained[descend_to_ind].ptr,
-	        target_offset = target_offset - uniqtype->contained[descend_to_ind].offset,
+	    && (cur_obj_uniqtype = cur_obj_uniqtype->contained[descend_to_ind].ptr,
+	        target_offset = target_offset - cur_obj_uniqtype->contained[descend_to_ind].offset,
 	        1));
 	// if we got here, the check failed
 	goto check_failed;
 	
 	__assert_fail("unreachable", __FILE__, __LINE__, __func__);
 check_failed:
+	++__libcrunch_failed;
 	warnx("Failed check __is_aU(%p, %p a.k.a. \"%s\") at %p, allocation was a %p (a.k.a. \"%s\")\n", 
-		obj, uniqtype, uniqtype->name,
+		obj, test_uniqtype, test_uniqtype->name,
 		&&check_failed /* we are inlined, right? */,
-		obj_uniqtype, obj_uniqtype->name);
+		alloc_uniqtype, alloc_uniqtype->name);
 	return 1;
 
 abort:
-	if (!suppress_warning) warnx("Aborted __is_aU(%p, %p) at %p, reason: %s (%p)\n", obj, uniqtype,
-		&&abort /* we are inlined, right? */, reason, reason_ptr);
-	return 1;
+	// if (!suppress_warning) warnx("Aborted __is_aU(%p, %p) at %p, reason: %s (%p)\n", obj, uniqtype,
+	//	&&abort /* we are inlined, right? */, reason, reason_ptr); 
+	return 1; // so that the program will continue
 }
 
 #endif

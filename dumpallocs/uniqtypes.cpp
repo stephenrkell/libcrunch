@@ -47,7 +47,9 @@ using dwarf::spec::type_chain_die;
 // this encodes only the uniqued set of types, not the relations between them!
 typedef std::map< uniqued_name, shared_ptr< spec::type_die > > master_relation_t;
 typedef std::map< pair< string, unsigned long >, uniqued_name > allocsites_relation_t;
-typedef std::set< shared_ptr< spec::subprogram_die > > subprograms_list_t;
+// we store *iterators* to avoid the inefficient iterator_here(), find() stuff
+typedef std::set< spec::compile_unit_die::subprogram_iterator > subprograms_list_t;
+typedef std::set< spec::compile_unit_die::variable_iterator > statics_list_t;
 
 master_relation_t::key_type
 key_from_type(shared_ptr<type_die> t);
@@ -207,6 +209,7 @@ typedef std::vector<
 
 void print_uniqtypes_output(const master_relation_t& g, const container& c);
 void print_stacktypes_output(const subprograms_list_t& l);
+void print_statics_output(const statics_list_t& l);
 void print_allocsites_output(const allocsites_relation_t& r);
 #define BIGGEST_EQUIV 6
 	typedef const char *equiv_class_t[BIGGEST_EQUIV];
@@ -577,21 +580,21 @@ int main(int argc, char **argv)
 			 i_cu != diesets[objname]->toplevel()->compile_unit_children_end();
 			 ++i_cu)
 		{
-// 			/* Add this CU's subprograms to the subprograms list */
-// 			for (auto i_subp = (*i_cu)->subprogram_children_begin();
-// 			          i_subp != (*i_cu)->subprogram_children_end();
-// 			        ++i_subp)
-// 			{
-// 				// FIXME: what if subprograms are not immediate children of their CU?
-// 				
-// 				// only add real, defined subprograms to the list
-// 				if ( 
-// 						( !(*i_subp)->get_declaration() || !*(*i_subp)->get_declaration() )
-// 				   )
-// 				{
-// 					subprograms_list.insert(*i_subp);
-// 				}
-// 			}
+			/* Add this CU's subprograms to the subprograms list */
+			for (auto i_subp = (*i_cu)->subprogram_children_begin();
+			          i_subp != (*i_cu)->subprogram_children_end();
+			        ++i_subp)
+			{
+				// FIXME: what if subprograms are not immediate children of their CU?
+				
+				// only add real, defined subprograms to the list
+				if ( 
+						( !(*i_subp)->get_declaration() || !*(*i_subp)->get_declaration() )
+				   )
+				{
+					subprograms_list.insert(i_subp);
+				}
+			}
 		
 			if ((*i_cu)->get_name() && (*i_cu)->get_comp_dir())
 			{
@@ -847,17 +850,34 @@ void print_stacktypes_output(const subprograms_list_t& l)
 	     and building a mapping from each range to the variables/parameters valid in it;
 	 * - when we're finished, outputting a distinct uniqtype for each range;
 	 * - also, output a table of IPs-to-uniqtypes.  */
-	for (auto i_subp = l.begin(); i_subp != l.end(); ++i_subp)
+	for (auto i_i_subp = l.begin(); i_i_subp != l.end(); ++i_i_subp)
 	{
-		typedef pair<lib::Dwarf_Unsigned, lib::Dwarf_Unsigned> interval_t;
-		std::set< interval_t > intervals; // CU- or file-relative?
+		struct interval_t : public pair<lib::Dwarf_Unsigned, lib::Dwarf_Unsigned> 
+		{
+			// we redefine comparison to be just on the first element
+			bool operator<(const interval_t& arg) const
+			{ return this->first < arg.first; }
+			
+			// constructor
+			interval_t(lib::Dwarf_Unsigned lower, lib::Dwarf_Unsigned upper) 
+			: pair<lib::Dwarf_Unsigned, lib::Dwarf_Unsigned>(lower, upper) {}
+			
+			interval_t() {}
+		};
+		
+		// INVARIANT: the intervals that are keys in this map
+		// are non-overlapping.
+		std::map< interval_t, std::set< shared_ptr<with_dynamic_location_die> > > intervals; // CU- or file-relative?
 		// what is the complete vaddr range of this subprogram?
 		interval_t subp_interval;
+		
+		auto i_subp = *i_i_subp;
+		
 		// if we have a high PC and a low PC, use those
 		if ((*i_subp)->get_high_pc() && (*i_subp)->get_low_pc())
 		{
-			subp_interval = make_pair((lib::Dwarf_Unsigned) (*i_subp)->get_low_pc()->addr,
-			                          (lib::Dwarf_Unsigned) (*i_subp)->get_high_pc()->addr);
+			subp_interval = interval_t( (lib::Dwarf_Unsigned) (*i_subp)->get_low_pc()->addr,
+			                            (lib::Dwarf_Unsigned) (*i_subp)->get_high_pc()->addr );
 		}
 		else
 		{
@@ -865,8 +885,10 @@ void print_stacktypes_output(const subprograms_list_t& l)
 		}
 		
 // HACK while our iterator interfaces don't directly provide a depth method
-#define GET_DEPTH(i)  ((i).base().path_from_root.size())
-		auto start_dfs = (*i_subp)->iterator_here(); // gets a *dfs* iterator
+#define GET_DEPTH(i)  ((i).base().path_from_root.size()) 
+		// get a *dfs* iterator -- HACK
+		dwarf::spec::abstract_dieset::iterator start_dfs(
+			*i_subp.base().base().base().p_ds, i_subp.base().base().base().off, i_subp.base().base().base().path_from_root);
 		unsigned start_depth = GET_DEPTH(start_dfs);
 		for (auto i_dfs = start_dfs; 
 		    i_dfs == start_dfs || GET_DEPTH(i_dfs) > start_depth;
@@ -878,14 +900,46 @@ void print_stacktypes_output(const subprograms_list_t& l)
 			{
 				// HACK: further splitting shouldn't be necessary, but is for now.
 				// we actually really need it to be either a variable or a fp
-				if (wdl->get_tag() == DW_TAG_formal_parameter)
+				
+				auto loc = wdl->get_dynamic_location();
+				for (auto i_loc = loc.begin(); i_loc != loc.end(); ++i_loc)
 				{
-					
+					interval_t i(i_loc->lopc, i_loc->hipc);
+					// handle the "all vaddrs" case here
+					if (i_loc->lopc == 0 && i_loc->hipc == 0)
+					{
+						// FIXME: "all vaddrs" case
+						assert(false);
+					}
+					else
+					{
+						// we look up next-lowest interval, to see if we have a low overlap
+						auto found_lower = intervals.lower_bound(i);
+						if (found_lower != intervals.end() && 
+							found_lower->first != i)
+						{
+							// we have to fragment!
+							assert(false);
+						}
+						
+						// we look up the next-higher interval, to se if we have a high overlap
+						auto found_upper = intervals.upper_bound(i);
+						if (found_upper != intervals.end() &&
+							found_upper->first != i)
+						{
+							assert(false);
+						}
+					}
 				}
-				else if (wdl->get_tag() == DW_TAG_variable)
-				{
-					
-				}
+				
+// 				if (wdl->get_tag() == DW_TAG_formal_parameter)
+// 				{
+// 					
+// 				}
+// 				else if (wdl->get_tag() == DW_TAG_variable)
+// 				{
+// 					
+// 				}
 			}
 		}
 #undef GET_DEPTH

@@ -73,6 +73,27 @@ let rec is_bitfield lo = match lo with
 (* CIL doesn't give us a const void * type builtin, so we define one. *)
 let voidConstPtrType = TPtr(TVoid([Attr("const", [])]),[])
 
+let rec canonicalizeBaseTypeStr s = 
+ (* based on the following table -- keep in sync with uniqtypes.cpp and Makefile.allocsites 
+	equiv_class_t equivs[] = {
+		{ "signed char", "char", NULL},
+		{ "signed int", "int", "signed", NULL },
+		{ "unsigned int", "unsigned", NULL },
+		{ "signed long int", "long signed int", "signed long", "long", "long int", NULL },
+		{ "unsigned long int", "long unsigned int", "unsigned long", NULL },
+		{ "signed long long int", "long long signed int", "signed long long", "long long int", "long long", NULL },
+		{ "unsigned long long int", "long long unsigned int", "unsigned long long", NULL }
+	};
+ *)
+  if s = "char" then "signed char"
+  else if s = "int" or s = "signed" then "signed int"
+  else if s = "unsigned" then "unsigned int"
+  else if s = "long signed int" or s = "signed long" or s = "long" or s = "long int" then "signed long int"
+  else if s = "long unsigned int" or s = "unsigned long" then "unsigned long int"
+  else if s = "long long signed int" or s = "signed long long" or s = "long long int" or s = "long long" then "signed long long int"
+  else if s = "long long unsigned int" or s = "unsigned long long" then "unsigned long long int"
+  else s
+
 (* HACK: pasted from dumpallocs *)
 let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getEffectiveType ts)) *)
  match tsig with
@@ -82,8 +103,8 @@ let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getEffectiveTyp
  | TSFun(returnTs, argsTss, isSpecial, attrs) -> "()=>" ^ (stringFromSig returnTs)
  | TSEnum(enumName, attrs) -> enumName
  | TSBase(TVoid(attrs)) -> "void"
- | TSBase(TInt(kind,attrs)) -> trim (Pretty.sprint 80 (d_ikind () kind))
- | TSBase(TFloat(kind,attrs)) -> trim (Pretty.sprint 80 (d_fkind () kind))
+ | TSBase(TInt(kind,attrs)) -> canonicalizeBaseTypeStr (trim (Pretty.sprint 80 (d_ikind () kind)))
+ | TSBase(TFloat(kind,attrs)) -> canonicalizeBaseTypeStr (trim (Pretty.sprint 80 (d_fkind () kind)))
  | _ -> "impossible" 
 
 (* Return an expression that evaluates to the address of the given lvalue.
@@ -128,6 +149,7 @@ let rec getEffectiveType tsig =
  | TSBase(TFloat(kind,attrs)) -> TSBase(TFloat(kind, []))
  | _ -> tsig
 
+  
   (* CIL "expressions" are defined to be side-effect-free. Side-effecting
      operations are pushed into "instructions". Since we want to insert
      a call to assert(), which is side-effecting, we need to visit instructions.
@@ -230,7 +252,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                We can't get the declaring file/line ("location" in CIL-speak) from a typesig,
                nor from its type -- we need the global.  *)
              let symnameFromString s ts = begin
-                let defining_file = match ts with 
+                let rec definingFile t = match t with 
                   TSComp(isSpecial, name, attrs) -> begin try
                       let l = NamedTypeMap.find name !namedTypesMap in l.file 
                       with Not_found -> output_string Pervasives.stderr ("missing decl for " ^ name ^ "\n"); "" (* raise Not_found *)
@@ -239,11 +261,17 @@ class trumPtrExprVisitor = fun enclosingFile ->
                       let l = NamedTypeMap.find name !namedTypesMap in l.file 
                       with Not_found -> output_string Pervasives.stderr ("missing decl for " ^ name ^ "\n"); "" (* raise Not_found *)
                   end
+                | TSPtr(tsig, attrs) -> definingFile tsig
                 | _ -> ""
+                in
+                let defining_filestr = definingFile ts
                 in 
-                let header_insert = Str.global_replace (Str.regexp "[. /-]") "_" defining_file in
-                let ptr_replaced = Str.global_replace (Str.regexp "\\^") "__PTR" s in
-                let ptr_and_fun_replaced = Str.global_replace (Str.regexp "\\(\\)=>") "__FUN_" ptr_replaced in
+                let header_insert = Str.global_replace (Str.regexp "[. /-]") "_" defining_filestr in
+                let ptr_replaced = Str.global_replace (Str.regexp "\\^") "__PTR_"  (Str.global_replace (Str.regexp "[. /-]") "_" s) in
+                (* HACK: using escaped brackets in the regexp doesn't seem to work for replacing, 
+                   so just use two dots. Will need to change this if we start to include function
+                   argument types in function typestrings. *)
+                let ptr_and_fun_replaced = Str.global_replace (Str.regexp "..=>") "__FUN_" ptr_replaced in
                 "__uniqtype_" ^ header_insert ^ "_" ^ ptr_and_fun_replaced
               end in
               let symname = symnameFromString typeStr effectiveType in
