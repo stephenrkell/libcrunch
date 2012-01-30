@@ -8,6 +8,7 @@
 
 #include "memtable.h"
 #include "heap_index.h"
+#include "addrmap.h"
 
 extern void *__uniqtypes_handle __attribute__((weak));
  
@@ -29,8 +30,6 @@ struct allocsite_entry
 	void *allocsite; 
 	struct rec *uniqtype;
 };
-
-#define STACK_BEGIN 0x800000000000UL
 
 #define allocsmt_entry_type          struct allocsite_entry *
 #define allocsmt_entry_coverage      256
@@ -59,7 +58,6 @@ inline struct rec *allocsite_to_uniqtype(const void *allocsite)
 void __assert_fail(const char *assertion, 
 	const char *file, unsigned int line, const char *function);
 void warnx(const char *fmt, ...);
-extern unsigned long end; // NOTE: man page just uses "extern end", meaning "int"!
 unsigned long malloc_usable_size (void *ptr);
 int strcmp(const char *, const char *);
 
@@ -68,44 +66,6 @@ static inline void __libcrunch_private_assert(_Bool cond, const char *reason,
 	const char *f, unsigned l, const char *fn)
 {
 	if (!cond) __assert_fail(reason, f, l, fn);
-}
-
-enum object_memory_kind
-{
-	UNKNOWN,
-	STATIC,
-	STACK,
-	HEAP
-};
-/* HACK: on my system, shared libraries are always loaded at the top,
- * from 0x7eff00000000....
- * EXCEPT when we run ldd from a Makefile running dash, in which case
- * they show up at 0x2aaaa00000000+delta, which is weird. I should really
- * check the source of ld-linux.so, but for now, go with the lower addr. */
-#define SHARED_LIBRARY_MIN_ADDRESS 0x2aaa00000000UL
-inline enum object_memory_kind get_object_memory_kind(const void *obj)
-{
-	/* For x86-64, we do this in a rough-and-ready way. 
-	 * In particular, SHARED_LIBRARY_MIN_ADDRESS is not guaranteed. 
-	 * However, we can detect violations of this statically using our ldd output. */
-	
-	/* We use gcc __builtin_expect to hint that heap is the likely case. */ 
-	
-	unsigned long addr = (unsigned long) obj;
-	
-	/* If the address is below the end of the program BSS, it's static. */
-	if (__builtin_expect(addr < end, 0)) return STATIC;
-	
-	/* If the address is greater than RSP and less than top-of-stack,
-	 * it's stack. */
-	unsigned long current_sp;
-	__asm__("movq %%rsp, %0\n" : "=r"(current_sp));
-	if (__builtin_expect(addr >= current_sp && addr < STACK_BEGIN, 0)) return STACK;
-	
-	/* It's between HEAP and STATIC. HACK: use SHARED_LIBRARY_MIN_ADDRESS. */
-	if (__builtin_expect(addr >= SHARED_LIBRARY_MIN_ADDRESS, 0)) return STATIC;
-	
-	return HEAP;
 }
 
 // slow-path initialization handler
