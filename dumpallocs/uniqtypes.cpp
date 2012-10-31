@@ -665,141 +665,61 @@ int main(int argc, char **argv)
 		// = iterator_base::subseq< iterator_base::is_a<core::subprogram_die> >(i_cu.children_here());
 		
 		auto children = i_cu.children_here();
-		cerr << "First child is at 0x" << std::hex << children.first.offset_here() << std::dec << endl;
+		//cerr << "First child is at 0x" << std::hex << children.first.offset_here() << std::dec << endl;
 		auto subps = children.subseq_of<core::subprogram_die>();
-// 		//auto subps = iterator_base::subseq_t< 
-// 		//				decltype(children.first), 
-// 		//				iterator_base::is_a<core::subprogram_die> 
-// 		//				>().operator()(std::move(children)); 
-// 		typedef srk31::selective_iterator< iterator_base::is_a<core::subprogram_die>, 
-// 			core::iterator_sibs<>
-// 		> filtered_iterator;
-// 		typedef boost::intrusive_ptr<core::subprogram_die> derived_ptr; // FIXME: reference via ptr_type?
-// 		typedef core::root_die::ptr_type base_ptr;
-// 		typedef derived_ptr (*transformer)(const base_ptr&);
-// 		typedef boost::transform_iterator<transformer, filtered_iterator >
-// 			transformed_iterator;
-// 		auto filtered_first = filtered_iterator(std::move(children.first), iterator_base::END);
-// 		auto filtered_second = filtered_iterator(std::move(children.second), iterator_base::END);
-// 		if (filtered_first != filtered_second)
-// 		{
-// 			cerr << "FILTERED First subprogram child is at 0x" << std::hex 
-// 				<< filtered_first.base().base().offset_here() 
-// 				<< std::dec << endl;
-// 		}
-// 		transformer transf = &boost::dynamic_pointer_cast<core::subprogram_die, core::basic_die>;
-// 
-// 		auto transformed_first = transformed_iterator(
-// 				std::move(filtered_first),
-// 				transf
-// 			);
-// 		auto transformed_second = transformed_iterator(
-// 				std::move(filtered_second),
-// 				transf
-// 			);
-// 		//auto subps = make_pair(
-// 		//	std::move(transformed_first),
-// 		//	std::move(transformed_second)
-// 		//);
-// 		
-// 		
-// 		if (transformed_first != transformed_second)
-// 		{
-// 			cerr << "TRANSFORMED First subprogram child is at 0x" 
-// 				//<< std::hex << subps.first.base().base().base().offset_here()
-// 				<< std::hex << transformed_first.base().base().base().offset_here() 
-// 				<< std::dec << endl;
-// 		}
 		for (auto i_subp = std::move(subps.first); i_subp != subps.second; ++i_subp)
-		//for (auto i_subp = std::move(transformed_first); i_subp != transformed_second; ++i_subp)
 		{
-			cerr << "Found a subprogram at 0x" << std::hex 
-				<< i_subp.base().base().base().offset_here() << std::dec
-				<< endl;
-		}
+// 			cerr << "Found a subprogram at 0x" << std::hex 
+// 				<< i_subp.base().base().base().offset_here() << std::dec
+// 				<< endl;
+			// FIXME: fix base.base.base problem
 
-		// 0. fix null subps.first
-		// 1. fix base.base.base problem
-		
-		// now we want
-		// .subseq_of   <-- means is_a
-		// .subseq_with <-- means general predicate
-		
-		// here we can specialize subseq< is_a<T> > so that it *adds* the downcast
-		// BUT how to evaluate is_a without making payload (to allow dynamic_pointer_cast)? 
-		// answer:
-		// each payload class has a static const Dwarf_Half characteristic_tag
-		//                      AND a spec pred (default true)?
-		// How can we use the spec pred? 
-		// The way specs should work is that
-		// the spec of a CU is used to select a factory for its payloads
-		// and the factory defines a typedef template for_tag< >
-		// so to check "is_a<T> " for an iterator,
-		// we only need to check that 
-		// its factory would instantiate the payload as a T.
-		// BUT we can only evaluate this at run time.
-		// So the body of is_a must do this check:
-		// template <typename T> is_a(const iterator_base& it)
-		// { dynamic_pointer_cast<T>(it.spec_here().factory().dummy_for_tag(it.tag_here())); }
-		// i.e. must use polymorphism to do the is_a check
-		// which in turn means each factory keeps a singleton dummy instance of each type it instantiates
-		// (since we don't want to dynamically heap allocate the dummy_for_tag instances).
-		
-		//template <typename Iter> 
-		//
-		//auto subps =::iterator_base::subsequence<core::with_tag<DW_TAG_subprogram, subprogram_die> > subps
-		// = i.cu.children_here();
-		 
-// 		for (auto i_subp = (*i_cu)->subprogram_children_begin();
-// 			      i_subp != core::iterator_base::END;
-// 			    ++i_subp)
-// 		{
-// 			// FIXME: what if subprograms are not immediate children of their CU?
-// 			// Want libdwarf to define a may_immediately_contain
-// 			//                     and   may_recursively_contain (transitive closure)
-// 			// lookup, then generalise increment_skipping_subtree
-// 			// to a search specifying a tag, which can skip subtrees (whether doing dfs or bfs)
-// 			// if the DIEs we're looking for cannot possibly be underneath.
-// 
-// 			// only add real, defined subprograms to the list
-// 			if ( 
-// 					( !(*i_subp)->get_declaration() || !*(*i_subp)->get_declaration() )
-// 			   )
-// 			{
-// 				string sourcefile_name = (*i_subp)->get_decl_file() ? 
-// 					(*i_cu)->source_file_name(*(*i_subp)->get_decl_file())
-// 					: "(unknown source file)";
-// 				string comp_dir = (*i_cu)->get_comp_dir() ? *(*i_cu)->get_comp_dir() : "";
-// 
-// 				string subp_name;
-// 				if ((*i_subp)->get_name()) subp_name = *(*i_subp)->get_name();
-// 				else 
-// 				{
-// 					std::ostringstream s;
-// 					s << "0x" << std::hex << (*i_subp)->get_offset();
-// 					subp_name = s.str();
-// 				}
-// 
-// 				auto ret = subprograms_list.insert(
-// 					make_pair(
-// 						make_pair(
-// 							fq_pathname(comp_dir, sourcefile_name),
-// 							subp_name
-// 						), 
-// 						i_subp
-// 					)
-// 				);
-// 				if (!ret.second)
-// 				{
-// 					/* This means that "the same value already existed". */
-// 					//cerr << "Warning: subprogram " << **i_subp
-// 					//	<< " already in subprograms_list as " 
-// 					//	<< ret.first->first.second << " in " << ret.first->first.first << ": "
-// 					//	<< **ret.first->second
-// 					//	<< endl;
-// 				}
-// 			}
-// 		}
+			// FIXME: what if subprograms are not immediate children of their CU?
+			// Want libdwarf to define a may_immediately_contain
+			//                     and   may_recursively_contain (transitive closure)
+			// lookup, then generalise increment_skipping_subtree
+			// to a search specifying a tag, which can skip subtrees (whether doing dfs or bfs)
+			// if the DIEs we're looking for cannot possibly be underneath.
+
+			// only add real, defined subprograms to the list
+			if ( 
+					( !i_subp->get_declaration() || !i_subp->get_declaration() )
+			   )
+			{
+				string sourcefile_name = i_subp->get_decl_file() ? 
+					i_cu->source_file_name(i_subp->get_decl_file())
+					: "(unknown source file)";
+				string comp_dir = i_cu->get_comp_dir() ? i_cu->get_comp_dir() : "";
+
+				string subp_name;
+				if (i_subp->get_name()) subp_name = *i_subp->get_name();
+				else 
+				{
+					std::ostringstream s;
+					s << "0x" << std::hex << i_subp.offset_here();
+					subp_name = s.str();
+				}
+
+				auto ret = subprograms_list.insert(
+					make_pair(
+						make_pair(
+							fq_pathname(comp_dir, sourcefile_name),
+							subp_name
+						), 
+						i_subp
+					)
+				);
+				if (!ret.second)
+				{
+					/* This means that "the same value already existed". */
+					//cerr << "Warning: subprogram " << **i_subp
+					//	<< " already in subprograms_list as " 
+					//	<< ret.first->first.second << " in " << ret.first->first.first << ": "
+					//	<< **ret.first->second
+					//	<< endl;
+				}
+			}
+		}
 	}
 	cerr << "Found " << subprograms_list.size() << " subprograms." << endl;
 	
