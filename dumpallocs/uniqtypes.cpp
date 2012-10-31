@@ -22,6 +22,7 @@
 #include <srk31/ordinal.hpp>
 #include <dwarfpp/spec_adt.hpp>
 #include <dwarfpp/adt.hpp>
+#include <dwarfpp/cxx_compiler.hpp>
 #include <fileno.hpp>
 
 #include "helpers.hpp"
@@ -45,6 +46,7 @@ using dwarf::spec::type_die;
 using dwarf::spec::with_data_members_die;
 using dwarf::spec::with_dynamic_location_die;
 using dwarf::spec::type_chain_die;
+using dwarf::tool::cxx_compiler;
 
 // regex usings
 using boost::regex;
@@ -267,17 +269,6 @@ void print_uniqtypes_output(const master_relation_t& g, const container& c);
 void print_stacktypes_output(const subprograms_list_t& l);
 void print_statics_output(const statics_list_t& l);
 void print_allocsites_output(const allocsites_relation_t& r);
-#define BIGGEST_EQUIV 6
-	typedef const char *equiv_class_t[BIGGEST_EQUIV];
-	equiv_class_t equivs[] = {
-		{ "signed char", "char", NULL},
-		{ "signed int", "int", "signed", NULL },
-		{ "unsigned int", "unsigned", NULL },
-		{ "signed long int", "long signed int", "signed long", "long", "long int", NULL },
-		{ "unsigned long int", "long unsigned int", "unsigned long", NULL },
-		{ "signed long long int", "long long signed int", "signed long long", "long long int", "long long", NULL },
-		{ "unsigned long long int", "long long unsigned int", "unsigned long long", NULL }
-	};
 
 master_relation_t::key_type
 key_from_type(shared_ptr<type_die> t)
@@ -301,14 +292,13 @@ key_from_type(shared_ptr<type_die> t)
 		{
 			string name_to_search_for = *t->get_name();
 			// search equiv classes for a type of this name
-			for (equiv_class_t *i_equiv = &equivs[0]; i_equiv < &equivs[sizeof equivs / sizeof(equiv_class_t)]; ++i_equiv)
+			for (const char ***p_equiv = &cxx_compiler::base_typename_equivs[0]; *p_equiv != NULL; ++p_equiv)
 			{
-				for (const char **i_el = i_equiv[0]; *i_el != NULL; ++i_el)
+				for (const char **p_el = p_equiv[0]; *p_el != NULL; ++p_el)
 				{
-					assert(i_el < i_equiv[BIGGEST_EQUIV]);
-					if (name_to_search_for == string(*i_el))
+					if (name_to_search_for == string(*p_el))
 					{
-						name_to_use = (*i_equiv)[0];
+						name_to_use = (*p_equiv)[0];
 						break;
 					}
 				}
@@ -319,7 +309,7 @@ key_from_type(shared_ptr<type_die> t)
 			if (name_to_use == "") name_to_use = name_to_search_for;
 		}
 
-		assert(name_to_use != "char"); // ... for example. It should be "signed char" of course!
+		assert(name_to_use != "signed char"); // ... for example. It should be "char" of course!
 		n = make_pair(file_to_use, name_to_use);
 	}
 	else // DW_TAG_pointer_type
@@ -397,15 +387,14 @@ find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 {
 	/* For the most part, we just do named_child.
 	 * BUT, for base types, we widen the search, using our equivalence classes. */
-	for (equiv_class_t *i_equiv = &equivs[0]; i_equiv < &equivs[sizeof equivs / sizeof(equiv_class_t)]; ++i_equiv)
+	for (const char ***p_equiv = &cxx_compiler::base_typename_equivs[0]; *p_equiv != NULL; ++p_equiv)
 	{
-		for (const char **i_el = i_equiv[0]; *i_el != NULL; ++i_el)
+		for (const char **p_el = p_equiv[0]; *p_el != NULL; ++p_el)
 		{
-			assert(i_el < i_equiv[BIGGEST_EQUIV]);
-			if (name == string(*i_el))
+			if (name == string(*p_el))
 			{
 				/* We try every element in the class */
-				for (const char **i_attempt = i_equiv[0]; *i_attempt != NULL; ++i_attempt)
+				for (const char **i_attempt = p_equiv[0]; *i_attempt != NULL; ++i_attempt)
 				{
 					auto found = p_cu->named_child(string(*i_attempt));
 					auto found_type = dynamic_pointer_cast<type_die>(found);
@@ -414,7 +403,7 @@ find_type_in_cu(shared_ptr<compile_unit_die> p_cu, const string& name)
 			}
 		}
 	}
-#undef BIGGEST_EQUIV
+
 	// if we got here, just try named_child
 	return dynamic_pointer_cast<type_die>(p_cu->named_child(name)); //shared_ptr<type_die>();
 }
