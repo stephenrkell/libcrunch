@@ -8,6 +8,7 @@
 
 #include "memtable.h"
 #include "heap_index.h"
+#include <stdint.h>
 #include "addrmap.h"
 
 extern void *__uniqtypes_handle __attribute__((weak));
@@ -19,7 +20,7 @@ struct rec
 	unsigned sz;
 	unsigned len;
 	struct { 
-		unsigned offset;
+		signed offset;
 		struct rec *ptr;
 	} contained[];
 };

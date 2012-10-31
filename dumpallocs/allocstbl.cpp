@@ -13,10 +13,10 @@ int main(int argc, char **argv)
 	map<string, shared_ptr<lib::file> > files;
 	map<string, shared_ptr<lib::dieset> > diesets;
 	
-	boost::shared_ptr<ifstream> p_in;
+	std::shared_ptr<ifstream> p_in;
 	if (argc > 1) 
 	{
-		p_in = boost::make_shared<ifstream>(argv[1]);
+		p_in = std::make_shared<ifstream>(argv[1]);
 		if (!*p_in) 
 		{
 			cerr << "Could not open file " << argv[1] << endl;

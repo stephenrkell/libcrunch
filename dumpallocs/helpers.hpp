@@ -3,7 +3,7 @@
 
 #include <sstream>
 #include <fstream>
-#include <boost/shared_ptr.hpp>
+#include <memory>
 #include <dwarfpp/spec_adt.hpp>
 #include <dwarfpp/adt.hpp>
 
@@ -12,9 +12,9 @@ using std::endl;
 using std::map;
 using std::pair;
 using std::make_pair;
-using boost::shared_ptr;
-using boost::make_shared;
-using boost::dynamic_pointer_cast;
+using std::shared_ptr;
+using std::make_shared;
+using std::dynamic_pointer_cast;
 using std::istringstream;
 using namespace dwarf;
 using dwarf::spec::type_die;

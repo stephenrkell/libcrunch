@@ -7,7 +7,7 @@ struct rec
 	unsigned sz;
 	unsigned len;
 	struct { 
-		unsigned offset;
+		signed offset;
 		struct rec *ptr;
 	} contained[];
 };

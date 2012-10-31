@@ -42,7 +42,7 @@ case "$filetype" in
             # yes, bitcode. So make a temporary file
             inputfile="$(mktemp)"
             echo "Using temporary object file: $inputfile" 1>&2
-            ld -r --plugin LLVMgold.so -o "$inputfile" toy.o || \
+            ld.gold -r --plugin LLVMgold.so -o "$inputfile" toy.o || \
             (echo "Error converting LLVM bitcode to native object." 1>&2; false) || exit 1
         else
             # actually, not bitcode; roll with it
@@ -57,9 +57,11 @@ line_regexp='^([0-9a-f]*) <([^>]*)>'
 alloc_site_regexp="${line_regexp}.*call.*<($( 
     echo -ne 'malloc\ncalloc\nrealloc\nmemalign\nposix_memalign\nvalloc' | \
     make_match_any_line_floating_eregexp )|$( 
-    echo -n "$LIBCRUNCH_ALLOC_FNS" | sed 's/\([a-zA-Z0-9_]\+\)([^)]*) */\1\n__wrap_\1\n/g' | 
+    echo -n "${LIBCRUNCH_ALLOC_FNS:-malloc}" | sed 's/\([a-zA-Z0-9_]\+\)([^)]*) */\1\n__wrap_\1\n/g' | 
     make_match_any_line_floating_eregexp ))"
-    
+# HACK: if libcrunch_alloc_fns is unset, use "malloc" a second time
+# (leaving this out will make the regexp end "|)" so match all calls)
+
 echo "alloc_site_regexp is: $alloc_site_regexp" 1>&2
 
 case "$( file "$inputfile" | grep reloc )" in
