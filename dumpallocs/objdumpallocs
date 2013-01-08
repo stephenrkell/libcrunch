@@ -35,6 +35,9 @@ case "$filetype" in
     (application/x-executable*)
         inputfile="$1"
     ;;
+    (application/x-sharedlib*)
+        inputfile="$1"
+    ;;
     (application/octet-stream*|application/x-archive*)
         # probably an LLVM bitcode file
         llvm_nm_output="$( llvm-nm "$1" 2>/dev/null )"
@@ -133,20 +136,20 @@ while read address sym offset; do
     #echo "context: $context" 1>&2
     # 2a. Narrow that context to the last objdump-printed source line.
     # Remember the file/line pair.
-    with_file_line_header="$( echo "$context" | tac | sed -r '/^\/.*:[0-9]+$/ q' | tac )"
+    with_file_line_header="$( echo "$context" | tac | sed -r '/^\/.*:[0-9]+( \(discriminator [0-9]*\))?$/ q' | tac )"
     # If we didn't hit a source header line,
     # what we read next will be garbage, so grep for something that matches the pattern
-    file_line_header="$( echo "$with_file_line_header" | egrep '^/.*:[0-9]+$' | head -n1 )"
+    file_line_header="$( echo "$with_file_line_header" | egrep '^/.*:[0-9]+( \(discriminator [0-9]*\))?$' | head -n1 )"
     if [[ -z "$file_line_header" ]]; then 
         echo "Warning: could not find source line for ${sym}+${offset}, skipping" 1>&2
         echo "Context attempt was:"$'\n'"$with_file_line_header" 1>&2
         continue
     fi
-    filename="$( echo "$file_line_header" | sed 's/:[0-9]\+$//' )"
-    line_number="$( echo "$file_line_header" | sed 's/.*:\([0-9]\+\)$/\1/' )"
+    filename="$( echo "$file_line_header" | sed -r 's/:[0-9]+( \(discriminator [0-9]*\))?$//' )"
+    line_number="$( echo "$file_line_header" | sed -r 's/.*:([0-9]+)( \(discriminator [0-9]*\))?$/\1/' )"
     # How many source lines are in the chunk?
     # We grep -v out the header and anything that looks like an instruction disassembly line
-    source_lines="$( echo "$with_file_line_header" | egrep -v '^/.*:[0-9]+$' | egrep -v \
+    source_lines="$( echo "$with_file_line_header" | egrep -v '^/.*:[0-9]+( \(discriminator [0-9]*\))?$' | egrep -v \
         '^[0-9a-f]+[[:blank:]]*<.+(\+0x[0-9a-f]+)?>.*' )"
     source_lines_count="$( echo "$source_lines" | wc -l )"
     # HACK: if we didn't get anything, make sure we output a 1-line interval anyway

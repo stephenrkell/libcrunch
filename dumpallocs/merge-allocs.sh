@@ -8,25 +8,7 @@
 # We can't easily predict where the .allocs file will be for a given source file.
 # (see dumpallocs.ml for the reason).
 
-pad_numbers () {
-    cat | tr '\n' '\f' | \
-    sed 's/\f/\f\n/g' | \
-    tr '\t' '\n' | \
-    sed -r "s/^[[:space:]]*[0-9]+[[:space:]]*\$/printf '%06d' '&'/e" | \
-    tr '\n' '\t' | \
-    sed 's/\f\t/\n/g'
-}
-#    # translate tabs to newlines
-#
-#    # match a whole line
-#    sed -r 's/(.*)\t([0-9]+)\t(.*)/printf "%s\t%06d\t%s\n" "\1" "\2" "\3"/e' | \
-#    sed -r 's/(.*)\t([0-9]+)\t(.*)/printf "%s\t%06d\t%s\n" "\1" "\2" "\3"/e' 
-#    # do it twice so we can replace up to two fields!
-#}
-
-input="$(cat)"
-all_obj_allocs_file="$(mktemp)"
-echo "$input" | pad_numbers | sort -t$'\t' -k4 -k5 > "$all_obj_allocs_file"
+all_obj_allocs_file="$1"
 
 lexicographic_compare_le () {
     sorted="$( echo "$1"$'\n'"$2" | LANG=C sort )"
@@ -71,7 +53,7 @@ lexicographic_compare_ge () {
 
 }
 
-all_source_allocs_file="$(mktemp)"
+all_source_allocs_file="$2"
 # first pass over the input: gather all the .allocs files we might want.
 # NOTE: previously we just took all the directories containing source files,
 # then looked for .i.allocs files within those. This results in false positives
@@ -89,25 +71,6 @@ all_source_allocs_file="$(mktemp)"
 ## FIXME: I'm not sure why we need the uniq here: why does dumpallocs sometimes output
 ## multiple lines for the same malloc call? 
 ## e.g. for /usr/local/src/git-1.7.5.4/builtin/log.c line 1268
-
-cat "$all_obj_allocs_file" | cut -f1 | sort | uniq | while read obj rest; do
-    all_cus_info="$( readelf -wi "$obj" | grep -A7 'DW_TAG_compile_unit' | tr '\n' '\f' | sed 's/\f--\f/\n/g' )"
-    echo "$all_cus_info" | while read cu_info; do
-        cu_fname="$( echo "$cu_info" | tr '\f' '\n' | grep DW_AT_name | head -n1 | sed 's/.*DW_AT_name[[:blank:]]*:[[:blank:]]*(.*, offset: 0x[0-9a-f]*): \(.*\)/\1/' | sed 's/[[:blank:]]*$//')"
-        echo "Note: found CU $cu_fname" 1>&2
-        echo "CU info is: $cu_info" 1>&2
-        echo "comp_dir line of CU info is $( echo "$cu_info" | tr '\f' '\n' | grep DW_AT_comp_dir )" 1>&2
-        cu_compdir="$( echo "$cu_info" | tr '\f' '\n'  | grep DW_AT_comp_dir | sed 's/.*DW_AT_comp_dir[[:blank:]]*:[[:blank:]]*(.*, offset: 0x[0-9a-f]*): \(.*\)/\1/' | sed 's/[[:blank:]]*$//' )"
-        echo "Note: found comp_dir $cu_compdir" 1>&2
-        cu_sourcepath="${cu_compdir}/${cu_fname}"
-        cu_allocspath="$( echo "$cu_sourcepath" | grep '\.cil\.c$' | sed 's/\.cil\.c/.i.allocs/' )"
-        if [[ ! -r "$cu_allocspath" ]]; then
-            echo "Warning: missing expected allocs file ($cu_allocspath) for source file: $cu_sourcepath" 1>&2
-        else
-            cat "$cu_allocspath"
-        fi
-    done
-done | pad_numbers | sort -t$'\t' -k1 -k2 | uniq > "$all_source_allocs_file"
 
 echo "all_source_allocs_file: $all_source_allocs_file" 1>&2
 echo "all_obj_allocs_file: $all_obj_allocs_file" 1>&2

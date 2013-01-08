@@ -201,6 +201,17 @@ int __is_aU(const void *obj, const struct rec *test_uniqtype)
 	unsigned offset;
 	unsigned block_element_count = 1;
 	struct rec *alloc_uniqtype = (struct rec *)0;
+
+/* HACK: pasted from heap.cpp in libpmirror */
+/* Do I want to pad to 4, 8 or (=== 4 (mod 8)) bytes? 
+ * Try 4 mod 8. */
+#define PAD_TO_NBYTES(s, n) (((s) % (n) == 0) ? (s) : ((((s) / (n)) + 1) * (n)))
+#define PAD_TO_MBYTES_MOD_N(s, n, m) (((s) % (n) <= (m)) \
+? ((((s) / (n)) * (n)) + (m)) \
+: (((((s) / (n)) + 1) * (n)) + (m)))
+#define USABLE_SIZE_FROM_OBJECT_SIZE(s) (PAD_TO_MBYTES_MOD_N( ((s) + sizeof (struct trailer)) , 8, 4))
+#define HEAPSZ_ONE(t) (USABLE_SIZE_FROM_OBJECT_SIZE(sizeof ((t))))
+
 	switch(get_object_memory_kind(obj))
 	{
 		case STACK:
@@ -242,9 +253,10 @@ int __is_aU(const void *obj, const struct rec *test_uniqtype)
 				goto abort;
 			}
 			unsigned chunk_size = malloc_usable_size(object_start);
-			block_element_count = chunk_size / alloc_uniqtype->sz;
-			__libcrunch_private_assert(chunk_size % alloc_uniqtype->sz == 0,
-				"chunk size should be multiple of element size", __FILE__, __LINE__, __func__);
+			unsigned padded_trailer_size = USABLE_SIZE_FROM_OBJECT_SIZE(0);
+			block_element_count = (chunk_size - padded_trailer_size) / alloc_uniqtype->sz;
+			//__libcrunch_private_assert(chunk_size % alloc_uniqtype->sz == 0,
+			//	"chunk size should be multiple of element size", __FILE__, __LINE__, __func__);
 			break;
 		}
 		case STATIC:
@@ -290,24 +302,26 @@ int __is_aU(const void *obj, const struct rec *test_uniqtype)
 		unsigned num_contained = cur_obj_uniqtype->len;
 		int lower_ind = 0;
 		int upper_ind = num_contained;
-		while (lower_ind < (upper_ind - 1))
+		while (lower_ind + 1 < upper_ind) // difference of >= 2
 		{
 			/* Bisect the interval */
-			int bisect_ind = (upper_ind - lower_ind) / 2;
+			int bisect_ind = (upper_ind + lower_ind) / 2;
+			__libcrunch_private_assert(bisect_ind > lower_ind, "bisection progress", 
+				__FILE__, __LINE__, __func__);
 			if (cur_obj_uniqtype->contained[bisect_ind].offset > target_offset)
 			{
 				/* Our solution lies in the lower half of the interval */
-				upper_ind = bisect_ind + 1;
+				upper_ind = bisect_ind;
 			} else lower_ind = bisect_ind;
 		}
-		if (lower_ind == (upper_ind - 1))
+		if (lower_ind + 1 == upper_ind)
 		{
 			/* We found one offset */
 			__libcrunch_private_assert(cur_obj_uniqtype->contained[lower_ind].offset <= target_offset,
 				"offset underappoximates", __FILE__, __LINE__, __func__);
 			descend_to_ind = lower_ind;
 		}
-		else /* lower_ind > upper_ind */
+		else /* lower_ind >= upper_ind */
 		{
 			// this should mean num_contained == 0
 			__libcrunch_private_assert(num_contained == 0,

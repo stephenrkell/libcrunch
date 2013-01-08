@@ -70,8 +70,8 @@ typedef std::map< pair< string, unsigned long >, uniqued_name > allocsites_relat
 // BUT note that iterators are not totally ordered, so we can't store them 
 // as keys in a set (without breaking the equality test). So we use a map
 // keyed on their full source path. 
-typedef std::map< pair<string, string>, spec::compile_unit_die::subprogram_iterator > subprograms_list_t;
-typedef std::map< pair<string, string>, spec::compile_unit_die::variable_iterator > statics_list_t;
+typedef std::map< pair<string, string>, core::iterator_sibs<core::subprogram_die> > subprograms_list_t;
+typedef std::map< pair<string, string>, core::iterator_sibs<core::variable_die> > statics_list_t;
 
 master_relation_t::key_type
 key_from_type(shared_ptr<type_die> t);
@@ -309,7 +309,7 @@ key_from_type(shared_ptr<type_die> t)
 			if (name_to_use == "") name_to_use = name_to_search_for;
 		}
 
-		assert(name_to_use != "signed char"); // ... for example. It should be "char" of course!
+		assert(name_to_use != "char"); // ... for example. It should be "signed char" of course! since cxx_compiler.cpp puts that one first
 		n = make_pair(file_to_use, name_to_use);
 	}
 	else // DW_TAG_pointer_type
@@ -584,8 +584,8 @@ int main(int argc, char **argv)
 		
 		smatch match;
 		// HACK: we allow embedded spaces to allow "unsigned int" et al
-		//const std::regex ident("[[:blank:]]*([a-zA-Z_][a-zA-Z0-9_ ]*)[[:blank:]]*", std::regex::awk);
-		const regex ident(" *([a-zA-Z0-9_]*) *", egrep);
+		const regex ident("[[:blank:]]*([a-zA-Z_][a-zA-Z0-9_ ]*)[[:blank:]]*", egrep /*std::regex::awk*/);
+		//const regex ident(" *([a-zA-Z0-9_]*) *", egrep);
 		//const boost::regex ident_ptr("[[:blank:]]*([a-zA-Z_][a-zA-Z0-9]*)(([[:blank:]]*\\*)*)[[:blank:]]*");
 		if (regex_match(nonconst_typename, match, ident))
 		{
@@ -634,16 +634,34 @@ int main(int argc, char **argv)
 	cerr << "Found " << allocsites_to_add.size() << " allocation sites across " << diesets.size()
 		<< " binaries." << endl;
 	
+	/* At this point, we have processed all the allocation sites that we know about. 
+	 * BUT we haven't processed all the data types that might be *tested* (e.g. for 
+	 * tests that are going to fail, either because the are false or because we lack
+	 * allocation info, or because stack and static are not implemented yet). So we 
+	 * need to run through the entire DIEset looking for data types. With core::, this
+	 * shouldn't take long. */
+	using core::iterator_base;
+	for (auto i_d = root_dies[objname]->begin(); i_d != iterator_base::END; ++i_d)
+	{
+		if (i_d.spec_here().tag_is_type(i_d.tag_here()))
+		{
+			/* We've found a data type. */
+		}
+	}
+	
 	// now we have all the diesets and CUs, build the subprograms list
 	//for (auto i_cu = diesets[objname]->toplevel()->compile_unit_children_begin();
 	//	 i_cu != diesets[objname]->toplevel()->compile_unit_children_end();
 	//	 ++i_cu)
-	auto cus = root_dies[objname]->begin().children();
-	for (core::iterator_sibs<core::compile_unit_die> i_cu = std::move(cus.first); 
+	auto cus = root_dies[objname]->begin().children().subseq_of<core::compile_unit_die>();
+	for (auto i_cu = std::move(cus.first); 
 	     i_cu != cus.second;
 	     ++i_cu)
 	{
-		cerr << "Found a CU at " << std::hex << i_cu.offset_here() << std::dec << endl;
+		/* First base is the non-downcasting iterator. Second is the non-filtering 
+		 * iterator, i.e. the plain iterator_sibs. */
+		auto& ii_cu = i_cu.base().base();
+		cerr << "Found a CU at " << std::hex << ii_cu.offset_here() << std::dec << endl;
 		/* Add this CU's subprograms to the subprograms list */
 		/* FIXME: fix the memory leak!
 		 * enabling/disabling the get_dynamic_location() line (way) below still has a huge
@@ -652,7 +670,6 @@ int main(int argc, char **argv)
 		/* This is no good because it doesn't construct a siblings_iterator. 
 		 * We want to take the iterator returned by children_here, and 
 		 * is_subprogram'ify it. */
-		using core::iterator_base;
 		//pair<iterator_base::is_subprogram> subps = i_cu.children_here();
 		
 		//iterator_base::only_tag_seq<DW_TAG_subprogram> 
@@ -664,11 +681,13 @@ int main(int argc, char **argv)
 		//auto subps
 		// = iterator_base::subseq< iterator_base::is_a<core::subprogram_die> >(i_cu.children_here());
 		
-		auto children = i_cu.children_here();
+		auto children = ii_cu.children_here();
 		//cerr << "First child is at 0x" << std::hex << children.first.offset_here() << std::dec << endl;
 		auto subps = children.subseq_of<core::subprogram_die>();
 		for (auto i_subp = std::move(subps.first); i_subp != subps.second; ++i_subp)
 		{
+			auto ii_subp = i_subp.base().base();
+			
 // 			cerr << "Found a subprogram at 0x" << std::hex 
 // 				<< i_subp.base().base().base().offset_here() << std::dec
 // 				<< endl;
@@ -681,22 +700,43 @@ int main(int argc, char **argv)
 			// to a search specifying a tag, which can skip subtrees (whether doing dfs or bfs)
 			// if the DIEs we're looking for cannot possibly be underneath.
 
+			// problem dereferencing transform_iterators: 
+			// seems to be something to do with shared_ptr versus intrusive_ptr.
+			// What it's doing:
+			// dereference the base()
+			// apply the functor to the result
+			// return a *reference* implicitly constructed from the functor's output
+			// 
+			// Here the base() is our selective_iterator
+			// dereferencing it yields what? should be a basic_die&
+			// SOMEHOW it is getting called with an iterator_facade. 
+			// THAT does not make sense -- we apply the functor to the dereferenced base
+			// WHAT do we get when we dereference our filter_iterator?
+			// It's a srk31::selective_iterator<Iter>
+			// We get Iter::value_type.
+			// What's Iter? It's our subseq_t's Iter. What's that? It's iterator_sibs<>.
+			// So what's iterator_sibs<>'s value_type? It's basic_die.
+			
+			// NOT an intrusive_ptr to which we want to return a reference
+			// (which would be BAD! we'd need 
+			// to make reference_type on the selective_iterator just the intrusive_ptr
+
 			// only add real, defined subprograms to the list
 			if ( 
-					( !i_subp->get_declaration() || !i_subp->get_declaration() )
+					( !i_subp->get_declaration() || !*i_subp->get_declaration() )
 			   )
 			{
 				string sourcefile_name = i_subp->get_decl_file() ? 
-					i_cu->source_file_name(i_subp->get_decl_file())
+					i_cu->source_file_name(*i_subp->get_decl_file())
 					: "(unknown source file)";
-				string comp_dir = i_cu->get_comp_dir() ? i_cu->get_comp_dir() : "";
+				string comp_dir = i_cu->get_comp_dir() ? *i_cu->get_comp_dir() : "";
 
 				string subp_name;
 				if (i_subp->get_name()) subp_name = *i_subp->get_name();
 				else 
 				{
 					std::ostringstream s;
-					s << "0x" << std::hex << i_subp.offset_here();
+					s << "0x" << std::hex << ii_subp.offset_here();
 					subp_name = s.str();
 				}
 
@@ -706,7 +746,8 @@ int main(int argc, char **argv)
 							fq_pathname(comp_dir, sourcefile_name),
 							subp_name
 						), 
-						i_subp
+						// now we want an iterator_sibs<subprogram_die> 
+						i_subp.base().base()
 					)
 				);
 				if (!ret.second)
@@ -843,6 +884,8 @@ int main(int argc, char **argv)
 			)
 		);
 	} // end for allocsite
+
+	cerr << "Master relation contains " << master_relation.size() << " data types." << endl;
 	
 	// concept checks for graph
 	boost::function_requires< 
@@ -1022,346 +1065,384 @@ void print_stacktypes_output(const subprograms_list_t& l)
 		
 // HACK while our iterator interfaces don't directly provide a depth method
 #define GET_DEPTH(i)  ((i).base().path_from_root.size()) 
-		// don't go DFS; go BFS
-		// so that we can skip nested types (which may contain methods,
-		// which may contain formal_parameters, which are *not* fps of
-		// the frame we're considering). 
-		// Note that BFS will explore siblings first, so we need to make sure
-		// we're *under* the subprogram -- use DFS for this.
-		dwarf::spec::abstract_dieset::iterator start_dfs(
-			*i_subp.base().base().base().p_ds, i_subp.base().base().base().off, i_subp.base().base().base().path_from_root
-		);
-		unsigned subp_depth = GET_DEPTH(start_dfs);
-		++start_dfs;
 		
-		using dwarf::spec::abstract_dieset;
-		struct skip_types_policy : public abstract_dieset::bfs_policy
-		{
-			int increment(dwarf::spec::abstract_dieset::iterator_base& base)
-			{
-				if (dynamic_pointer_cast<spec::type_die>(base.p_d))
-				{
-					return increment_skipping_subtree(base);
-				} else return this->bfs_policy::increment(base);
-			}
-		} policy;
-		// get a *dfs* iterator -- HACK
-		abstract_dieset::iterator start_bfs(
-			abstract_dieset::position_and_path(
-				(abstract_dieset::position) {
-					start_dfs.base().p_ds, 
-					start_dfs.base().off
-				},
-				start_dfs.base().path_from_root),
-			/* p_d */ shared_ptr<dwarf::spec::basic_die>(),
-			policy
-		);
-		for (auto i_bfs = start_bfs; 
-			i_bfs != start_dfs.base().p_ds->end()
-			  && (i_bfs == start_bfs || GET_DEPTH(i_bfs) > subp_depth); 
-			++i_bfs)
-		{
-			// skip if not a with_dynamic_location_die
-			shared_ptr<with_dynamic_location_die> p_dyn
-			 = dynamic_pointer_cast<with_dynamic_location_die>(*i_bfs);
-			if (!p_dyn) continue;
+		/* Earlier, we stored core:: iterators in the subprograms_map. 
+		 * Now, we need spec:: ADT methods which I haven't yet ported
+		 * to core::. So, we need to construct an ADT iterator.
+		 * OR port to the new API. */
+		core::iterator_df<> start_df(i_subp);
 		
-			/* Exploit "clever" (hopefully) aggregation semantics of 
-			 * interval maps.
-			 * http://www.boost.org/doc/libs/1_51_0/libs/icl/doc/html/index.html
-			 */
-			
-			// enumerate the vaddr ranges of this DIE
-			// -- note that some DIEs will be "for all vaddrs"
-			// -- noting also that static variables need handling!
-			//    ... i.e. they need to be handled in the *static* handler!
-			auto p_as_var = dynamic_pointer_cast<spec::variable_die>(p_dyn);
-			if (p_as_var && p_as_var->has_static_storage()) continue;
-			
-			auto var_vaddr_intervals = p_dyn->get_dynamic_location();
-			
-			// for each, add it to the map
-			for (auto i_int = var_vaddr_intervals.begin(); 
-				i_int != var_vaddr_intervals.end(); ++i_int)
-			{
-				std::set<shared_ptr<with_dynamic_location_die> > singleton_set;
-				singleton_set.insert(p_dyn);
-				
-				if (i_int->lopc == 0xffffffffffffffffULL
-				|| i_int->lopc == 0xffffffffUL)
-				{
-					// we got a base address selection entry
-					assert(false);
-				}
-				
-				if (i_int->lopc == i_int->hipc && i_int->hipc != 0) continue; // skip empties
-				if (i_int->hipc <  i_int->lopc)
-				{
-					cerr << "Warning: lopc (0x" << std::hex << i_int->lopc << std::dec
-						<< ") > hipc (0x" << std::hex << i_int->hipc << std::dec << ")"
-						<< " in " << *p_dyn << endl;
-					continue;
-				}
-				
-				auto opt_cu_base = (*i_subp)->enclosing_compile_unit()->get_low_pc();
-				Dwarf_Unsigned cu_base = opt_cu_base->addr;
-				
-				// handle "for all vaddrs" entries
-				boost::icl::discrete_interval<Dwarf_Off> our_interval;
-				if (i_int->lopc == 0 && 0 == i_int->hipc
-					|| i_int->lopc == 0 && i_int->hipc == std::numeric_limits<Dwarf_Off>::max())
-				{
-					/* we will just add the intervals of the containing subprogram */
-					auto subp_intervals = (*i_subp)->file_relative_intervals(0, 0);
-					for (auto i_subp_int = subp_intervals.begin();
-						i_subp_int != subp_intervals.end(); 
-						++i_subp_int)
-					{
-						our_interval = boost::icl::interval<Dwarf_Off>::right_open(
-							i_subp_int->first.lower() + cu_base,
-							i_subp_int->first.upper() + cu_base
-						);
-						
-						cerr << "Borrowing vaddr ranges of " << **i_subp
-							<< " for dynamic-location " << *p_dyn;
-						
-						/* assert sane interval */
-						assert(our_interval.lower() < our_interval.upper());
-						/* assert sane size -- no bigger than biggest sane function */
-						assert(our_interval.upper() - our_interval.lower() < 1024*1024);
-						subp_vaddr_intervals += make_pair(
-							our_interval,
-							singleton_set
-						); 
-					}
-					/* There should be only one entry in the location list if so. */
-					assert(i_int == var_vaddr_intervals.begin());
-					assert(i_int + 1 == var_vaddr_intervals.end());
-				}
-				else /* we have nonzero lopc and/or hipc */
-				{
-					our_interval = boost::icl::interval<Dwarf_Off>::right_open(
-						i_int->lopc + cu_base, i_int->hipc + cu_base
-					); 
-					
-					cerr << "Considering location of " << *p_dyn << endl;
-					
-					/* assert sane interval */
-					assert(our_interval.lower() < our_interval.upper());
-					/* assert sane size -- no bigger than biggest sane function */
-					assert(our_interval.upper() - our_interval.lower() < 1024*1024);
-					subp_vaddr_intervals += make_pair(
-						our_interval,
-						singleton_set
-					); 
-				}
-				
-			}
-			
-			/* We note that the map is supposed to map file-relative addrs
-			 * (FIXME: vaddr is CU- or file-relative? or "applicable base address" blah?) 
-			 * to the set of variable/fp DIEs that are 
-			 * in the current (top) stack frame when the program counter is at that vaddr. */
-		} /* end bfs */
-#undef GET_DEPTH
-
-		/* Now we write a *series* of object layouts for this subprogram, 
-		 * discriminated by a set of (disjoint) vaddr ranges. */
+// 		dwarf::spec::abstract_dieset::iterator start_dfs(
+// 			*i_subp.base().p_ds, i_subp.base().off, i_subp.base().path_from_root
+// 		);
 		
-		/* Our naive earlier algorithm had the problem that, once register-based 
-		 * locals are discarded, the frame layout is often unchanged from one vaddr range
-		 * to the next. But we were outputting a new uniqtype anyway, creating 
-		 * huge unnecessary bloat. So instead, we do a pre-pass where we remember
-		 * only the stack-located elements, and store them in a new interval map, 
-		 * by offset from frame base. 
-		 *
-		 * Also, we want to report discarded fps/locals once per subprogram, as 
-		 * completely discarded or partially discarded. How to do this? 
-		 * Keep an interval map of discarded items.
-		 * When finished, walk it and build another map keyed by 
-		  */
-		boost::icl::interval_map< 
-			Dwarf_Off, 
-			std::set< 
-				pair<
-					Dwarf_Signed, 
-					shared_ptr<with_dynamic_location_die> 
-				> 
-			>
-		> frame_intervals;
-		boost::icl::interval_map< 
-			Dwarf_Off, 
-			std::set< 
-				pair<
-					shared_ptr<with_dynamic_location_die>,
-					string
-				>
-			>
-		> discarded_intervals;
-		 
-		for (auto i_int = subp_vaddr_intervals.begin(); 
-			i_int != subp_vaddr_intervals.end(); ++i_int)
-		{
-			/* Get the set of p_dyns for this vaddr range. */
-			auto& frame_elements = i_int->second;
-			
-			/* Calculate their offset from the frame base, and sort. */
-			//std::map<Dwarf_Signed, shared_ptr<with_dynamic_location_die > > by_frame_off;
-			//std::vector<pair<shared_ptr<with_dynamic_location_die >, string> > discarded;
-			for (auto i_el = frame_elements.begin(); i_el != frame_elements.end(); ++i_el)
-			{
-				/* NOTE: our offset can easily be negative! For parameters, it 
-				 * usually is. So we calculate the offset from the middle of the 
-				 * (imaginary) address space, a.k.a. 1U<<((sizeof(Dwarf_Addr)*8)-1). 
-				 * In a signed two's complement representation, 
-				 * this number is -MAX. 
-				 * NO -- just reinterpret_cast to a signed? */ 
-				Dwarf_Addr addr_from_zero;
-				try
-				{
-					addr_from_zero = (*i_el)->calculate_addr(
-						/* fb */ 0, //1U<<((sizeof(Dwarf_Addr)*8)-1), 
-						/* dr_ip */ i_int->first.lower(), 
-						/* dwarf::lib::regs *p_regs = */ 0);
-				} catch (dwarf::lib::No_entry)
-				{
-					/* This probably means our variable/fp is in a register and not 
-					 * in a stack location. That's fine. Warn and continue. */
-					cerr << "Warning: we think this is a register-located local/fp or pass-by-reference fp: " 
-						<< **i_el;
-					//discarded.push_back(make_pair(*i_el, "register-located"));
-					set< pair< shared_ptr< with_dynamic_location_die >, string> > singleton_set;
-					singleton_set.insert(make_pair(*i_el, string("register-located")));
-					discarded_intervals += make_pair(i_int->first, singleton_set);
-					continue;
-				}
-				
-				Dwarf_Signed frame_offset = static_cast<Dwarf_Signed>(addr_from_zero);
-					
-				/* Redundant calculation to guard against arithmetic errors 
-				 * TODO: remove this once we have confidence. */
-				Dwarf_Addr addr_from_beef = (*i_el)->calculate_addr(
-					/* fb */ 0xbeef,
-					/* dr_ip */ i_int->first.lower(), 
-					/* dwarf::lib::regs *p_regs = */ 0);
-				
-				/* Some fb-independent addrs might have slipped though. */
-				if (frame_offset == addr_from_beef)
-				{
-					cerr << "Warning: found fb-independent " << **i_el
-						<< " which we thought had non-static storage." << endl;
-					//discarded.push_back(make_pair(*i_el, "fb-independent storage location"));
-					set< pair< shared_ptr< with_dynamic_location_die >, string> > singleton_set;
-					singleton_set.insert(make_pair(*i_el, string("fb-independent storage location")));
-					discarded_intervals += make_pair(i_int->first, singleton_set);
-					continue;
-				}
-				assert(frame_offset + 0xbeef == addr_from_beef);
-				
-				/* We only add to by_frame_off if we have complete type => nonzero length. */
-				if ((*i_el)->get_type() && (*i_el)->get_type()->get_concrete_type())
-				{
-					//by_frame_off[frame_offset] = *i_el;
-					set< pair<Dwarf_Signed, shared_ptr<with_dynamic_location_die> > > singleton_set;
-					singleton_set.insert(make_pair(frame_offset, *i_el));
-					frame_intervals += make_pair(i_int->first, singleton_set);
-				} 
-				else
-				{ 
-					set< pair< shared_ptr< with_dynamic_location_die >, string> > singleton_set;
-					singleton_set.insert(make_pair(*i_el, string("no_concrete_type")));
-					discarded_intervals += make_pair(i_int->first, singleton_set);
-					//discarded.push_back(make_pair(*i_el, "no concrete type"));
-				}
-			}
-		} /* end for i_int */
+//		unsigned subp_depth = GET_DEPTH(start_dfs);
+		unsigned initial_depth = start_df.depth();
+//		++start_dfs; // now we point to the first child, or somewhere else if no children
+		++start_df;
 		
-		/* Now for each distinct interval in the frame_intervals map... */
-		for (auto i_frame_int = frame_intervals.begin(); i_frame_int != frame_intervals.end();
-			++i_frame_int)
-		{
-			unsigned frame_size;
-			//if (by_frame_off.begin() == by_frame_off.end()) frame_size = 0;
-			if (i_frame_int->second.size() == 0) frame_size = 0;
-			else
-			{
-				// FIXME: this frame size is "wrong" because it doesn't account for 
-				// the negative-offset portion of the frame. 
-				//auto i_last_el = by_frame_off.end(); --i_last_el;
-				
-				auto i_last_el = i_frame_int->second.end(); --i_last_el;
-				
-				auto p_type = i_last_el->second->get_type();
-				unsigned calculated_size;
-				if (!p_type || !p_type->get_concrete_type() || !p_type->calculate_byte_size())
-				{
-					cerr << "Warning: found local/fp with no type or size (assuming zero length): " 
-						<< *i_last_el->second;
-					calculated_size = 0;
-				}
-				else calculated_size = *p_type->calculate_byte_size();
-				signed frame_max_offset = i_last_el->first + calculated_size;
-				frame_size = (frame_max_offset < 0) ? 0 : frame_max_offset;
-			}
-			
-			/* Output in offset order, CHECKing that there is no overlap (sanity). */
-			cout << "\n/* uniqtype for stack frame ";
-			std::ostringstream s_typename;
-			if ((*i_subp)->get_name()) s_typename << *(*i_subp)->get_name();
-			else s_typename << "0x" << std::hex << (*i_subp)->get_offset() << std::dec;
-			
-			s_typename << "_vaddrs_0x" << std::hex << i_frame_int->first.lower() << "_0x" 
-				<< i_frame_int->first.upper() << std::dec;
-			
-			string cu_name = *(*i_subp)->enclosing_compile_unit()->get_name();
-			
-			cout << s_typename.str() 
-				 << " defined in " << cu_name << ", "
-				 << "vaddr range " << i_frame_int->first << " */\n";
-				 
-			cout << "struct rec " << mangle_typename(make_pair(cu_name, s_typename.str()))
-				<< " = {\n\t\"" << s_typename.str() << "\",\n\t"
-				<< frame_size << " /* sz */,\n\t"
-				<< i_frame_int->second.size() << " /* len */,\n\t"
-				<< /* contained[0] */ "/* contained */ {\n\t\t";
-			for (auto i_by_off = i_frame_int->second.begin(); i_by_off != i_frame_int->second.end(); ++i_by_off)
-			{
-				if (i_by_off != i_frame_int->second.begin()) cout << ",\n\t\t";
-				/* begin the struct */
-				cout << "{ ";
-				cout << i_by_off->first << ", "
-					<< "&" << mangle_typename(key_from_type(i_by_off->second->get_type()))
-					<< "}";
-				cout << " /* ";
-				if (i_by_off->second->get_name())
-				{
-					cout << *i_by_off->second->get_name();
-				}
-				else cout << "(anonymous)"; 
-				cout << " -- " << i_by_off->second->get_spec().tag_lookup(
-						i_by_off->second->get_tag())
-					<< " @" << std::hex << i_by_off->second->get_offset() << std::dec;
-				cout << " */ ";
-			}
-			cout << "\n\t}";
-			cout << "\n};\n";
-		}
-		/* Now print a summary of what was discarded. */
-// 		for (auto i_discarded = discarded.begin(); i_discarded != discarded.end(); 
-// 			++i_discarded)
+// 		using dwarf::spec::abstract_dieset;
+// 		// don't go DFS; go BFS
+// 		// so that we can skip nested types (which may contain methods,
+// 		// which may contain formal_parameters, which are *not* fps of
+// 		// the frame we're considering). 
+// 		// Note that BFS will explore siblings first, so we need to make sure
+// 		// we're *under* the subprogram -- use DFS for this.
+// 		struct skip_types_policy : public abstract_dieset::bfs_policy
 // 		{
-// 			cout << "\n\t/* discarded: ";
-// 			if (i_discarded->first->get_name())
+// 			int increment(dwarf::spec::abstract_dieset::iterator_base& base)
 // 			{
-// 				cout << *i_discarded->first->get_name();
+// 				if (dynamic_pointer_cast<spec::type_die>(base.p_d))
+// 				{
+// 					return increment_skipping_subtree(base);
+// 				} else return this->bfs_policy::increment(base);
 // 			}
-// 			else cout << "(anonymous)"; 
-// 			cout << " -- " << i_discarded->first->get_spec().tag_lookup(
-// 					i_discarded->first->get_tag())
-// 				<< " @" << std::hex << i_discarded->first->get_offset() << std::dec;
-// 			cout << "; reason: " << i_discarded->second;
-// 			cout << " */ ";
+// 		} policy;
+		
+		struct iterator_bf_skipping_types : public core::iterator_bf<>
+		{
+			void increment()
+			{
+				if (spec_here().tag_is_type(tag_here()))
+				{
+					increment_skipping_subtree();
+				} else increment();
+			}			
+			// constructors: forward from 
+			//using core::iterator:bf::iterator:bf;
+			//template<typename... Args>
+			// Can't have member template in local class
+			//iterator_bf_skipping_types(Args&&... args)
+			//: core::iterator_bf(std::forward<Args>(args)...) {}
+			
+			// for now, just declare the one we need!
+			typedef core::iterator_bf<> base;
+			iterator_bf_skipping_types(iterator_base& i) : base(i) {}
+		} start_bf(start_df);
+		
+// 		// get a *dfs* iterator -- HACK
+// 		abstract_dieset::iterator start_bfs(
+// 			abstract_dieset::position_and_path(
+// 				(abstract_dieset::position) {
+// 					start_dfs.base().p_ds, 
+// 					start_dfs.base().off
+// 				},
+// 				start_dfs.base().path_from_root),
+// 			/* p_d */ shared_ptr<dwarf::spec::basic_die>(),
+// 			policy
+// 		);
+
+// 		for (auto i_bfs = start_bfs; 
+// 			i_bfs != start_dfs.base().p_ds->end()
+// 			  && (i_bfs == start_bfs || GET_DEPTH(i_bfs) > subp_depth); 
+// 			++i_bfs)
+		for (auto i_bf = start_bf;
+			i_bf != core::iterator_base::END
+			&& (i_bf == start_bf || i_bf.depth() > initial_depth); 
+			++i_bf)
+		{
+		
+// 			// skip if not a with_dynamic_location_die
+// 			shared_ptr<with_dynamic_location_die> p_dyn
+// 			 = dynamic_pointer_cast<with_dynamic_location_die>(*i_bfs);
+// 			if (!p_dyn) continue;
+// 		
+// 			/* Exploit "clever" (hopefully) aggregation semantics of 
+// 			 * interval maps.
+// 			 * http://www.boost.org/doc/libs/1_51_0/libs/icl/doc/html/index.html
+// 			 */
+// 			
+// 			// enumerate the vaddr ranges of this DIE
+// 			// -- note that some DIEs will be "for all vaddrs"
+// 			// -- noting also that static variables need handling!
+// 			//    ... i.e. they need to be handled in the *static* handler!
+// 			auto p_as_var = dynamic_pointer_cast<spec::variable_die>(p_dyn);
+// 			if (p_as_var && p_as_var->has_static_storage()) continue;
+// 			
+// 			auto var_vaddr_intervals = p_dyn->get_dynamic_location();
+// 			
+// 			// for each, add it to the map
+// 			for (auto i_int = var_vaddr_intervals.begin(); 
+// 				i_int != var_vaddr_intervals.end(); ++i_int)
+// 			{
+// 				std::set<shared_ptr<with_dynamic_location_die> > singleton_set;
+// 				singleton_set.insert(p_dyn);
+// 				
+// 				if (i_int->lopc == 0xffffffffffffffffULL
+// 				|| i_int->lopc == 0xffffffffUL)
+// 				{
+// 					// we got a base address selection entry
+// 					assert(false);
+// 				}
+// 				
+// 				if (i_int->lopc == i_int->hipc && i_int->hipc != 0) continue; // skip empties
+// 				if (i_int->hipc <  i_int->lopc)
+// 				{
+// 					cerr << "Warning: lopc (0x" << std::hex << i_int->lopc << std::dec
+// 						<< ") > hipc (0x" << std::hex << i_int->hipc << std::dec << ")"
+// 						<< " in " << *p_dyn << endl;
+// 					continue;
+// 				}
+// 				
+// 				auto opt_cu_base = (*i_subp)->enclosing_compile_unit()->get_low_pc();
+// 				Dwarf_Unsigned cu_base = opt_cu_base->addr;
+// 				
+// 				// handle "for all vaddrs" entries
+// 				boost::icl::discrete_interval<Dwarf_Off> our_interval;
+// 				if (i_int->lopc == 0 && 0 == i_int->hipc
+// 					|| i_int->lopc == 0 && i_int->hipc == std::numeric_limits<Dwarf_Off>::max())
+// 				{
+// 					/* we will just add the intervals of the containing subprogram */
+// 					auto subp_intervals = (*i_subp)->file_relative_intervals(0, 0);
+// 					for (auto i_subp_int = subp_intervals.begin();
+// 						i_subp_int != subp_intervals.end(); 
+// 						++i_subp_int)
+// 					{
+// 						our_interval = boost::icl::interval<Dwarf_Off>::right_open(
+// 							i_subp_int->first.lower() + cu_base,
+// 							i_subp_int->first.upper() + cu_base
+// 						);
+// 						
+// 						cerr << "Borrowing vaddr ranges of " << **i_subp
+// 							<< " for dynamic-location " << *p_dyn;
+// 						
+// 						/* assert sane interval */
+// 						assert(our_interval.lower() < our_interval.upper());
+// 						/* assert sane size -- no bigger than biggest sane function */
+// 						assert(our_interval.upper() - our_interval.lower() < 1024*1024);
+// 						subp_vaddr_intervals += make_pair(
+// 							our_interval,
+// 							singleton_set
+// 						); 
+// 					}
+// 					/* There should be only one entry in the location list if so. */
+// 					assert(i_int == var_vaddr_intervals.begin());
+// 					assert(i_int + 1 == var_vaddr_intervals.end());
+// 				}
+// 				else /* we have nonzero lopc and/or hipc */
+// 				{
+// 					our_interval = boost::icl::interval<Dwarf_Off>::right_open(
+// 						i_int->lopc + cu_base, i_int->hipc + cu_base
+// 					); 
+// 					
+// 					cerr << "Considering location of " << *p_dyn << endl;
+// 					
+// 					/* assert sane interval */
+// 					assert(our_interval.lower() < our_interval.upper());
+// 					/* assert sane size -- no bigger than biggest sane function */
+// 					assert(our_interval.upper() - our_interval.lower() < 1024*1024);
+// 					subp_vaddr_intervals += make_pair(
+// 						our_interval,
+// 						singleton_set
+// 					); 
+// 				}
+// 				
+// 			}
+// 			
+// 			/* We note that the map is supposed to map file-relative addrs
+// 			 * (FIXME: vaddr is CU- or file-relative? or "applicable base address" blah?) 
+// 			 * to the set of variable/fp DIEs that are 
+// 			 * in the current (top) stack frame when the program counter is at that vaddr. */
+		} /* end bfs */
+// #undef GET_DEPTH
+// 
+// 		/* Now we write a *series* of object layouts for this subprogram, 
+// 		 * discriminated by a set of (disjoint) vaddr ranges. */
+// 		
+// 		/* Our naive earlier algorithm had the problem that, once register-based 
+// 		 * locals are discarded, the frame layout is often unchanged from one vaddr range
+// 		 * to the next. But we were outputting a new uniqtype anyway, creating 
+// 		 * huge unnecessary bloat. So instead, we do a pre-pass where we remember
+// 		 * only the stack-located elements, and store them in a new interval map, 
+// 		 * by offset from frame base. 
+// 		 *
+// 		 * Also, we want to report discarded fps/locals once per subprogram, as 
+// 		 * completely discarded or partially discarded. How to do this? 
+// 		 * Keep an interval map of discarded items.
+// 		 * When finished, walk it and build another map keyed by 
+// 		  */
+// 		boost::icl::interval_map< 
+// 			Dwarf_Off, 
+// 			std::set< 
+// 				pair<
+// 					Dwarf_Signed, 
+// 					shared_ptr<with_dynamic_location_die> 
+// 				> 
+// 			>
+// 		> frame_intervals;
+// 		boost::icl::interval_map< 
+// 			Dwarf_Off, 
+// 			std::set< 
+// 				pair<
+// 					shared_ptr<with_dynamic_location_die>,
+// 					string
+// 				>
+// 			>
+// 		> discarded_intervals;
+// 		 
+// 		for (auto i_int = subp_vaddr_intervals.begin(); 
+// 			i_int != subp_vaddr_intervals.end(); ++i_int)
+// 		{
+// 			/* Get the set of p_dyns for this vaddr range. */
+// 			auto& frame_elements = i_int->second;
+// 			
+// 			/* Calculate their offset from the frame base, and sort. */
+// 			//std::map<Dwarf_Signed, shared_ptr<with_dynamic_location_die > > by_frame_off;
+// 			//std::vector<pair<shared_ptr<with_dynamic_location_die >, string> > discarded;
+// 			for (auto i_el = frame_elements.begin(); i_el != frame_elements.end(); ++i_el)
+// 			{
+// 				/* NOTE: our offset can easily be negative! For parameters, it 
+// 				 * usually is. So we calculate the offset from the middle of the 
+// 				 * (imaginary) address space, a.k.a. 1U<<((sizeof(Dwarf_Addr)*8)-1). 
+// 				 * In a signed two's complement representation, 
+// 				 * this number is -MAX. 
+// 				 * NO -- just reinterpret_cast to a signed? */ 
+// 				Dwarf_Addr addr_from_zero;
+// 				try
+// 				{
+// 					addr_from_zero = (*i_el)->calculate_addr(
+// 						/* fb */ 0, //1U<<((sizeof(Dwarf_Addr)*8)-1), 
+// 						/* dr_ip */ i_int->first.lower(), 
+// 						/* dwarf::lib::regs *p_regs = */ 0);
+// 				} catch (dwarf::lib::No_entry)
+// 				{
+// 					/* This probably means our variable/fp is in a register and not 
+// 					 * in a stack location. That's fine. Warn and continue. */
+// 					cerr << "Warning: we think this is a register-located local/fp or pass-by-reference fp: " 
+// 						<< **i_el;
+// 					//discarded.push_back(make_pair(*i_el, "register-located"));
+// 					set< pair< shared_ptr< with_dynamic_location_die >, string> > singleton_set;
+// 					singleton_set.insert(make_pair(*i_el, string("register-located")));
+// 					discarded_intervals += make_pair(i_int->first, singleton_set);
+// 					continue;
+// 				}
+// 				
+// 				Dwarf_Signed frame_offset = static_cast<Dwarf_Signed>(addr_from_zero);
+// 					
+// 				/* Redundant calculation to guard against arithmetic errors 
+// 				 * TODO: remove this once we have confidence. */
+// 				Dwarf_Addr addr_from_beef = (*i_el)->calculate_addr(
+// 					/* fb */ 0xbeef,
+// 					/* dr_ip */ i_int->first.lower(), 
+// 					/* dwarf::lib::regs *p_regs = */ 0);
+// 				
+// 				/* Some fb-independent addrs might have slipped though. */
+// 				if (frame_offset == addr_from_beef)
+// 				{
+// 					cerr << "Warning: found fb-independent " << **i_el
+// 						<< " which we thought had non-static storage." << endl;
+// 					//discarded.push_back(make_pair(*i_el, "fb-independent storage location"));
+// 					set< pair< shared_ptr< with_dynamic_location_die >, string> > singleton_set;
+// 					singleton_set.insert(make_pair(*i_el, string("fb-independent storage location")));
+// 					discarded_intervals += make_pair(i_int->first, singleton_set);
+// 					continue;
+// 				}
+// 				assert(frame_offset + 0xbeef == addr_from_beef);
+// 				
+// 				/* We only add to by_frame_off if we have complete type => nonzero length. */
+// 				if ((*i_el)->get_type() && (*i_el)->get_type()->get_concrete_type())
+// 				{
+// 					//by_frame_off[frame_offset] = *i_el;
+// 					set< pair<Dwarf_Signed, shared_ptr<with_dynamic_location_die> > > singleton_set;
+// 					singleton_set.insert(make_pair(frame_offset, *i_el));
+// 					frame_intervals += make_pair(i_int->first, singleton_set);
+// 				} 
+// 				else
+// 				{ 
+// 					set< pair< shared_ptr< with_dynamic_location_die >, string> > singleton_set;
+// 					singleton_set.insert(make_pair(*i_el, string("no_concrete_type")));
+// 					discarded_intervals += make_pair(i_int->first, singleton_set);
+// 					//discarded.push_back(make_pair(*i_el, "no concrete type"));
+// 				}
+// 			}
+// 		} /* end for i_int */
+// 		
+// 		/* Now for each distinct interval in the frame_intervals map... */
+// 		for (auto i_frame_int = frame_intervals.begin(); i_frame_int != frame_intervals.end();
+// 			++i_frame_int)
+// 		{
+// 			unsigned frame_size;
+// 			//if (by_frame_off.begin() == by_frame_off.end()) frame_size = 0;
+// 			if (i_frame_int->second.size() == 0) frame_size = 0;
+// 			else
+// 			{
+// 				// FIXME: this frame size is "wrong" because it doesn't account for 
+// 				// the negative-offset portion of the frame. 
+// 				//auto i_last_el = by_frame_off.end(); --i_last_el;
+// 				
+// 				auto i_last_el = i_frame_int->second.end(); --i_last_el;
+// 				
+// 				auto p_type = i_last_el->second->get_type();
+// 				unsigned calculated_size;
+// 				if (!p_type || !p_type->get_concrete_type() || !p_type->calculate_byte_size())
+// 				{
+// 					cerr << "Warning: found local/fp with no type or size (assuming zero length): " 
+// 						<< *i_last_el->second;
+// 					calculated_size = 0;
+// 				}
+// 				else calculated_size = *p_type->calculate_byte_size();
+// 				signed frame_max_offset = i_last_el->first + calculated_size;
+// 				frame_size = (frame_max_offset < 0) ? 0 : frame_max_offset;
+// 			}
+// 			
+// 			/* Output in offset order, CHECKing that there is no overlap (sanity). */
+// 			cout << "\n/* uniqtype for stack frame ";
+// 			std::ostringstream s_typename;
+// 			if ((*i_subp)->get_name()) s_typename << *(*i_subp)->get_name();
+// 			else s_typename << "0x" << std::hex << (*i_subp)->get_offset() << std::dec;
+// 			
+// 			s_typename << "_vaddrs_0x" << std::hex << i_frame_int->first.lower() << "_0x" 
+// 				<< i_frame_int->first.upper() << std::dec;
+// 			
+// 			string cu_name = *(*i_subp)->enclosing_compile_unit()->get_name();
+// 			
+// 			cout << s_typename.str() 
+// 				 << " defined in " << cu_name << ", "
+// 				 << "vaddr range " << i_frame_int->first << " */\n";
+// 				 
+// 			cout << "struct rec " << mangle_typename(make_pair(cu_name, s_typename.str()))
+// 				<< " = {\n\t\"" << s_typename.str() << "\",\n\t"
+// 				<< frame_size << " /* sz */,\n\t"
+// 				<< i_frame_int->second.size() << " /* len */,\n\t"
+// 				<< /* contained[0] */ "/* contained */ {\n\t\t";
+// 			for (auto i_by_off = i_frame_int->second.begin(); i_by_off != i_frame_int->second.end(); ++i_by_off)
+// 			{
+// 				if (i_by_off != i_frame_int->second.begin()) cout << ",\n\t\t";
+// 				/* begin the struct */
+// 				cout << "{ ";
+// 				cout << i_by_off->first << ", "
+// 					<< "&" << mangle_typename(key_from_type(i_by_off->second->get_type()))
+// 					<< "}";
+// 				cout << " /* ";
+// 				if (i_by_off->second->get_name())
+// 				{
+// 					cout << *i_by_off->second->get_name();
+// 				}
+// 				else cout << "(anonymous)"; 
+// 				cout << " -- " << i_by_off->second->get_spec().tag_lookup(
+// 						i_by_off->second->get_tag())
+// 					<< " @" << std::hex << i_by_off->second->get_offset() << std::dec;
+// 				cout << " */ ";
+// 			}
+// 			cout << "\n\t}";
+// 			cout << "\n};\n";
 // 		}
+// 		/* Now print a summary of what was discarded. */
+// // 		for (auto i_discarded = discarded.begin(); i_discarded != discarded.end(); 
+// // 			++i_discarded)
+// // 		{
+// // 			cout << "\n\t/* discarded: ";
+// // 			if (i_discarded->first->get_name())
+// // 			{
+// // 				cout << *i_discarded->first->get_name();
+// // 			}
+// // 			else cout << "(anonymous)"; 
+// // 			cout << " -- " << i_discarded->first->get_spec().tag_lookup(
+// // 					i_discarded->first->get_tag())
+// // 				<< " @" << std::hex << i_discarded->first->get_offset() << std::dec;
+// // 			cout << "; reason: " << i_discarded->second;
+// // 			cout << " */ ";
+// // 		}
 	}
 }
 

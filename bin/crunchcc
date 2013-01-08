@@ -67,9 +67,14 @@ def main():
                 fnSig = m.groups()[1]
                 linkArgs += ["-Wl,--wrap"]
                 linkArgs += ["-Wl," + fnName]
+                linkArgs += ["-Wl,--export-dynamic"]
             # if we're building an executable, append the magic objects
             if not "-c" in sys.argv and not "-shared" in sys.argv:
                 linkArgs += [os.path.dirname(sys.argv[0]) + "/../lib/stubs.o"]
+                # HACK: fix this once I sort out linking
+                linkArgs += ["-L" + os.path.dirname(sys.argv[0]) + "/../lib"]
+                linkArgs += ["-Wl,-R" + os.path.dirname(sys.argv[0]) + "/../lib"]
+                linkArgs += ["-lcrunch","-ldl"]
             # else we leave the shared library with 
             # dangling dependencies on __wrap_
             # and unused __real_
@@ -79,6 +84,7 @@ def main():
     + linkArgs \
     + sys.argv[1:]
     sys.stderr.write("about to run cilly with args: " + " ".join(argsToExec) + "\n")
+    sys.stderr.write("sys.argv[1:] is: " + " ".join(sys.argv[1:]) + "\n")
     
     os.execvp("cilly", ["cilly"] + argsToExec)
     return 1
