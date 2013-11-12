@@ -79,13 +79,17 @@ key_from_type(shared_ptr<type_die> t);
 /* To make sure argument-dependent lookup works properly for our 
  * vertex and edge descriptors, we define these as distinct data
  * types in the same namespace as our graph. */
+typedef pair< pair<string, string> , master_relation_t::mapped_type> vertex_descriptor_raw_t;
 struct vertex_descriptor_t 
-: public pair< pair<string, string> , master_relation_t::mapped_type>
+: public vertex_descriptor_raw_t
+  // i.e. master_relation_t::value_type without the const K
 {
 	//using pair::pair;
 	template<typename... Args>
-	vertex_descriptor_t(Args&&... args): pair(std::forward<Args>(args)...) {}
+	vertex_descriptor_t(Args&&... args): vertex_descriptor_raw_t(std::forward<Args>(args)...) {}
 };
+
+static const vertex_descriptor_raw_t null_vertex(make_pair("", ""), shared_ptr<spec::type_die>());
 
 struct edge_descriptor_t
 : public shared_ptr<dwarf::spec::member_die>
@@ -99,15 +103,18 @@ namespace boost
 	// specialise the boost graph_traits class for encap::dieset
 	template <>
 	struct graph_traits<master_relation_t> {
-		//typedef master_relation_t::value_type vertex_descriptor;
-		/* We need to be able to assign to vertex descriptors -- not because the
-		 * algorithms will attempt to update entries in the underlying map, but because
-		 * they will instantiate vertex descriptors in other structures, e.g. the
-		 * topsorted container. */
 		typedef ::vertex_descriptor_t vertex_descriptor;
-		//typedef pair< pair<string, string> , master_relation_t::mapped_type>
-		    /*nonconst_*///vertex_descriptor;
 		typedef vertex_descriptor nonconst_vertex_descriptor;
+		
+		/* null_vertex() must return a thing exactly of the type 
+		 * *vertex_iterator will return. Since we use a map
+		 * iterator for that, we use the map value type here. 
+		 * ::null_vertex will get usual-conversion'd to remove its 
+		 * constness. */
+		typedef master_relation_t::value_type null_vertex_t;
+		static null_vertex_t null_vertex() {
+			return ::null_vertex;
+		}
 
 		typedef ::edge_descriptor_t edge_descriptor;
 		//typedef std::shared_ptr<dwarf::spec::member_die> edge_descriptor;

@@ -1,6 +1,7 @@
 DEPS := 
 
 CXXFLAGS += -std=c++0x -g -O0
+CXXFLAGS += -Wno-deprecated-declarations # while we're using old libdwarfpp -- FIXME
 LDLIBS += -ldwarfpp -ldwarf -lboost_regex -lboost_filesystem -lboost_system -lboost_serialization -lc++fileno -lsrk31c++ -lelf
 
 CPP_SRC := uniqtypes.cpp
