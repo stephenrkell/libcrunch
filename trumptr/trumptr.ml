@@ -325,17 +325,14 @@ class trumPtrFunVisitor = fun fl -> object
                             None, (* will be filled later using setFunctionTypeMakeFormals*)
                             false, [Attr("weak", [])]);
     checkFunDec*)
-  val assertFailFun = (* should use findOrCreateFunc here *)
-    let assertFailFunDec = emptyFunction "__assert_fail" in
-    assertFailFunDec.svar.vtype <- TFun(voidType, 
+  val assertFailFun = findOrCreateFunc fl "__assert_fail" (TFun(voidType, 
                             Some [ 
                             ("assertion", charConstPtrType, []);
                             ("file", charConstPtrType, []);
                             ("line", uintType, []);
                             ("function", charConstPtrType, [])
                              ], 
-                            false, []);
-    assertFailFunDec
+                            false, []))
   initializer
     let arg0 = makeFormalVar assertFun "cond" intType in
     let arg1 = makeFormalVar assertFun "assertion" charConstPtrType in
@@ -349,7 +346,7 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("line", uintType, []);
                                    ("function", charConstPtrType, [])
                                     ], 
-                            false, []));
+                            false, [Attr("always_inline", []); Attr("__gnu_inline__", [])]));
     (* setFunctionTypeMakeFormals checkFun  (TFun(intType, 
                             Some [ ("obj", voidPtrType, []);
                                    ("typestr", charConstPtrType, []) ], 
@@ -363,7 +360,7 @@ class trumPtrFunVisitor = fun fl -> object
            ("file", Fv arg2 );
            ("line", Fv arg3 );
            ("function", Fv arg4 );
-           ("__assert_fail", Fv assertFailFun.svar ) ]);
+           ("__assert_fail", Fv assertFailFun ) ]);
     assertFun.svar.vinline <- true;
     
     (* Don't make it static -- inline is enough. Making it static
@@ -371,16 +368,28 @@ class trumPtrFunVisitor = fun fl -> object
         inline function. *)
     (* Actually, do make it static -- C99 inlines are weird and don't eliminate
        multiple definitions the way we'd like.*)
-    assertFun.svar.vstorage <- Static;
-        
+    (* assertFun.svar.vstorage <- Static; *)
+    (* ACTUALLY actually, make it extern, which plus __gnu_inline__ above, 
+       should be enough to shut up the warnings and give us a link error if 
+       any non-inlined calls creep through. *)
+    assertFun.svar.vstorage <- Extern;
+    
     (* according to the docs for pushGlobal, non-types go at the end of globals --
      * but if we do this, our function definition appears at the end, which is wrong.
-     * So just put it at the front -- seems to work. *)
-    fl.globals <- [GFun(assertFun, 
-        {line = -1; file = "BLAH FIXME"; byte = 0})] 
-        (* @ [GFun(checkFun, 
-        {line = -1; file = "BLAH FIXME"; byte = 0})] *)
-        @fl.globals
+     * So just put it at the front -- seems to work.
+     * ARGH. Actually, it needs to go *after* the assertFailFun, on which it depends,
+     * to avoid implicit declaration problems. So we split the list at this element, 
+     * then build a new list. *)
+    let (preList, postList) = 
+        let rec buildPre l accumPre = match l with 
+            [] -> (accumPre, [])
+         |  x::xs -> match x with 
+              GFun (assertFailFun, _) -> (accumPre, x :: xs)
+           | _ -> buildPre xs (accumPre @ [x])
+         in buildPre fl.globals []
+    in
+    fl.globals <- preList @ [GFun(assertFun, {line = -1; file = "BLAH FIXME"; byte = 0})] @ postList
+
   method vfunc (f: fundec) : fundec visitAction = 
       let tpExprVisitor = new trumPtrExprVisitor fl f checkFunVar assertFun assertFailFun in
       ChangeTo(visitCilFunction tpExprVisitor f)
