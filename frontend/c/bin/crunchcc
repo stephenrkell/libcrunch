@@ -92,10 +92,10 @@ def main():
         linkArgs += ["-Wl,--export-dynamic"]
         # if we're building an executable, append the magic objects
         if not "-c" in sys.argv and not "-shared" in sys.argv:
-            linkArgs += [os.path.dirname(sys.argv[0]) + "/../lib/stubs.o"]
+            linkArgs += [os.path.dirname(sys.argv[0]) + "/../../../lib/stubs.o"]
             # HACK: fix this once I sort out linking
-            linkArgs += ["-L" + os.path.dirname(sys.argv[0]) + "/../lib"]
-            linkArgs += ["-Wl,-R" + os.path.dirname(sys.argv[0]) + "/../lib"]
+            linkArgs += ["-L" + os.path.dirname(sys.argv[0]) + "/../../../lib"]
+            linkArgs += ["-Wl,-R" + os.path.dirname(sys.argv[0]) + "/../../../lib"]
             linkArgs += ["-lcrunch","-ldl"]
         # else we leave the shared library with 
         # dangling dependencies on __wrap_
@@ -120,13 +120,15 @@ def main():
         # to set the appropriate prefix
         if outputFile == None:
             outputFile = "a.out" # unlikely, but who knows?
+        baseDir = 
         if "ALLOCSITES_BASE" in os.environ:
-            targetName = os.environ["ALLOCSITES_BASE"] + os.path.realpath(outputFile) + ".allallocs"
+            baseDir = os.environ["ALLOCSITES_BASE"]
         else:
-            targetName = "allocsites" + os.path.realpath(outputFile) + ".allallocs"
+            baseDir = "/usr/lib/allocsites"
+        targetNames = [baseDir + os.path.realpath(outputFile) + ext for ext in [".allallocs", "-uniqtypes.so"]]
             
-        ret2 = subprocess.call(["make", "-C", os.path.dirname(sys.argv[0]) + "/../dumpallocs", \
-            "-f", "Makefile.allocsites", targetName])
+        ret2 = subprocess.call(["make", "-C", os.path.dirname(sys.argv[0]) + "/../allocsites", \
+            "-f", "Makefile.allocsites"] +  targetNames)
 
 if __name__ == '__main__':
     main()

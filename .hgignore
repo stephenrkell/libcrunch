@@ -9,8 +9,8 @@ logwrites.ml
 *.cma
 *.cmo
 *.cmi
-dumpallocs/allocsites/*
-dumpallocs/uniqtypes
+Old/*
+frontend/c/allocsites/uniqtypes
 *.allocs
 *.d
 lib/libcrunch.so
