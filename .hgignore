@@ -1,5 +1,6 @@
 syntax: glob
 *.cil.c
+*.cil.s
 *.o
 *.i
 makefile
@@ -10,8 +11,9 @@ logwrites.ml
 *.cmo
 *.cmi
 Old/*
-frontend/c/allocsites/uniqtypes
+allocsites/uniqtypes
 *.allocs
 *.d
 lib/libcrunch.so
 src/libcrunch.so
+test/hello/hello
