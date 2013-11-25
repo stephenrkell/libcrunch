@@ -24,7 +24,8 @@ int main(void)
 	};
 	struct bases *my_bases = malloc(sizeof (struct bases));
 	
-	/* Now go round in a loop */
+	/* Now go round in a loop simulating a program which does casts 
+	   at a certain rate. We are testing the heap case only. */
 	for (int i = 0; i < 1000; ++i)
 	{
 		/* Do a pointer cast */

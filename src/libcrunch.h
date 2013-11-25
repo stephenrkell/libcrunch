@@ -8,45 +8,37 @@
 
 #include "memtable.h"
 #include "heap_index.h"
+#include "allocsmt.h"
 #include <stdint.h>
 #include "addrmap.h"
 
-extern void *__uniqtypes_handle __attribute__((weak));
- 
+extern _Bool __libcrunch_is_initialized __attribute__((weak));
+int __libcrunch_global_init(void) __attribute__((weak));
+
+static inline void __attribute__((gnu_inline)) __libcrunch_ensure_init(void);
+
 /* Copied from uniqtypes.cpp */
 struct rec
 {
 	const char *name;
-	unsigned sz;
-	unsigned len;
+	short pos_maxoff; // 16 bits
+	short neg_maxoff; // 16 bits
+	unsigned nmemb:12;         // 12 bits -- number of `contained's (always 1 if array)
+	unsigned is_array:1;       // 1 bit
+	unsigned array_len:19;     // 19 bits; 0 means undetermined length
 	struct { 
 		signed offset;
 		struct rec *ptr;
 	} contained[];
 };
-struct allocsite_entry
-{ 
-	void *next; 
-	void *prev;
-	void *allocsite; 
-	struct rec *uniqtype;
-};
 
-#define allocsmt_entry_type          struct allocsite_entry *
-#define allocsmt_entry_coverage      256
-extern allocsmt_entry_type *allocsmt;
-#define ALLOCSMT_FUN(op, ...)    (MEMTABLE_ ## op ## _WITH_TYPE(allocsmt, allocsmt_entry_type, \
-    allocsmt_entry_coverage, (void*)0, (void*)STACK_BEGIN, ## __VA_ARGS__ ))
-
-extern _Bool allocsmt_initialized;
-void init_allocsites_memtable(void);
 
 // slow(er) path
 struct rec *typestr_to_uniqtype(const char *typestr);
 
 inline struct rec *allocsite_to_uniqtype(const void *allocsite)
 {
-	if (!allocsmt_initialized) init_allocsites_memtable();
+	__libcrunch_ensure_init();
 	struct allocsite_entry **bucketpos = ALLOCSMT_FUN(ADDR, allocsite);
 	struct allocsite_entry *bucket = *bucketpos;
 	for (struct allocsite_entry *p = bucket; p; p = p->next)
@@ -69,25 +61,28 @@ static inline void __libcrunch_private_assert(_Bool cond, const char *reason,
 	if (!cond) __assert_fail(reason, f, l, fn);
 }
 
-// slow-path initialization handler
-int initialize_handle(void);
-
-inline int __libcrunch_check_init(void)
+inline int __attribute__((gnu_inline)) __libcrunch_check_init(void)
 {
-	if (__builtin_expect(!&__uniqtypes_handle, 0))
+	if (__builtin_expect(!&__libcrunch_is_initialized, 0))
 	{
 		/* This means that we're not linked with libcrunch. 
 		 * There's nothing we can do! */
 		return -1;
 	}
-	if (__builtin_expect(!__uniqtypes_handle, 0))
+	if (__builtin_expect(!__libcrunch_is_initialized, 0))
 	{
 		/* This means we haven't opened the uniqtypes library. 
 		 * Try that now (it won't try more than once). */
-		return initialize_handle();
+		return __libcrunch_global_init();
 	}
 	
 	return 0;
+}
+
+static inline void  __attribute__((gnu_inline)) __libcrunch_ensure_init(void)
+{
+	__libcrunch_private_assert(__libcrunch_check_init() == 0, "libcrunch init", 
+		__FILE__, __LINE__, __func__);
 }
 
 // forward decl
@@ -244,18 +239,26 @@ int __is_aU(const void *obj, const struct rec *test_uniqtype)
 			}
 
 			// now we have an allocsite
-			alloc_uniqtype = allocsite_to_uniqtype(heap_info->alloc_site);
+			alloc_uniqtype = allocsite_to_uniqtype((void*)(intptr_t)heap_info->alloc_site);
 			if (!alloc_uniqtype) 
 			{
 				reason = "unrecognised allocsite";
-				reason_ptr = heap_info->alloc_site;
+				reason_ptr = (void*)(intptr_t)heap_info->alloc_site;
 				++__libcrunch_aborted_unrecognised_allocsite;
 				goto abort;
 			}
+			
+			/* FIXME: do we want to write the uniqtype directly into the heap trailer?
+			 * PROBABLY, but do this LATER once we can MEASURE the BENEFIT!
+			 * -- we can scrounge the union tag bits as follows:
+			 *    on 32-bit x86, exploit that code is not loaded in top half of AS;
+			 *    on 64-bit x86, exploit that certain bits of an addr are always 0. 
+			 */
+			 
 			unsigned chunk_size = malloc_usable_size(object_start);
 			unsigned padded_trailer_size = USABLE_SIZE_FROM_OBJECT_SIZE(0);
-			block_element_count = (chunk_size - padded_trailer_size) / alloc_uniqtype->sz;
-			//__libcrunch_private_assert(chunk_size % alloc_uniqtype->sz == 0,
+			block_element_count = (chunk_size - padded_trailer_size) / alloc_uniqtype->pos_maxoff;
+			//__libcrunch_private_assert(chunk_size % alloc_uniqtype->pos_maxoff == 0,
 			//	"chunk size should be multiple of element size", __FILE__, __LINE__, __func__);
 			break;
 		}
@@ -281,7 +284,7 @@ int __is_aU(const void *obj, const struct rec *test_uniqtype)
 	 * object. Nonzero offsets "recurse" immediately, using binary search. */
 	assert(alloc_uniqtype);
 	unsigned target_offset = ((char*) obj - (char*) object_start) % 
-		(alloc_uniqtype->sz ? alloc_uniqtype->sz : 1);
+		(alloc_uniqtype->pos_maxoff ? alloc_uniqtype->pos_maxoff : 1);
 	
 	struct rec *cur_obj_uniqtype = alloc_uniqtype;
 	signed descend_to_ind;
@@ -299,7 +302,7 @@ int __is_aU(const void *obj, const struct rec *test_uniqtype)
 	
 		/* calculate the offset to descend to, if any 
 		 * FIXME: refactor into find_subobject_spanning(offset) */
-		unsigned num_contained = cur_obj_uniqtype->len;
+		unsigned num_contained = cur_obj_uniqtype->nmemb;
 		int lower_ind = 0;
 		int upper_ind = num_contained;
 		while (lower_ind + 1 < upper_ind) // difference of >= 2
