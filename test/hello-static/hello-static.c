@@ -15,14 +15,3 @@ int main(void)
 
 	return 0;
 }
-
-int second(void)
-{
-	void *fake = &blah;
-
-	const char *recovered = (const char *) fake;
-
-	printf("%s\n", recovered);
-
-	return 0;
-}

@@ -1,5 +1,5 @@
-(* Copyright (c) 2011,
- *  Stephen Kell        <stephen.kell@cs.ox.ac.uk>
+(* Copyright (c) 2011--13,
+ *  Stephen Kell        <stephen.kell@cl.cam.ac.uk>
  *
  * and based on logwrites.ml, which is 
  *
@@ -74,28 +74,26 @@ let rec is_bitfield lo = match lo with
 let voidConstPtrType = TPtr(TVoid([Attr("const", [])]),[])
 
 let rec canonicalizeBaseTypeStr s = 
- (* based on the following table -- keep in sync with uniqtypes.cpp and Makefile.allocsites 
-	equiv_class_t equivs[] = {
-		{ "signed char", "char", NULL},
-		{ "signed int", "int", "signed", NULL },
-		{ "unsigned int", "unsigned", NULL },
-		{ "signed long int", "long signed int", "signed long", "long", "long int", NULL },
-		{ "unsigned long int", "long unsigned int", "unsigned long", NULL },
-		{ "signed long long int", "long long signed int", "signed long long", "long long int", "long long", NULL },
-		{ "unsigned long long int", "long long unsigned int", "unsigned long long", NULL }
-	};
- *)
-  if s = "char" then "signed char"
-  else if s = "int" or s = "signed" then "signed int"
-  else if s = "unsigned" then "unsigned int"
-  else if s = "long signed int" or s = "signed long" or s = "long" or s = "long int" then "signed long int"
-  else if s = "long unsigned int" or s = "unsigned long" then "unsigned long int"
-  else if s = "long long signed int" or s = "signed long long" or s = "long long int" or s = "long long" then "signed long long int"
-  else if s = "long long unsigned int" or s = "unsigned long long" then "unsigned long long int"
+ (* generated from a table maintained in srk's libcxxgen  *)
+if (s = "signed char" or s = "char" or s = "char signed" or  false) then "signed char"
+else if (s = "unsigned char" or s = "char unsigned" or  false) then "unsigned char"
+else if (s = "short int" or s = "short" or s = "int short" or  false) then "short int"
+else if (s = "short unsigned int" or s = "unsigned short" or s = "short unsigned" or s = "unsigned short int" or s = "int unsigned short" or s = "int short unsigned" or s = "unsigned int short" or s = "short int unsigned" or  false) then "short unsigned int"
+else if (s = "int" or s = "signed" or s = "signed int" or s = "int signed" or  false) then "int"
+else if (s = "unsigned int" or s = "unsigned" or s = "int unsigned" or  false) then "unsigned int"
+else if (s = "long int" or s = "long" or s = "int long" or s = "signed long int" or s = "int signed long" or s = "int long signed" or s = "long signed int" or s = "signed int long" or s = "long signed" or s = "signed long" or  false) then "long int"
+else if (s = "unsigned long int" or s = "int unsigned long" or s = "int long unsigned" or s = "long unsigned int" or s = "unsigned int long" or s = "long unsigned" or s = "unsigned long" or  false) then "unsigned long int"
+else if (s = "long long int" or s = "long long" or s = "long int long" or s = "int long long" or s = "long long signed" or s = "long signed long" or s = "signed long long" or s = "long long int signed" or s = "long long signed int" or s = "long signed long int" or s = "signed long long int" or s = "long int long signed" or s = "long int signed long" or s = "long signed int long" or s = "signed long int long" or s = "int long long signed" or s = "int long signed long" or s = "int signed long long" or s = "signed int long long" or  false) then "long long int"
+else if (s = "long long unsigned int" or s = "long long unsigned" or s = "long unsigned long" or s = "unsigned long long" or s = "long long int unsigned" or s = "long unsigned long int" or s = "unsigned long long int" or s = "long int long unsigned" or s = "long int unsigned long" or s = "long unsigned int long" or s = "unsigned long int long" or s = "int long long unsigned" or s = "int long unsigned long" or s = "int unsigned long long" or s = "unsigned int long long" or  false) then "long long unsigned int"
+else if (s = "float" or  false) then "float"
+else if (s = "double" or  false) then "double"
+else if (s = "long double" or s = "double long" or  false) then "long double"
+else if (s = "bool" or  false) then "bool"
+else if (s = "wchar_t" or  false) then "wchar_t"
   else s
 
 (* HACK: pasted from dumpallocs *)
-let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getEffectiveType ts)) *)
+let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getConcreteType ts)) *)
  match tsig with
    TSArray(tsig, optSz, attrs) -> "impossible"
  | TSPtr(tsig, attrs) -> "^" ^ (stringFromSig tsig)
@@ -137,10 +135,10 @@ let addr_of_lv (lh,lo) =
 (* This effectively embodies our "default specification" for C code
  * -- it controls what we assert in "__is_a" tests, and
  * needs to mirror what we record for allocation sites in dumpallocs *)
-let rec getEffectiveType tsig =
+let rec getConcreteType tsig =
  match tsig with
-   TSArray(tsig, optSz, attrs) -> getEffectiveType tsig
- | TSPtr(tsig, attrs) -> TSPtr(getEffectiveType tsig, []) (* stays a pointer, but discard attributes *)
+   TSArray(tsig, optSz, attrs) -> getConcreteType tsig
+ | TSPtr(tsig, attrs) -> TSPtr(getConcreteType tsig, []) (* stays a pointer, but discard attributes *)
  | TSComp(isSpecial, name, attrs) -> TSComp(isSpecial, name, [])
  | TSFun(returnTs, argsTss, isSpecial, attrs) -> TSFun(returnTs, argsTss, isSpecial, [])
  | TSEnum(enumName, attrs) -> TSEnum(enumName, [])
@@ -221,12 +219,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
   
   method vexpr (e: exp) : exp visitAction = 
     match e with 
-      (* We need to catch any use of a pointer that might cause a run-time failure.
-         This is actually a bit subtle. If we do a downcast in one function, then
-         pass to another function which uses it with the cast-to lvalue type, we 
-         need to check the downcast even though we're not dereferencing it there
-         and then. In other words, let's check all the downcasts. *)
-      CastE(t, subex) -> begin
+      (* Check casts, unless they only affect qualifiers we don't care about, or are casts to void* *)
+      CastE(t, subex) -> if getConcreteType(Cil.typeSig(t)) = getConcreteType(Cil.typeSig(Cil.typeOf(subex))) then DoChildren else 
+      if getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TVoid([])), []) then DoChildren else begin
+          (* let () = Printf.printf "unequal typesigs %s, %s\n%!" (getConcreteType(Cil.typeSig(t))) (Cil.typeSig(Cil.typeOf(subex))) in  *)
           let location = match !currentInst with
             None -> {line = -1; file = "(unknown)"; byte = 0}
           | Some(i) -> begin match i with
@@ -240,14 +236,15 @@ class trumPtrExprVisitor = fun enclosingFile ->
               (* enqueue the tmp var decl, assignment and assertion *)
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
               let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
-              let effectiveType = getEffectiveType (typeSig ptdt) in
-              let typeStr = stringFromSig effectiveType in
+              let concreteType = getConcreteType (typeSig ptdt) in
+              let typeStr = stringFromSig concreteType in
             (* The string representation needs tweaking to make it a symname:
                - prepend "__uniqtype_" 
                - insert the defining header file, with the usual munging for slashes, hyphens, dots, and spaces
                - FIXME: fix up base types specially!
                - replace '^' with '__PTR_' 
                - replace '()=>' with '__FUN_'.
+               NOTE that arrays probably shouldn't come up here.
 
                We can't get the declaring file/line ("location" in CIL-speak) from a typesig,
                nor from its type -- we need the global.  *)
@@ -272,9 +269,9 @@ class trumPtrExprVisitor = fun enclosingFile ->
                    so just use two dots. Will need to change this if we start to include function
                    argument types in function typestrings. *)
                 let ptr_and_fun_replaced = Str.global_replace (Str.regexp "..=>") "__FUN_" ptr_replaced in
-                "__uniqtype_" ^ header_insert ^ "_" ^ ptr_and_fun_replaced
+                "__uniqtype_" ^ (if String.length header_insert > 0 then string_of_int(String.length header_insert) else "") ^ header_insert ^ "_" ^ ptr_and_fun_replaced
               end in
-              let symname = symnameFromString typeStr effectiveType in
+              let symname = symnameFromString typeStr concreteType in
               self#queueInstr [
                 (* first enqueue an assignment of the whole cast to exprTmpVar *)
                 Set( (Var(exprTmpVar), NoOffset), e, locUnknown );
@@ -346,7 +343,7 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("line", uintType, []);
                                    ("function", charConstPtrType, [])
                                     ], 
-                            false, [Attr("always_inline", []); Attr("__gnu_inline__", [])]));
+                            false, [Attr("always_inline", []); Attr("gnu_inline", [])]));
     (* setFunctionTypeMakeFormals checkFun  (TFun(intType, 
                             Some [ ("obj", voidPtrType, []);
                                    ("typestr", charConstPtrType, []) ], 
@@ -369,7 +366,7 @@ class trumPtrFunVisitor = fun fl -> object
     (* Actually, do make it static -- C99 inlines are weird and don't eliminate
        multiple definitions the way we'd like.*)
     (* assertFun.svar.vstorage <- Static; *)
-    (* ACTUALLY actually, make it extern, which plus __gnu_inline__ above, 
+    (* ACTUALLY actually, make it extern, which plus gnu_inline above, 
        should be enough to shut up the warnings and give us a link error if 
        any non-inlined calls creep through. *)
     assertFun.svar.vstorage <- Extern;

@@ -24,4 +24,4 @@ allocsites/subtle-questions.txt
 allocsites/test-simple.c
 allocsites/test-simple.out-types.c
 allocsites/test.out-types.c
-
+Notes/*
