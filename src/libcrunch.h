@@ -47,6 +47,26 @@ inline struct rec *allocsite_to_uniqtype(const void *allocsite)
 	}
 }
 
+#define maximum_vaddr_range_size (1024*1024) // HACK
+inline struct rec *vaddr_to_uniqtype(const void *vaddr)
+{
+	assert(__libcrunch_allocsmt != NULL);
+	struct allocsite_entry **initial_bucketpos = ALLOCSMT_FUN(ADDR, (void*)((intptr_t)vaddr | STACK_BEGIN));
+	struct allocsite_entry **bucketpos = initial_bucketpos;
+	do 
+	{
+		struct allocsite_entry *bucket = *bucketpos;
+		for (struct allocsite_entry *p = bucket; p; p = p->next)
+		{
+			if (p->allocsite <= vaddr) return p->uniqtype;
+		}
+		// no match? then try the next lower bucket
+		--bucketpos;
+	} while ((initial_bucketpos - bucketpos) * allocsmt_entry_coverage < maximum_vaddr_range_size);
+	return NULL;
+}
+#undef maximum_vaddr_range_size
+
 /* avoid dependency on libc headers (in this header only) */
 void __assert_fail(const char *assertion, 
 	const char *file, unsigned int line, const char *function);
