@@ -12,29 +12,9 @@
 #include <stdint.h>
 #include "addrmap.h"
 
-extern _Bool __libcrunch_is_initialized __attribute__((weak));
-int __libcrunch_global_init(void) __attribute__((weak));
-
 static inline void __attribute__((gnu_inline)) __libcrunch_ensure_init(void);
 
-/* Copied from dumptypes.cpp */
-struct rec
-{
-	const char *name;
-	short pos_maxoff; // 16 bits
-	short neg_maxoff; // 16 bits
-	unsigned nmemb:12;         // 12 bits -- number of `contained's (always 1 if array)
-	unsigned is_array:1;       // 1 bit
-	unsigned array_len:19;     // 19 bits; 0 means undetermined length
-	struct { 
-		signed offset;
-		struct rec *ptr;
-	} contained[];
-};
-
-
-// slow(er) path
-struct rec *typestr_to_uniqtype(const char *typestr);
+#include "libcrunch.h"
 
 inline struct rec *allocsite_to_uniqtype(const void *allocsite)
 {
@@ -176,10 +156,10 @@ inline int (__attribute__((always_inline)) __is_a3)(const void *obj, const char 
 		}
 		else // not cached
 		{
-			r = *maybe_uniqtype = typestr_to_uniqtype(typestr);
+			r = *maybe_uniqtype = __libcrunch_typestr_to_uniqtype(typestr);
 		}
 	}
-	else r = typestr_to_uniqtype(typestr);
+	else r = __libcrunch_typestr_to_uniqtype(typestr);
 	
 	// if we get a null result, it means we got a typestring that
 	// doesn't denote any type that was reified as a uniqtype. 
