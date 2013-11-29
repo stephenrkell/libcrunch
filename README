@@ -1,50 +1,54 @@
-Limitations of __is_a
+libcrunch is an infrastructure for fast dynamic type checking. 
 
-- does not work for actual parameters passed in varargs
+In principle it is language-agnostic -- its operations are defined in
+terms of "allocations", each having a well-defined "data type".
+libcrunch reifies these data types, provides fast access to
+per-allocation metadata, and thereby allows assertions such as 
 
-- does not work for address-taken temporaries
+"p is_a Widget"
+
+to be coded directly. 
+
+Currently the only language frontend is for C, and in this case, one
+could write 
+
+assert(__is_a(p, "Widget"))
+
+or 
+
+assert(__is_aU(p, &__uniqtype_Widget));
+
+and so on. Moreover, a compiler wrapper allows such checks to be
+inserted automatically at particular points -- currently, at pointer
+casts.
+
+Allocations may be stack frames, static objects or heap chunks. Data
+types are left a somewhat opaque notion, deliberately,  which is
+somewhat opaque, but includes a notion of containment.
+
+
+Current limitations of metadata
+
+- no metadata (debug info) for actual parameters passed in varargs
+- no metadata (debug info) for address-taken temporaries
+- sizeof scraping is not completely reliable
+- heap metadata (sizeof-scraping) for indirect calls to allocation funcs
+
+Current performance quirks
 
 - slow for on-stack data
-
 - slow (currently) for static data
+- heap_index's trailer implementation causes clownshoes bugs
 
-- programmer-facing interface is quirky: can't use type declarators directly
+Current usability quirks 
 
-- equivalent named types defined in different source locations are wrongly distinguished
-
-- typedefs need some extra handling (but doable in principle, straight from debug info)
-
-
-Limitations of trumptr
-
-- only instruments casts
-
-- ... so misses implicit strengthenings of void*, even in C99
-
-- ... misses more for C89, -fpermissive, ...
-(TODO: fix this by using CIL's C++ifying transformation to insert casts)
-
-
-Limitations of uniqtypes
-
-- dlsym() requires string comparison
-
-- slow for dynamically loaded code --- need to call helper to merge in uniqtypes
-
-- slow for indirect call sites --- need to call helper to discover allocated types
-
-- requires manual identification of alloc sites (--alloc-fn) (*)
-
-- assume stable load addresses (cf. randomization?)
-
-
-
-Limitations of heap_index_hooks
-
+- can't provide typedefs to __is_a (very fixable)
+- requires manual identification of alloc functions (--alloc-fn) (*)
 - requires manual instrumentation of external allocators
 
-- requires manual identification of malloc wrappers (which must pass through return addrs) (a.k.a. *)
+Current completeness quirks
 
-- current trailer-based implementation is vulnerable to trashing by overrun
+- assumes memory-correct execution
+- C frontend (trumptr) only instruments casts
+- ... i.e. check-on-cast is too eager for some C programming styles
 
-- current size-increment implementation causes clownshoes bugs
