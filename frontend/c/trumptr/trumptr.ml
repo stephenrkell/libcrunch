@@ -303,9 +303,9 @@ class trumPtrExprVisitor = fun enclosingFile ->
               (* change to a reference to the decl'd tmp var *)
               ChangeTo ( CastE(t, subex) )
             end
-          | _ -> SkipChildren
+          | _ -> DoChildren
         end 
-    | _ -> SkipChildren
+    | _ -> DoChildren
 end
 
 class trumPtrFunVisitor = fun fl -> object
