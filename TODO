@@ -1,9 +1,6 @@
 Correctness / usability to-do:
 
-static case -- can use sranges + aranges?
-HMM -- don't want to rely on DWARF info at runtime right now
-SO emit allocsites-like table using sranges-like code 
-+ do it in dumptypes
+fix lack of fps in frame layouts
 
 generate typedescs for subprograms
 
@@ -27,11 +24,14 @@ automatically generate malloc-wrapper stubs
 
 support function pointer casts via wrappers
 
+** check-on-use instrumentation
+
 C-side caching of uniqtypes
 
-cache recent search results in each uniqtype
 
 performance of libunwind?
+
+test 32(fp)-vs-64(nofp) perf
 
 multithreaded programs: walking other threads' stacks
 
@@ -40,6 +40,7 @@ multithreaded programs: lock-free memtable algs
 
 Many, many optimisations:
 - fix inlining
+- cache recent search results in each uniqtype
 - don't call libunwind as much (see STACK case)
 - cache allocated uniqtype in heap trailer
 - separate table(s) for large objects
