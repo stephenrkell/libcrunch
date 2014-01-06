@@ -13,10 +13,11 @@ namespace-aware typestrs
         C checking casts of allocations made by C++: 
             no extern C involved, so no
             SO: create aliases where sensible?
+            E.g. alias a C++ typedesc name by its C equiv where unambiguous
         C++ checking casts of allocations made by C: 
             could propagate extern-Cness of certain type definitions
             then generate C-style names for them
-            
+            though DWARF doesn't record extern-Cness
 
 better sizeof-scraping
 
