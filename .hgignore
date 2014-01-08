@@ -35,3 +35,4 @@ test/random/random
 test/section-group/lib1.so
 test/section-group/lib2.so
 test/section-group/section-group
+test/hello-sizeofness/hello-sizeofness
