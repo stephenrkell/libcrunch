@@ -215,13 +215,15 @@ class trumPtrExprVisitor = fun enclosingFile ->
     | GEnumTag(ei, l) -> namedTypesMap := (NamedTypeMap.add ei.ename l !namedTypesMap); DoChildren
     | GEnumTagDecl(ei, l) -> namedTypesMap := (NamedTypeMap.add ei.ename l !namedTypesMap); DoChildren
     | _ -> DoChildren
-   
   
   method vexpr (e: exp) : exp visitAction = 
     match e with 
       (* Check casts, unless they only affect qualifiers we don't care about, or are casts to void* *)
       CastE(t, subex) -> if getConcreteType(Cil.typeSig(t)) = getConcreteType(Cil.typeSig(Cil.typeOf(subex))) then DoChildren else 
-      if getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TVoid([])), []) then DoChildren else begin
+      if (getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TVoid([])), [])
+       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IChar, [])), [])
+       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(ISChar, [])), [])
+       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IUChar, [])), [])) then DoChildren else begin
           (* let () = Printf.printf "unequal typesigs %s, %s\n%!" (getConcreteType(Cil.typeSig(t))) (Cil.typeSig(Cil.typeOf(subex))) in  *)
           let location = match !currentInst with
             None -> {line = -1; file = "(unknown)"; byte = 0}
