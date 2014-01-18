@@ -3,15 +3,15 @@
 
 int is_a(void *obj, const char *typestr);
 
-static const char blah[] = "Hello, programmer.";
+static int blah = 42;
 
 int main(void)
 {
 	void *fake = &blah;
 
-	const char *recovered = (const char *) fake;
+	int *recovered = (int *) fake;
 
-	printf("%s\n", recovered);
+	printf("It says: %d\n", *recovered);
 
 	return 0;
 }

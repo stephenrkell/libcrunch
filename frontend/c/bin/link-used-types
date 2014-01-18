@@ -1,0 +1,52 @@
+#!/bin/bash
+
+objfile="$1"
+
+test -n "$objfile" || (echo "Please specify an object file"; false) || exit 1
+
+USEDTYPES=${USEDTYPES:-$( dirname $0 )/../../../allocsites/usedtypes}
+CC=${CC:-$(which cc)}
+LD=${LD:-$(which ld)}
+OBJCOPY=${OBJCOPY:-$(which objcopy)}
+
+usedtypes_src=$( mktemp )
+usedtypes_obj=$( mktemp )
+
+compile () {
+   src="$1"
+   dest="$2"
+   ${CC} -c -x c -o "$dest" "$src" && \
+   echo "Compiler generated $dest" 1>&2
+}
+
+link_defining_aliases () {
+  our_objfile="$1"
+  our_usedtypes_obj="$2"
+  temporary_out=$( mktemp )
+  ${LD} -o "$temporary_out" -r "$our_objfile" "$our_usedtypes_obj" \
+        `nm -fposix "${our_usedtypes_obj}" | $(dirname ${USEDTYPES})/alias-linker-opts-for-base-types.sh | sed -r 's/-Wl,--defsym,/--defsym /g'` && \
+  echo "Linker generated ${temporary_out}, moving to ${our_objfile}" 1>&2 && \
+  mv "$temporary_out" "$our_objfile"
+}
+
+symbol_redefinitions () {
+    f="$1"
+    nm -fposix --defined-only "$f" | tr -s '[:blank:]' '\t' | cut -f1 | \
+      grep '__uniqtype_' | \
+      sed -r 's/__uniqtype_([0-9a-f]{7,8})_(.*)/--redefine-sym __uniqtype__\2=__uniqtype_\1_\2/'
+}
+
+objcopy_and_redefine () {
+    our_objfile="$1"
+    our_usedtypes_obj="$2"
+    redefinition_args="$( symbol_redefinitions "$our_usedtypes_obj" )"
+    ${OBJCOPY} $redefinition_args "$our_objfile" && \
+    echo "objcopy renamed symbols in $our_objfile according to $redefinition_args" 1>&2
+}
+
+${USEDTYPES} "$objfile" > "$usedtypes_src" && \
+   compile "$usedtypes_src" "$usedtypes_obj" && \
+   objcopy_and_redefine "$objfile" "$usedtypes_obj" && \
+   link_defining_aliases "$objfile" "$usedtypes_obj"
+
+# rm -f "$usedtypes_src" "$usedtypes_obj"

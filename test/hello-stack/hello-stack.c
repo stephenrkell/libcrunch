@@ -12,21 +12,21 @@ void twiddle(char *blah)
 int main()
 {
 	const char padding1[42];
-	const char blah[] = "Hello, programmer.";
+	int blah[] = { 42, 42, 42 };
 	const char padding2[42];
 	twiddle(padding1);
 	twiddle(padding2);
 	
 	void *fake_start = &blah;
 
-	const char *recovered_start = (const char *) fake_start;
+	int *recovered_start = (int *) fake_start;
 
-	printf("%s\n", recovered_start);
+	printf("It says: %d\n", recovered_start[0]);
 	
 	// also try from the middle
-	void *fake_middle = &blah[7];
-	const char *recovered_middle = (const char *) fake_middle;
-	assert(0 == strcmp(recovered_middle, "programmer."));
+	void *fake_middle = &blah[2];
+	int *recovered_middle = (int *) fake_middle;
+	assert(*recovered_middle == 42);
 
 	return 0;
 }

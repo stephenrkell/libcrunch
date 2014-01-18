@@ -1,4 +1,4 @@
-(* Copyright (c) 2011--13,
+(* Copyright (c) 2011--14,
  *  Stephen Kell        <stephen.kell@cl.cam.ac.uk>
  *
  * and based on logwrites.ml, which is 
@@ -42,6 +42,14 @@ open Pretty
 open Cil
 open Map
 module NamedTypeMap = Map.Make(String)
+
+(* Module-ify Cil.tysSig *)
+module CilTypeSig = struct
+   type t = Cil.typsig
+   let compare ts1 ts2 = String.compare (Pretty.sprint 80 (d_typsig () ts1)) (Pretty.sprint 80 (d_typsig () ts2))
+end
+
+module UniqtypeMap = Map.Make(CilTypeSig)
 module E = Errormsg
 module H = Hashtbl
 
@@ -168,34 +176,67 @@ let rec getConcreteType tsig =
        --- i.e. replace a cast expression with a reference to a temporary...
        ... and insert the definition + assertion *before* the containing instr.
    *)
+ 
+ let matchIgnoringLocation g1 g2 = match g1 with 
+    GType(ti, loc) ->        begin match g2 with GType(ti2, _)        -> ti = ti2 | _ -> false end
+  | GCompTag(ci, loc) ->     begin match g2 with GCompTag(ci2, _)     -> ci = ci2 | _ -> false end
+  | GCompTagDecl(ci, loc) -> begin match g2 with GCompTagDecl(ci2, _) -> ci = ci2 | _ -> false end
+  | GEnumTag(ei, loc) ->     begin match g2 with GEnumTag(ei2, _)     -> ei = ei2 | _ -> false end
+  | GEnumTagDecl(ei, loc) -> begin match g2 with GEnumTagDecl(ei2, _) -> ei = ei2 | _ -> false end
+  | GVarDecl(vi, loc) ->     begin match g2 with GVarDecl(vi2, loc)   -> vi = vi2 | _ -> false end
+  | GVar(vi, ii, loc) ->     begin match g2 with GVar(vi2, ii2, loc)  -> ((vi = vi2) (* and (ii = ii2) *)) | _ -> false end
+  | GFun(f, loc) ->          begin match g2 with GFun(f2, loc)        -> f  = f2  | _ -> false end
+  | GAsm(s, loc) ->          begin match g2 with GAsm(s2, loc)        -> s  = s2  | _ -> false end
+  | GPragma(a, loc) ->       begin match g2 with GPragma(a2, loc)     -> a  = a2  | _ -> false end
+  | GText(s) ->              begin match g2 with GText(s2)            -> s  = s2  | _ -> false end
+
+let isFunction g = match g with
+  GFun(_, _) -> true
+| _ -> false
+
+let newGlobalsList globals toAdd insertBeforePred = 
+  let (preList, postList) = 
+      let rec buildPre l accumPre = match l with 
+          [] -> (accumPre, [])
+       |  x::xs -> if (insertBeforePred x) then (accumPre, x :: xs) else buildPre xs (accumPre @ [x])
+      in 
+      buildPre globals []
+  in
+  preList @ toAdd @ postList
+
+let getOrCreateUniqtypeGlobal m typename concreteType globals = 
+  try 
+      let found = UniqtypeMap.find concreteType m
+      in
+      let foundVar = match found with 
+        GVarDecl(v, i) -> v
+      | _ -> raise(Failure "unexpected state")
+      in 
+      (m, foundVar, globals)
+  with Not_found -> 
+     let newGlobal = 
+       let tempGlobal = makeGlobalVar typename (TInt(IInt, [])); 
+       in 
+       tempGlobal.vstorage <- Extern;
+       tempGlobal
+     in
+     let newGlobalVarInfo = GVarDecl(newGlobal, {line = -1; file = "BLAH FIXME"; byte = 0})
+     in 
+     let newMap = (UniqtypeMap.add concreteType newGlobalVarInfo m)
+     in 
+     let newGlobals = newGlobalsList globals [newGlobalVarInfo] isFunction
+     in
+     (newMap, newGlobal, newGlobals)
+
+
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
-                          (* fun checkFun -> *)
-                          fun checkFunVar ->
-                           fun assertFun -> 
-                           fun assertFailFun ->
+                           fun isAInternalFunDec ->
+                           fun isASInlineFun ->
+                           fun isAUInlineFun ->
+                           fun inlineAssertFun -> 
                                object(self)
   inherit nopCilVisitor
-  (* Create a prototype for the check function, but don't put it in the 
-   * file *)
-(*  val checkFun =   
-    let fdec = emptyFunction "__is_a" in
-    fdec.svar.vtype <- TFun(intType, 
-                            Some [ ("obj", voidPtrType, []);
-                                   ("typestr", charConstPtrType, []) ], 
-                            false, []);
-    fdec
-  val assertFailFun = (* should use findOrCreateFunc here *)
-    let assertFailFunDec = emptyFunction "__assert_fail" in
-    assertFailFunDec.svar.vtype <- TFun(voidType, 
-                            Some [ 
-                            ("assertion", charConstPtrType, []);
-                            ("file", charConstPtrType, []);
-                            ("line", uintType, []);
-                            ("function", charConstPtrType, [])
-                             ], 
-                            false, []);
-    assertFailFunDec *)
 
   val currentInst : instr option ref = ref None
   method vinst (i: instr) : instr list visitAction = begin
@@ -207,6 +248,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
    * source code locations.
    * HACK: for now, don't bother maintaining separate namespaces for enums, structs and unions. *)
   val namedTypesMap : location NamedTypeMap.t ref = ref NamedTypeMap.empty
+  
+  (* Remember the set of __uniqtype objects for which we've created a global
+   * weak extern. *)
+  val uniqtypeGlobals : Cil.global UniqtypeMap.t ref = ref UniqtypeMap.empty
 
   method vglob (g: global) : global list visitAction =
     match g with
@@ -224,7 +269,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
        or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IChar, [])), [])
        or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(ISChar, [])), [])
        or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IUChar, [])), [])) then DoChildren else begin
-          (* let () = Printf.printf "unequal typesigs %s, %s\n%!" (getConcreteType(Cil.typeSig(t))) (Cil.typeSig(Cil.typeOf(subex))) in  *)
+          let () = Printf.printf "unequal typesigs %s, %s\n!" (Pretty.sprint 80 (d_typsig () (getConcreteType(Cil.typeSig(t))))) (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) in
           let location = match !currentInst with
             None -> {line = -1; file = "(unknown)"; byte = 0}
           | Some(i) -> begin match i with
@@ -274,27 +319,31 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 "__uniqtype_" ^ (if String.length header_insert > 0 then string_of_int(String.length header_insert) else "") ^ header_insert ^ "_" ^ ptr_and_fun_replaced
               end in
               let symname = symnameFromString typeStr concreteType in
+              let (newMap, uniqtypeGlobalVar, newGlobals) = getOrCreateUniqtypeGlobal !uniqtypeGlobals symname concreteType enclosingFile.globals
+              in 
+              enclosingFile.globals <- newGlobals; 
+              uniqtypeGlobals := newMap;
               self#queueInstr [
                 (* first enqueue an assignment of the whole cast to exprTmpVar *)
                 Set( (Var(exprTmpVar), NoOffset), e, locUnknown );
                 (* next enqueue the is_a call *)
                 Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
-                      (Lval(Var(checkFunVar),NoOffset)),  (* lvalue of function to call *)
+                      (Lval(Var(isAUInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
                       [ 
                         (* first arg is the expression result *)
                         Lval(Var(exprTmpVar), NoOffset);
-                        (* second argument is a string computed from ptdt *)
-                        Const(CStr(symname))
+                        (* second argument is the uniqtype *)
+                        CastE(voidConstPtrType, Cil.mkAddrOf(Var(uniqtypeGlobalVar), NoOffset))
                       ],
                       locUnknown
                 );
                 (* then enqueue the assertion about its result *)
                 Call( None,
-                      (Lval(Var(assertFun.svar),NoOffset)),
+                      (Lval(Var(inlineAssertFun.svar),NoOffset)),
                       [
                         (* arg is the check result *)
                         Lval(Var(checkTmpVar), NoOffset);
-                        Const(CStr("__is_a(" ^ exprTmpVar.vname ^ ", \"" ^ typeStr ^ "\")"));
+                        Const(CStr("__is_aU(" ^ exprTmpVar.vname ^ ", &" ^ symname ^ ")"));
                         Const(CStr( location.file ));
                         Const(CInt64(Int64.of_int (if location.line == -1 then 0 else location.line), IUInt, None));
                         Const(CStr( enclosingFunction.svar.vname ))
@@ -310,21 +359,76 @@ class trumPtrExprVisitor = fun enclosingFile ->
     | _ -> DoChildren
 end
 
+let makeExternalFunctionInFile fl nm proto = (* findOrCreateFunc fl nm proto *) (* NO! doesn't let us have the fundec *)
+  let funDec = emptyFunction nm in
+    funDec.svar.vtype <- proto;
+    funDec
+
+
+let makeInlineFunctionInFile fl ourFun nm proto body referencedValues = begin
+   let protoArgs = match proto with 
+     TFun(_, Some l, _, _) -> l
+   | _ -> []
+   in
+   let protoWithInlineAttrs = match proto with 
+     TFun(retT, args, isVarargs, attrs) -> TFun(retT, args, isVarargs, attrs @ [Attr("gnu_inline", []); Attr("always_inline", [])])
+   | _ -> proto
+   in
+   let arglist = List.map (fun (ident, typ, attrs) -> makeFormalVar ourFun ident typ) protoArgs in 
+   let () = setFunctionType ourFun protoWithInlineAttrs in
+   let nameFunc =  (fun n t -> makeTempVar ourFun ~name:n t) in
+   let loc = {line = -1; file = "BLAH FIXME"; byte = 0} in
+   let argPatternBindings = List.map (fun ((ident, typ, attrs), arg) -> (ident, Fv arg)) (List.combine protoArgs arglist) in 
+   let extPatternBindings = (* List.map (fun (ident, v) -> (ident, Fv v)) *) referencedValues in
+   let madeBody = mkBlock (Formatcil.cStmts body nameFunc loc (argPatternBindings @ extPatternBindings)) in
+   ourFun.sbody <- madeBody;
+   ourFun.svar.vinline <- true;
+   ourFun.svar.vstorage <- Extern;
+    (* Don't make it static -- inline is enough. Making it static
+        generates lots of spurious warnings when used from a non-static 
+        inline function. *)
+    (* Actually, do make it static -- C99 inlines are weird and don't eliminate
+       multiple definitions the way we'd like.*)
+    (* inlineAssertFun.svar.vstorage <- Static; *)
+    (* ACTUALLY actually, make it extern, which plus gnu_inline above, 
+       should be enough to shut up the warnings and give us a link error if 
+       any non-inlined calls creep through. *)
+    ourFun
+  end
+
+let load_file f =
+  let ic = open_in f in
+  let n = in_channel_length ic in
+  let s = String.create n in
+  really_input ic s 0 n;
+  close_in ic;
+  (s)
+
 class trumPtrFunVisitor = fun fl -> object
   inherit nopCilVisitor
-  val mutable assertFun = let assertFunDec = emptyFunction "__inline_assert" in
-    assertFunDec
-  val checkFunVar = findOrCreateFunc fl "__is_a" (TFun(intType, 
-                             Some [ ("obj", voidConstPtrType, []);
-                                   ("typestr", charConstPtrType, []) ],
+
+  val mutable libcrunchIsInitialized = makeGlobalVar "__libcrunch_is_initialized" (TInt(IBool, [Attr("weak", [])]))
+  val mutable libcrunchAbortedTypestr = makeGlobalVar "__libcrunch_aborted_typestr" (TInt(IULong, [Attr("weak", [])]))
+  val mutable libcrunchBegun = makeGlobalVar "__libcrunch_begun" (TInt(IULong, [Attr("weak", [])]))
+
+  val warnxFunDec = makeExternalFunctionInFile fl "warnx" (TFun(voidType, 
+                             Some [ ("fmt", charConstPtrType, []) ],
+                            true, []))
+
+  val libcrunchGlobalInitFunDec = makeExternalFunctionInFile fl "__libcrunch_global_init" (TFun(intType, 
+                             Some [],
                             false, [Attr("weak", [])]))
-    
-   (* emptyFunction "__is_a" in
-    checkFunDec.svar.vtype <- TFun(intType, 
-                            None, (* will be filled later using setFunctionTypeMakeFormals*)
-                            false, [Attr("weak", [])]);
-    checkFunDec*)
-  val assertFailFun = findOrCreateFunc fl "__assert_fail" (TFun(voidType, 
+  
+  val typestrToUniqtypeFunDec = makeExternalFunctionInFile fl "__libcrunch_typestr_to_uniqtype" (TFun(voidConstPtrType, 
+                             Some [("typestr", charConstPtrType, [])],
+                            false, [Attr("weak", [])]))
+  
+  val isAInternalFunDec = makeExternalFunctionInFile fl "__is_a_internal" (TFun(intType, 
+                             Some [ ("obj", voidConstPtrType, []);
+                                   ("typestr", voidConstPtrType, []) ],
+                            false, [Attr("weak", [])]))
+  
+  val assertFailFunDec = makeExternalFunctionInFile fl "__assert_fail" (TFun(voidType, 
                             Some [ 
                             ("assertion", charConstPtrType, []);
                             ("file", charConstPtrType, []);
@@ -332,68 +436,132 @@ class trumPtrFunVisitor = fun fl -> object
                             ("function", charConstPtrType, [])
                              ], 
                             false, []))
+  
+  (* Will fill these in during initializer*) 
+  val mutable inlineAssertFun = emptyFunction "__inline_assert"
+  val mutable libcrunchCheckInitFun = emptyFunction "__libcrunch_check_init"
+  val mutable isAUInlineFun = emptyFunction "__is_aU"
+  val mutable isASInlineFun = emptyFunction "__is_aS"
+  
+
   initializer
-    let arg0 = makeFormalVar assertFun "cond" intType in
-    let arg1 = makeFormalVar assertFun "assertion" charConstPtrType in
-    let arg2 = makeFormalVar assertFun "file" charConstPtrType in
-    let arg3 = makeFormalVar assertFun "line" uintType in
-    let arg4 = makeFormalVar assertFun "function" charConstPtrType in
-    setFunctionType assertFun (TFun(voidType, 
-                            Some [ ("cond", intType, []);
-                                   ("assertion", charConstPtrType, []);
-                                   ("file", charConstPtrType, []);
-                                   ("line", uintType, []);
-                                   ("function", charConstPtrType, [])
-                                    ], 
-                            false, [Attr("always_inline", []); Attr("gnu_inline", [])]));
-    (* setFunctionTypeMakeFormals checkFun  (TFun(intType, 
-                            Some [ ("obj", voidPtrType, []);
-                                   ("typestr", charConstPtrType, []) ], 
-                            false, [Attr("weak", [])])); *)
-    assertFun.sbody <- mkBlock (Formatcil.cStmts 
-         "if (!cond) __assert_fail(assertion, file, line, function);"
-         (fun n t -> makeTempVar assertFun ~name:n t)
-         {line = -1; file = "BLAH FIXME"; byte = 0}
-         [ ("cond", Fv arg0 );
-           ("assertion", Fv arg1 );
-           ("file", Fv arg2 );
-           ("line", Fv arg3 );
-           ("function", Fv arg4 );
-           ("__assert_fail", Fv assertFailFun ) ]);
-    assertFun.svar.vinline <- true;
-    
-    (* Don't make it static -- inline is enough. Making it static
-        generates lots of spurious warnings when used from a non-static 
-        inline function. *)
-    (* Actually, do make it static -- C99 inlines are weird and don't eliminate
-       multiple definitions the way we'd like.*)
-    (* assertFun.svar.vstorage <- Static; *)
-    (* ACTUALLY actually, make it extern, which plus gnu_inline above, 
-       should be enough to shut up the warnings and give us a link error if 
-       any non-inlined calls creep through. *)
-    assertFun.svar.vstorage <- Extern;
-    
     (* according to the docs for pushGlobal, non-types go at the end of globals --
      * but if we do this, our function definition appears at the end, which is wrong.
      * So just put it at the front -- seems to work.
      * ARGH. Actually, it needs to go *after* the assertFailFun, on which it depends,
      * to avoid implicit declaration problems. So we split the list at this element, 
      * then build a new list. *)
-    let (preList, postList) = 
-        let rec buildPre l accumPre = match l with 
-            [] -> (accumPre, [])
-         |  x::xs -> match x with 
-              GFun (assertFailFun, _) -> (accumPre, x :: xs)
-           | _ -> buildPre xs (accumPre @ [x])
-         in buildPre fl.globals []
-    in
-    fl.globals <- preList @ [GFun(assertFun, {line = -1; file = "BLAH FIXME"; byte = 0})] @ postList
+
+    inlineAssertFun <- makeInlineFunctionInFile fl inlineAssertFun "__inline_assert" (TFun(voidType, 
+                            Some [ ("cond", intType, []);
+                                   ("assertion", charConstPtrType, []);
+                                   ("file", charConstPtrType, []);
+                                   ("line", uintType, []);
+                                   ("function", charConstPtrType, [])
+                                    ], 
+                            false, [])) "if (!%v:cond) %v:__assert_fail(%v:assertion, %v:file, %v:line, %v:function);" [("__assert_fail", (Fv assertFailFunDec.svar) )];
+
+    libcrunchCheckInitFun <- makeInlineFunctionInFile fl libcrunchCheckInitFun "__libcrunch_check_initialized" (TFun(TInt(IInt, []), 
+                            Some [], 
+                            false, [])) "\
+    if (/*__builtin_expect (*/ ! & %v:__libcrunch_is_initialized/*, 0)*/) \n\
+    { \n\
+        /* This means that we're not linked with libcrunch.  \n\
+         * There's nothing we can do! */ \n\
+        return -1; \n\
+    } \n\
+    if ( /*__builtin_expect (*/ ! %v:__libcrunch_is_initialized/*, 0)*/) \n\
+    { \n\
+        /* This means we haven't initialized. \n\
+         * Try that now (it won't try more than once). */ \n\
+        int ret = __libcrunch_global_init (); \n\
+        return ret; \n\
+    } \n\
+     \n\
+    return 0; \n\
+                           " [("__libcrunch_is_initialized", (Fv libcrunchIsInitialized)); 
+                              ("__libcrunch_global_init", (Fv libcrunchGlobalInitFunDec.svar)) ];
+                           
+    isAUInlineFun <- makeInlineFunctionInFile fl isAUInlineFun "__is_aU" (TFun(intType, 
+                            Some [ ("obj", voidConstPtrType, []);
+                                   ("r", voidConstPtrType, [])
+                                 ], 
+                            false, [])) "\
+        if (!%v:obj) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        int inited = __libcrunch_check_init (); \n\
+        if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        \n\
+        /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
+         * linked with enough uniqtypes data. */ \n\
+        if (/*__builtin_expect(*/ !r/*, 0)*/) \n\
+        { \n\
+           __libcrunch_begun += 1; \n\
+           __libcrunch_aborted_typestr += 1; \n\
+             return 1; \n\
+        } \n\
+        /* No need for the char check in the CIL version */ \n\
+        // now we're really started \n\
+        __libcrunch_begun += 1; \n\
+        int ret = __is_a_internal(obj, r); \n\
+        return ret;"
+     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
+      ("warnx", (Fv warnxFunDec.svar)); 
+      ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
+      ("__libcrunch_begun", (Fv libcrunchBegun));
+      ("__is_a_internal", (Fv isAInternalFunDec.svar)) ]; 
+           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
+                "unrecognised typename (see stack trace)"); *)
+
+    isASInlineFun <- makeInlineFunctionInFile fl isASInlineFun "__is_aS" (TFun(intType, 
+                            Some [ ("obj", voidConstPtrType, []);
+                                   ("typestr", charConstPtrType, [])
+                                 ], 
+                            false, [])) "\
+        if (!%v:obj) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        int inited = __libcrunch_check_init (); \n\
+        if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        \n\
+        void * r = __libcrunch_typestr_to_uniqtype(typestr); \n\
+        \n\
+        int ret = __is_aU(obj, r);\n\
+        return ret; \n\
+       "
+     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
+      ("__libcrunch_typestr_to_uniqtype", (Fv typestrToUniqtypeFunDec.svar)); 
+      ("__is_aU", (Fv isAUInlineFun.svar)) ]; 
+           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
+                "unrecognised typename (see stack trace)"); *)
+    fl.globals <- newGlobalsList fl.globals [
+         GVarDecl(libcrunchIsInitialized, {line = -1; file = "BLAH FIXME"; byte = 0});
+         GVarDecl(libcrunchBegun, {line = -1; file = "BLAH FIXME"; byte = 0});
+         GVarDecl(libcrunchAbortedTypestr, {line = -1; file = "BLAH FIXME"; byte = 0});
+         (* GFun(libcrunchGlobalInitFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
+         GFun(libcrunchCheckInitFun, {line = -1; file = "BLAH FIXME"; byte = 0});
+         (* GFun(warnxFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
+         (* GFun(isAInternalFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
+         (* GFun(assertFailFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
+         GFun(inlineAssertFun, {line = -1; file = "BLAH FIXME"; byte = 0});
+         GFun(isAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); 
+         GFun(isASInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0})
+         ] 
+         isFunction
 
   method vfunc (f: fundec) : fundec visitAction = 
-      let tpExprVisitor = new trumPtrExprVisitor fl f checkFunVar assertFun assertFailFun in
+      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec isASInlineFun isAUInlineFun inlineAssertFun in
       ChangeTo(visitCilFunction tpExprVisitor f)
 end
-
 
 let feature : featureDescr = 
   { fd_name = "trumptr";

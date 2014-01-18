@@ -5,14 +5,14 @@ int is_a(void *obj, const char *typestr);
 
 int main()
 {
-	const char *blah = (const char *) malloc(200 * sizeof (char));
-	strncpy(blah, "Hello, programmer.", 200 * sizeof (char));
+	int *blah = (int *) malloc(200 * sizeof (int));
+	for (int i = 0; i < 200; ++i) blah[i] = 42;
 	
 	void *fake = blah;
 
-	const char *recovered = (const char *) fake;
+	int *recovered = (int *) fake;
 
-	printf("%s\n", recovered);
+	printf("It says: %d\n", recovered[0]);
 
 	free(blah);
 	
