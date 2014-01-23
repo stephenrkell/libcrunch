@@ -101,17 +101,47 @@ else if (s = "wchar_t" or  false) then "wchar_t"
   else s
 
 (* HACK: pasted from dumpallocs *)
-let rec stringFromSig tsig = (* = Pretty.sprint 80 (d_typsig () (getConcreteType ts)) *)
- match tsig with
-   TSArray(tsig, optSz, attrs) -> "impossible"
- | TSPtr(tsig, attrs) -> "^" ^ (stringFromSig tsig)
+ 
+
+            (* The string representation needs tweaking to make it a symname:
+               - prepend "__uniqtype_" 
+               - insert the defining header file, with the usual munging for slashes, hyphens, dots, and spaces
+               - FIXME: fix up base types specially!
+               - replace '^' with '__PTR_' 
+               - replace '()=>' with '__FUN_'.
+               NOTE that arrays probably shouldn't come up here.
+
+               We can't get the declaring file/line ("location" in CIL-speak) from a typesig,
+               nor from its type -- we need the global.  *)
+
+let rec barenameFromSig ts = 
+ let rec labelledArgTs ts startAt =
+   match ts with
+     [] -> ""
+  | t :: morets -> 
+      let remainder = (labelledArgTs morets (startAt + 1))
+      in
+      "__ARG" ^ (string_of_int startAt) ^ "_" ^ (barenameFromSig t) ^ remainder
+ in
+ let baseTypeStr ts = 
+   let rawString = match ts with 
+     TInt(kind,attrs) -> (Pretty.sprint 80 (d_ikind () kind))
+   | TFloat(kind,attrs) -> (Pretty.sprint 80 (d_fkind () kind))
+   | _ -> raise(Failure "bad base type")
+   in 
+   Str.global_replace (Str.regexp "[. /-]") "_" (canonicalizeBaseTypeStr (trim rawString))
+ in
+ match ts with
+   TSArray(tNestedSig, optSz, attrs) -> "__ARR" ^ (match optSz with Some(s) -> (string_of_int (i64_to_int s)) | None -> "0") ^ "_" ^ (barenameFromSig tNestedSig)
+ | TSPtr(tNestedSig, attrs) -> "__PTR_" ^ (barenameFromSig tNestedSig)
  | TSComp(isSpecial, name, attrs) -> name
- | TSFun(returnTs, argsTss, isSpecial, attrs) -> "()=>" ^ (stringFromSig returnTs)
+ | TSFun(returnTs, argsTss, isSpecial, attrs) -> 
+      "__FUN_FROM_" ^ (labelledArgTs argsTss 0) ^ (if isSpecial then "__VA_" else "") ^ "__FUN_TO_" ^ (barenameFromSig returnTs) 
  | TSEnum(enumName, attrs) -> enumName
  | TSBase(TVoid(attrs)) -> "void"
- | TSBase(TInt(kind,attrs)) -> canonicalizeBaseTypeStr (trim (Pretty.sprint 80 (d_ikind () kind)))
- | TSBase(TFloat(kind,attrs)) -> canonicalizeBaseTypeStr (trim (Pretty.sprint 80 (d_fkind () kind)))
- | _ -> "impossible" 
+ | TSBase(tbase) -> baseTypeStr tbase
+
+let symnameFromSig ts = "__uniqtype_" ^ "" ^ "_" ^ (barenameFromSig ts)
 
 (* Return an expression that evaluates to the address of the given lvalue.
  * For most lvalues, this is merely AddrOf(lv). However, for bitfields
@@ -268,8 +298,9 @@ class trumPtrExprVisitor = fun enclosingFile ->
       if (getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TVoid([])), [])
        or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IChar, [])), [])
        or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(ISChar, [])), [])
-       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IUChar, [])), [])) then DoChildren else begin
-          let () = Printf.printf "unequal typesigs %s, %s\n!" (Pretty.sprint 80 (d_typsig () (getConcreteType(Cil.typeSig(t))))) (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) in
+       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IUChar, [])), [])
+       ) then DoChildren else begin
+          let () = Printf.printf "cast to typesig %s from %s needs checking!\n" (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) in
           let location = match !currentInst with
             None -> {line = -1; file = "(unknown)"; byte = 0}
           | Some(i) -> begin match i with
@@ -284,41 +315,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
               let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
               let concreteType = getConcreteType (typeSig ptdt) in
-              let typeStr = stringFromSig concreteType in
-            (* The string representation needs tweaking to make it a symname:
-               - prepend "__uniqtype_" 
-               - insert the defining header file, with the usual munging for slashes, hyphens, dots, and spaces
-               - FIXME: fix up base types specially!
-               - replace '^' with '__PTR_' 
-               - replace '()=>' with '__FUN_'.
-               NOTE that arrays probably shouldn't come up here.
-
-               We can't get the declaring file/line ("location" in CIL-speak) from a typesig,
-               nor from its type -- we need the global.  *)
-             let symnameFromString s ts = begin
-                let rec definingFile t = match t with 
-                  TSComp(isSpecial, name, attrs) -> begin try
-                      let l = NamedTypeMap.find name !namedTypesMap in l.file 
-                      with Not_found -> output_string Pervasives.stderr ("missing decl for " ^ name ^ "\n"); "" (* raise Not_found *)
-                  end
-                | TSEnum(name, attrs) -> begin try
-                      let l = NamedTypeMap.find name !namedTypesMap in l.file 
-                      with Not_found -> output_string Pervasives.stderr ("missing decl for " ^ name ^ "\n"); "" (* raise Not_found *)
-                  end
-                | TSPtr(tsig, attrs) -> definingFile tsig
-                | _ -> ""
-                in
-                let defining_filestr = definingFile ts
-                in 
-                let header_insert = Str.global_replace (Str.regexp "[. /-]") "_" defining_filestr in
-                let ptr_replaced = Str.global_replace (Str.regexp "\\^") "__PTR_"  (Str.global_replace (Str.regexp "[. /-]") "_" s) in
-                (* HACK: using escaped brackets in the regexp doesn't seem to work for replacing, 
-                   so just use two dots. Will need to change this if we start to include function
-                   argument types in function typestrings. *)
-                let ptr_and_fun_replaced = Str.global_replace (Str.regexp "..=>") "__FUN_" ptr_replaced in
-                "__uniqtype_" ^ (if String.length header_insert > 0 then string_of_int(String.length header_insert) else "") ^ header_insert ^ "_" ^ ptr_and_fun_replaced
-              end in
-              let symname = symnameFromString typeStr concreteType in
+              let symname = symnameFromSig concreteType in
               let (newMap, uniqtypeGlobalVar, newGlobals) = getOrCreateUniqtypeGlobal !uniqtypeGlobals symname concreteType enclosingFile.globals
               in 
               enclosingFile.globals <- newGlobals; 
