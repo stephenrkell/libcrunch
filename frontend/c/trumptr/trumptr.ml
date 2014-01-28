@@ -359,6 +359,7 @@ end
 let makeExternalFunctionInFile fl nm proto = (* findOrCreateFunc fl nm proto *) (* NO! doesn't let us have the fundec *)
   let funDec = emptyFunction nm in
     funDec.svar.vtype <- proto;
+    fl.globals <- newGlobalsList fl.globals [GVarDecl(funDec.svar, {line = -1; file = "BLAH FIXME"; byte = 0})] isFunction; 
     funDec
 
 
@@ -423,7 +424,7 @@ class trumPtrFunVisitor = fun fl -> object
   val isAInternalFunDec = makeExternalFunctionInFile fl "__is_a_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", voidConstPtrType, []) ],
-                            false, [Attr("weak", [])]))
+                            false, [(*Attr("weak", [])*)]))
   
   val assertFailFunDec = makeExternalFunctionInFile fl "__assert_fail" (TFun(voidType, 
                             Some [ 
