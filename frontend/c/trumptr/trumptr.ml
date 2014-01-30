@@ -394,13 +394,29 @@ let makeInlineFunctionInFile fl ourFun nm proto body referencedValues = begin
     ourFun
   end
 
-let load_file f =
-  let ic = open_in f in
-  let n = in_channel_length ic in
-  let s = String.create n in
-  really_input ic s 0 n;
-  close_in ic;
-  (s)
+let loadFile fn =
+  let chan = open_in fn in
+  let nchars = in_channel_length chan in
+  let str = String.create nchars in
+  really_input chan str 0 nchars;
+  close_in chan;
+  (str)
+
+let readLines fn = 
+  let lines = ref [] in
+  let chan = open_in fn in
+  try
+    while true; do
+      lines := input_line chan :: !lines
+    done; []
+  with End_of_file ->
+    close_in chan;
+    List.rev !lines
+
+
+(* We snarf the function body as a string, and also return a 
+ * CIL-friendly location of where we found it. *)
+let getInlineFunctionDefinition name = ("", {line = -1; file = "BLAH FIXME"; byte = 0}) (* FIXME *)
 
 class trumPtrFunVisitor = fun fl -> object
   inherit nopCilVisitor
