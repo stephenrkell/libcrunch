@@ -505,11 +505,11 @@ class trumPtrFunVisitor = fun fl -> object
         { \n\
             return 1; \n\
         } \n\
-        int inited = __libcrunch_check_init (); \n\
-        if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
-        { \n\
-            return 1; \n\
-        } \n\
+        // int inited = __libcrunch_check_init (); \n\
+        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // { \n\
+        //     return 1; \n\
+        // } \n\
         \n\
         /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
          * linked with enough uniqtypes data. */ \n\
@@ -541,11 +541,11 @@ class trumPtrFunVisitor = fun fl -> object
         { \n\
             return 1; \n\
         } \n\
-        int inited = __libcrunch_check_init (); \n\
-        if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
-        { \n\
-            return 1; \n\
-        } \n\
+        // int inited = __libcrunch_check_init (); \n\
+        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // { \n\
+        //     return 1; \n\
+        // } \n\
         \n\
         void * r = __libcrunch_typestr_to_uniqtype(typestr); \n\
         \n\
