@@ -36,4 +36,6 @@ test/section-group/lib1.so
 test/section-group/lib2.so
 test/section-group/section-group
 test/hello-sizeofness/hello-sizeofness
+test/hello-qualified-char/hello-qualified-char
+test/hello-array/hello-array
 allocsites/usedtypes
