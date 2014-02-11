@@ -38,6 +38,7 @@ test/section-group/section-group
 test/hello-sizeofness/hello-sizeofness
 test/hello-qualified-char/hello-qualified-char
 test/hello-array/hello-array
+test/hello-void/hello-void
 allocsites/usedtypes
 lib/libcrunch_noop.so
 lib/libcrunch_preload.so
