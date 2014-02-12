@@ -39,6 +39,7 @@ test/hello-sizeofness/hello-sizeofness
 test/hello-qualified-char/hello-qualified-char
 test/hello-array/hello-array
 test/hello-void/hello-void
+test/hello-indirect/hello-indirect
 allocsites/usedtypes
 lib/libcrunch_noop.so
 lib/libcrunch_preload.so
