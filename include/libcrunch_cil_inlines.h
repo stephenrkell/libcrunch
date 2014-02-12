@@ -1,4 +1,4 @@
-inline int __libcrunch_check_init(void)
+static inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void)
 {
 	if (__builtin_expect(! & __libcrunch_is_initialized, 0))
 	{
@@ -92,7 +92,7 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
 
 */
 
-inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype)
+static inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype)
 {
 	if (!obj) 
 	{ 
@@ -119,7 +119,7 @@ inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj,
 	return ret;
 }
 
-inline int __is_aS(const void *obj, const char *typestr)
+static inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const void *obj, const char *typestr)
 {
 	if (!obj)
 	{
