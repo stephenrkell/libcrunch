@@ -4,6 +4,13 @@
 
 /* Disable optimization to prevent compiler from un-indirecting 
  * our indirect calls. */
+ 
+struct S
+{
+	void *(*fn)(size_t);
+} s;
+
+void *(*fs[2])(size_t);
 
 int (__attribute__((optimize("O0"))) main)()
 {
@@ -27,12 +34,26 @@ int (__attribute__((optimize("O0"))) main)()
 	
 	fake = blah;
 	recovered = (int *) fake;
+	free(blah);
 
 	void *(***fn3)(size_t) = &fn2;
 	
 	blah = (int *) (***fn3)(200 * sizeof (int));
 	fake = blah;
 	recovered = (int *) fake;
+	free(blah);
+	
+	s.fn = &malloc;
+	blah = s.fn(200 * sizeof (int));
+	fake = blah;
+	recovered = (int *) fake;
+	free(blah);
+	
+	fs[1] = &malloc;
+	blah = fs[1](200 * sizeof (int));
+	fake = blah;
+	recovered = (int *) fake;
+	free(blah);
 	
 	return 0;
 }
