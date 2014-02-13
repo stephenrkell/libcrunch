@@ -1,62 +1,19 @@
 #include <stdlib.h>
 
-extern __thread void *__current_allocsite __attribute__((weak)); // defined by heap_index_hooks
+#include "stubgen.h"
 
-/* these are our per-allocfn wrappers */
+// xcalloc(zZ)p
+#define arglist_xcalloc(make_arg) make_arg(0, z), make_arg(1, Z)
+make_wrapper(xcalloc, p)
 
-// xcalloc(zZ)
+// xmalloc(Z)p
+#define arglist_xmalloc(make_arg) make_arg(0, Z)
+make_wrapper(xmalloc, p)
 
-extern void *__real_xcalloc(size_t nmemb, size_t size) __attribute__((weak));
-void *__wrap_xcalloc(size_t nmemb, size_t size)
-{
-	if (&__current_allocsite && !__current_allocsite)
-	{
-		__current_allocsite = __builtin_return_address(0);
-		void *retval = __real_xcalloc(nmemb, size);
-		__current_allocsite = (void*)0;
-		return retval;
-	}
-	else return __real_xcalloc(nmemb, size);
-}
-
-// xmalloc(Z)
-extern void *__real_xmalloc(size_t size) __attribute__((weak));
-void *__wrap_xmalloc(size_t size)
-{
-	if (&__current_allocsite && !__current_allocsite)
-	{
-		__current_allocsite = __builtin_return_address(0);
-		void *retval = __real_xmalloc(size);
-		__current_allocsite = (void*)0;
-		return retval;
-	}
-	else return __real_xmalloc(size);
-}
-
-// xrealloc(pZ) 
-extern void *__real_xrealloc(void *p, size_t size) __attribute__((weak));
-void *__wrap_xrealloc(void *p, size_t size)
-{
-	if (&__current_allocsite && !__current_allocsite)
-	{
-		__current_allocsite = __builtin_return_address(0);
-		void *retval = __real_xrealloc(p, size);
-		__current_allocsite = (void*)0;
-		return retval;
-	}
-	else return __real_xrealloc(p, size);
-}
+// xrealloc(pZ)p
+#define arglist_xrealloc(make_arg) make_arg(0, p), make_arg(1, Z)
+make_wrapper(xrealloc, p)
 
 // xmallocz(Z)
-extern void *__real_xmallocz(size_t size) __attribute__((weak));
-void *__wrap_xmallocz(size_t size)
-{
-	if (&__current_allocsite && !__current_allocsite)
-	{
-		__current_allocsite = __builtin_return_address(0);
-		void *retval = __real_xmallocz(size);
-		__current_allocsite = (void*)0;
-		return retval;
-	}
-	else return __real_xmallocz(size);
-}
+#define arglist_xmallocz(make_arg) make_arg(0, Z)
+make_wrapper(xmallocz, p)

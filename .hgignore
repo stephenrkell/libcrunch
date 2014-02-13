@@ -40,6 +40,7 @@ test/hello-qualified-char/hello-qualified-char
 test/hello-array/hello-array
 test/hello-void/hello-void
 test/hello-indirect/hello-indirect
+test/hello-stubgen/hello-stubgen
 allocsites/usedtypes
 lib/libcrunch_noop.so
 lib/libcrunch_preload.so
