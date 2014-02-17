@@ -293,7 +293,11 @@ class trumPtrExprVisitor = fun enclosingFile ->
   
   method vexpr (e: exp) : exp visitAction = 
     match e with 
-      (* Check casts, unless they only affect qualifiers we don't care about, or are casts to void* *)
+      (* Check casts, unless 
+         - FIXME: they are not to a pointer typesig
+         - they only affect qualifiers we don't care about
+         - they are casts to void* 
+       *)
       CastE(t, subex) -> if getConcreteType(Cil.typeSig(t)) = getConcreteType(Cil.typeSig(Cil.typeOf(subex))) then DoChildren else 
       if (getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TVoid([])), [])
        or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IChar, [])), [])
@@ -309,7 +313,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
             | Asm(attrs, instrs, locs, u, v, l) -> l
           end
           in
-          match t with 
+          match t with (* FIXME: match typesigs, not types! *)
             TPtr(ptdt, attrs) -> begin
               (* enqueue the tmp var decl, assignment and assertion *)
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
