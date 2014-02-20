@@ -127,7 +127,8 @@ let rec barenameFromSig ts =
    let rawString = match ts with 
      TInt(kind,attrs) -> (Pretty.sprint 80 (d_ikind () kind))
    | TFloat(kind,attrs) -> (Pretty.sprint 80 (d_fkind () kind))
-   | _ -> raise(Failure "bad base type")
+   | TBuiltin_va_list(attrs) -> "__builtin_va_list"
+   | _ -> raise(Failure ("bad base type: " ^ (Pretty.sprint 80 (Pretty.dprintf "%a" d_type ts))))
    in 
    Str.global_replace (Str.regexp "[. /-]") "_" (canonicalizeBaseTypeStr (trim rawString))
  in
