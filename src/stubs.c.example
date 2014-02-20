@@ -1,5 +1,8 @@
 #include <stdlib.h>
 
+/* This is now just an EXAMPLE stubs file. We autogenerate these files 
+ * in crunchcc, based on LIBCRUNCH_ALLOC_FNS. */
+
 #include "stubgen.h"
 
 // xcalloc(zZ)p
