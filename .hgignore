@@ -46,4 +46,4 @@ lib/libcrunch_noop.so
 lib/libcrunch_preload.so
 src/libcrunch_noop.so
 src/libcrunch_preload.so
-
+test/lazy-typing/lazy-typing
