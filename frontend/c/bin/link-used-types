@@ -42,7 +42,7 @@ objcopy_and_redefine () {
     our_objfile="$1"
     our_usedtypes_obj="$2"
     redefinition_args="$( symbol_redefinitions "$our_usedtypes_obj" )"
-    echo ${OBJCOPY} $redefinition_args "$our_objfile" && \
+    echo ${OBJCOPY} $redefinition_args "$our_objfile" 1>&2 && \
     ${OBJCOPY} $redefinition_args "$our_objfile" && \
     echo "objcopy renamed symbols in $our_objfile according to $redefinition_args" 1>&2
 }
