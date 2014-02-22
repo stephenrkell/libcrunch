@@ -7,6 +7,11 @@ int __is_a_internal(const void *obj, const void *r)
 	return 1;
 }
 
+int __like_a_internal(const void *obj, const void *r)
+{
+	return 1;
+}
+
 int __libcrunch_global_init(void)
 {
 	return 0;

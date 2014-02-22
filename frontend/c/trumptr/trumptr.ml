@@ -41,6 +41,7 @@
 open Pretty
 open Cil
 open Map
+open Str
 module NamedTypeMap = Map.Make(String)
 
 (* Module-ify Cil.tysSig *)
@@ -265,6 +266,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                            fun isAInternalFunDec ->
                            fun isASInlineFun ->
                            fun isAUInlineFun ->
+                           fun likeAUInlineFun ->
                            fun inlineAssertFun -> 
                                object(self)
   inherit nopCilVisitor
@@ -274,7 +276,11 @@ class trumPtrExprVisitor = fun enclosingFile ->
     currentInst := Some(i);
     DoChildren
   end
-  
+
+  val likeATypeNames = try begin
+    Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
+  end with Not_found -> []
+
   (* Remember the named types we've seen, so that we can map them back to
    * source code locations.
    * HACK: for now, don't bother maintaining separate namespaces for enums, structs and unions. *)
@@ -299,13 +305,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
          - they only affect qualifiers we don't care about
          - they are casts to void* 
        *)
-      CastE(t, subex) -> if getConcreteType(Cil.typeSig(t)) = getConcreteType(Cil.typeSig(Cil.typeOf(subex))) then DoChildren else 
-      if (getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TVoid([])), [])
-       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IChar, [])), [])
-       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(ISChar, [])), [])
-       or getConcreteType(Cil.typeSig(t)) = TSPtr(TSBase(TInt(IUChar, [])), [])
-       ) then DoChildren else begin
-          let () = Printf.printf "cast to typesig %s from %s needs checking!\n" (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) in
+      CastE(t, subex) -> if getConcreteType(Cil.typeSig(t)) = getConcreteType(Cil.typeSig(Cil.typeOf(subex))) then DoChildren else begin
           let location = match !currentInst with
             None -> {line = -1; file = "(unknown)"; byte = 0}
           | Some(i) -> begin match i with
@@ -314,13 +314,29 @@ class trumPtrExprVisitor = fun enclosingFile ->
             | Asm(attrs, instrs, locs, u, v, l) -> l
           end
           in
-          match t with (* FIXME: match typesigs, not types! *)
-            TPtr(ptdt, attrs) -> begin
+          let ts = getConcreteType(Cil.typeSig(t))
+          in
+          match ts with 
+            TSPtr(TSBase(TVoid([])), []) -> DoChildren
+          | TSPtr(TSBase(TInt(IChar, [])), []) -> DoChildren
+          | TSPtr(TSBase(TInt(ISChar, [])), []) -> DoChildren
+          | TSPtr(TSBase(TInt(IUChar, [])), []) -> DoChildren
+          | TSPtr(ptdts, attrs) -> begin
+              let () = Printf.printf "cast to typesig %s from %s needs checking!\n" (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) in
               (* enqueue the tmp var decl, assignment and assertion *)
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
               let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
-              let concreteType = getConcreteType (typeSig ptdt) in
+              let concreteType = getConcreteType ptdts in
               let symname = symnameFromSig concreteType in
+              (* FIXME: use List API! *)
+              let rec findLikeA barename l = match l with 
+                   [] -> None
+              | x::xs -> if x = barename then Some(barename) else findLikeA barename xs
+              in
+              let useLikeA = match (findLikeA (barenameFromSig ptdts) likeATypeNames) with
+                None -> false
+              | Some(_) -> true
+              in
               let (newMap, uniqtypeGlobalVar, newGlobals) = getOrCreateUniqtypeGlobal !uniqtypeGlobals symname concreteType enclosingFile.globals
               in 
               enclosingFile.globals <- newGlobals; 
@@ -330,7 +346,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 Set( (Var(exprTmpVar), NoOffset), e, locUnknown );
                 (* next enqueue the is_a call *)
                 Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
-                      (Lval(Var(isAUInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
+                      (Lval(Var(if useLikeA then likeAUInlineFun.svar else isAUInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
                       [ 
                         (* first arg is the expression result *)
                         Lval(Var(exprTmpVar), NoOffset);
@@ -345,7 +361,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                       [
                         (* arg is the check result *)
                         Lval(Var(checkTmpVar), NoOffset);
-                        Const(CStr("__is_aU(" ^ exprTmpVar.vname ^ ", &" ^ symname ^ ")"));
+                        Const(CStr((if useLikeA then "__like_aU(" else "__is_aU(") ^ exprTmpVar.vname ^ ", &" ^ symname ^ ")"));
                         Const(CStr( location.file ));
                         Const(CInt64(Int64.of_int (if location.line == -1 then 0 else location.line), IUInt, None));
                         Const(CStr( enclosingFunction.svar.vname ))
@@ -447,6 +463,11 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("typestr", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
   
+  val likeAInternalFunDec = makeExternalFunctionInFile fl "__like_a_internal" (TFun(intType, 
+                             Some [ ("obj", voidConstPtrType, []);
+                                   ("typestr", voidConstPtrType, []) ],
+                            false, [(*Attr("weak", [])*)]))
+  
   val assertFailFunDec = makeExternalFunctionInFile fl "__assert_fail" (TFun(voidType, 
                             Some [ 
                             ("assertion", charConstPtrType, []);
@@ -461,6 +482,7 @@ class trumPtrFunVisitor = fun fl -> object
   val mutable libcrunchCheckInitFun = emptyFunction "__libcrunch_check_init"
   val mutable isAUInlineFun = emptyFunction "__is_aU"
   val mutable isASInlineFun = emptyFunction "__is_aS"
+  val mutable likeAUInlineFun = emptyFunction "__like_aU"
   
 
   initializer
@@ -562,6 +584,43 @@ class trumPtrFunVisitor = fun fl -> object
       ("__is_aU", (Fv isAUInlineFun.svar)) ]; 
            (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
                 "unrecognised typename (see stack trace)"); *)
+
+    likeAUInlineFun <- makeInlineFunctionInFile fl likeAUInlineFun "__like_aU" (TFun(intType, 
+                            Some [ ("obj", voidConstPtrType, []);
+                                   ("r", voidConstPtrType, [])
+                                 ], 
+                            false, [])) "\
+        if (!%v:obj) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        // int inited = __libcrunch_check_init (); \n\
+        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // { \n\
+        //     return 1; \n\
+        // } \n\
+        \n\
+        /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
+         * linked with enough uniqtypes data. */ \n\
+        if (/*__builtin_expect(*/ !r/*, 0)*/) \n\
+        { \n\
+           __libcrunch_begun += 1; \n\
+           __libcrunch_aborted_typestr += 1; \n\
+             return 1; \n\
+        } \n\
+        /* No need for the char check in the CIL version */ \n\
+        // now we're really started \n\
+        __libcrunch_begun += 1; \n\
+        int ret = __like_a_internal(obj, r); \n\
+        return ret;"
+     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
+      ("warnx", (Fv warnxFunDec.svar)); 
+      ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
+      ("__libcrunch_begun", (Fv libcrunchBegun));
+      ("__like_a_internal", (Fv likeAInternalFunDec.svar)) ]; 
+           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
+                "unrecognised typename (see stack trace)"); *)
+    
     fl.globals <- newGlobalsList fl.globals [
          GVarDecl(libcrunchIsInitialized, {line = -1; file = "BLAH FIXME"; byte = 0});
          GVarDecl(libcrunchBegun, {line = -1; file = "BLAH FIXME"; byte = 0});
@@ -573,12 +632,13 @@ class trumPtrFunVisitor = fun fl -> object
          (* GFun(assertFailFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
          GFun(inlineAssertFun, {line = -1; file = "BLAH FIXME"; byte = 0});
          GFun(isAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); 
-         GFun(isASInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0})
+         GFun(isASInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0});
+         GFun(likeAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0})
          ] 
          isFunction
 
   method vfunc (f: fundec) : fundec visitAction = 
-      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec isASInlineFun isAUInlineFun inlineAssertFun in
+      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec isASInlineFun isAUInlineFun likeAUInlineFun inlineAssertFun in
       ChangeTo(visitCilFunction tpExprVisitor f)
 end
 

@@ -137,3 +137,30 @@ static inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const voi
 	return ret;
 
 }
+
+static inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const void *obj, const void *uniqtype)
+{
+	if (!obj) 
+	{ 
+		return 1; 
+	} 
+	// int inited = __libcrunch_check_init (); 
+	// if (__builtin_expect((inited == -1), 0)) 
+	// { 
+	//	 return 1; 
+	// } 
+	
+	/* Null uniqtype means __is_aS got a bad typestring, OR we're not  
+	 * linked with enough uniqtypes data. */ 
+	if (__builtin_expect( !uniqtype, 0)) 
+	{ 
+	   __libcrunch_begun += 1; 
+	   __libcrunch_aborted_typestr += 1; 
+		 return 1; 
+	} 
+	/* No need for the char check in the CIL version */ 
+	// now we're really started 
+	__libcrunch_begun += 1; 
+	int ret = __like_a_internal(obj, uniqtype); 
+	return ret;
+}
