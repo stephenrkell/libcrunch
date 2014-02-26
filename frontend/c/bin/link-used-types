@@ -33,9 +33,11 @@ link_defining_aliases () {
 
 symbol_redefinitions () {
     f="$1"
+    # Here we are renaming codeless symnames with codeful ones, for the codeful
+    # ones that are defined in our temporary (usedtypes) object file. 
     nm -fposix --defined-only "$f" | tr -s '[:blank:]' '\t' | cut -f1 | \
-      grep '__uniqtype_' | \
-      sed -r 's/__uniqtype_([0-9a-f]{7,8})_(.*)/--redefine-sym __uniqtype__\2=__uniqtype_\1_\2/'
+      egrep '__uniqtype_([0-9a-f]{8})_' | \
+      sed -r 's/__uniqtype_([0-9a-f]{8})_(.*)/--redefine-sym __uniqtype__\2=__uniqtype_\1_\2/'
 }
 
 objcopy_and_redefine () {
