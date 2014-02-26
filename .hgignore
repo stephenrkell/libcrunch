@@ -48,3 +48,4 @@ src/libcrunch_noop.so
 src/libcrunch_preload.so
 test/lazy-typing/lazy-typing
 test/like-a/like-a
+test/sloppy-dumptypes/sloppy-dumptypes
