@@ -5,6 +5,8 @@ objfile="$1"
 test -n "$objfile" || (echo "Please specify an object file"; false) || exit 1
 
 USEDTYPES=${USEDTYPES:-$( dirname $0 )/../../../allocsites/usedtypes}
+LOWER_TYPENAMES=${LOWER_TYPENAMES:-$( dirname $0 )/../src/lower-typenames}
+BASE_TYPES_TRANSLATION=${BASE_TYPES_TRANSLATION:-$( dirname $0 )/../src/base-types-translation}
 CC=${CC:-$(which cc)}
 LD=${LD:-$(which ld)}
 OBJCOPY=${OBJCOPY:-$(which objcopy)}
@@ -40,19 +42,73 @@ symbol_redefinitions () {
       sed -r 's/__uniqtype_([0-9a-f]{8})_(.*)/--redefine-sym __uniqtype__\2=__uniqtype_\1_\2/'
 }
 
-objcopy_and_redefine () {
+objcopy_and_redefine_c_names () {
+    our_objfile="$1"
+    
+    signpost_frag_regexp="__ARG[0-9]+_|__PTR_|__REF_|__RR_|__ARR[0-9]+_|__FUN_FROM_|__FUN_TO_|__VA_"
+    type_pred_regexp="__uniqtype__|${signpost_frag_regexp}"
+    type_succ_regexp="${signpost_frag_regexp}|\$"
+    
+    candidate_symnames="$( nm -fposix -u "$our_objfile" | \
+sed -r 's/[[:blank:]]*U[[:blank:]]*$//' | grep __uniqtype__ )"
+    # join the substitutions into a big sed program
+    sed_program=""
+    while read c_base canon_base; do
+        sed_program="${sed_program}; s/(${type_pred_regexp})${c_base}(${type_succ_regexp})/\1${canon_base}\2/g"
+    done<<<"$( ${BASE_TYPES_TRANSLATION} "$our_objfile" )"
+    
+    echo "sed program is $sed_program" 1>&2
+    if [[ -n "$( echo "$sed_program" | tr -d '[:blank:]' )" ]]; then
+
+        # make a --defsym for each candidate symname
+        first_redefinition_args="$( while read cand; do
+            # apply the substitutions to this symname, til a fixed point
+            canon="$( echo "$cand" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" | \
+                sed -r "$sed_program" )"
+            # if any substitutions took effect, issue a redefine-sym command
+            if [[ "$cand" != "$canon" ]]; then
+                echo "--redefine-sym ${cand}=${canon}"
+            fi
+        done<<<"${candidate_symnames}" )"
+
+        # first, lower all undef typenames to canonical ones (but staying codeless)
+        echo ${OBJCOPY} $first_redefinition_args "$our_objfile" 1>&2 && \
+        ${OBJCOPY} $first_redefinition_args "$our_objfile" && \
+        echo "objcopy renamed symbols in $our_objfile according to $first_redefinition_args" 1>&2
+        
+    else
+        echo "No need to replace any C typenames" 1>&2
+    fi
+}
+
+objcopy_and_redefine_codeless_names () {
+    # FIXME: this step is not language-dependent 
+    # so should be in allocsites, not frontend/c
     our_objfile="$1"
     our_usedtypes_obj="$2"
-    redefinition_args="$( symbol_redefinitions "$our_usedtypes_obj" )"
-    echo ${OBJCOPY} $redefinition_args "$our_objfile" 1>&2 && \
-    ${OBJCOPY} $redefinition_args "$our_objfile" && \
-    echo "objcopy renamed symbols in $our_objfile according to $redefinition_args" 1>&2
+    
+    # now, fill in the codeful names for codeless ones
+    second_redefinition_args="$( symbol_redefinitions "$our_usedtypes_obj" )" && \
+    echo ${OBJCOPY} $second_redefinition_args "$our_objfile" 1>&2 && \
+    ${OBJCOPY} $second_redefinition_args "$our_objfile" && \
+    echo "objcopy renamed symbols in $our_objfile according to $second_redefinition_args" 1>&2
 }
 
 echo ${USEDTYPES} "$objfile" 1>&2 # for debugging
-( ${USEDTYPES} "$objfile" > "$usedtypes_src" && \
-   compile "$usedtypes_src" "$usedtypes_obj" && \
-   objcopy_and_redefine "$objfile" "$usedtypes_obj" && \
+(  objcopy_and_redefine_c_names "$objfile" && \
+   ${USEDTYPES} "$objfile" > "$usedtypes_src" && \
+   compile "$usedtypes_src" "$usedtypes_obj" && 
+   objcopy_and_redefine_codeless_names "$objfile" "$usedtypes_obj" && \
    link_defining_aliases "$objfile" "$usedtypes_obj") || (echo NOT REALLY rm -f "$objfile" ; exit 1)
 
 # rm -f "$usedtypes_src" "$usedtypes_obj"
