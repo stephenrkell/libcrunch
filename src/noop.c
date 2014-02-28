@@ -21,3 +21,8 @@ const void *__libcrunch_typestr_to_uniqtype(const void *r)
 {
 	return NULL;
 }
+
+void __check_alloc_indexed(void *ptr)
+{
+
+}

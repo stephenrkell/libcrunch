@@ -109,6 +109,6 @@ echo ${USEDTYPES} "$objfile" 1>&2 # for debugging
    ${USEDTYPES} "$objfile" > "$usedtypes_src" && \
    compile "$usedtypes_src" "$usedtypes_obj" && 
    objcopy_and_redefine_codeless_names "$objfile" "$usedtypes_obj" && \
-   link_defining_aliases "$objfile" "$usedtypes_obj") || (echo NOT REALLY rm -f "$objfile" ; exit 1)
+   link_defining_aliases "$objfile" "$usedtypes_obj") || (echo NOT REALLY rm -f "$objfile" 1>&2 ; exit 1)
 
 # rm -f "$usedtypes_src" "$usedtypes_obj"
