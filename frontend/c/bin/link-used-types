@@ -53,6 +53,7 @@ objcopy_and_redefine_c_names () {
 sed -r 's/[[:blank:]]*U[[:blank:]]*$//' | grep __uniqtype__ )"
     # join the substitutions into a big sed program
     sed_program=""
+    echo ${BASE_TYPES_TRANSLATION} "$our_objfile" 1>&2
     while read c_base canon_base; do
         sed_program="${sed_program}; s/(${type_pred_regexp})${c_base}(${type_succ_regexp})/\1${canon_base}\2/g"
     done<<<"$( ${BASE_TYPES_TRANSLATION} "$our_objfile" )"

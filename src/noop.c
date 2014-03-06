@@ -22,7 +22,6 @@ const void *__libcrunch_typestr_to_uniqtype(const void *r)
 	return NULL;
 }
 
-void __check_alloc_indexed(void *ptr)
-{
+void __index_deep_alloc(void *ptr, int level, unsigned size_bytes) {}
+void __unindex_deep_alloc(void *ptr, int level) {}
 
-}
