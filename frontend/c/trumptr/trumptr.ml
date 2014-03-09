@@ -115,6 +115,12 @@ else if (s = "wchar_t" or  false) then "wchar_t"
                We can't get the declaring file/line ("location" in CIL-speak) from a typesig,
                nor from its type -- we need the global.  *)
 
+(* WORKAROUND for CIL's anonymous structure types: 
+   we undo the numbering (set to 1) and hope for the best. *)
+let hackTypeName s = if (string_match (regexp "__anonstruct_.*_[0-9]+$") s 0)
+   then Str.global_replace (Str.regexp "_[0-9]+$") "_1" s
+   else s
+
 let rec barenameFromSig ts = 
  let rec labelledArgTs ts startAt =
    match ts with
@@ -136,7 +142,7 @@ let rec barenameFromSig ts =
  match ts with
    TSArray(tNestedSig, optSz, attrs) -> "__ARR" ^ (match optSz with Some(s) -> (string_of_int (i64_to_int s)) | None -> "0") ^ "_" ^ (barenameFromSig tNestedSig)
  | TSPtr(tNestedSig, attrs) -> "__PTR_" ^ (barenameFromSig tNestedSig)
- | TSComp(isSpecial, name, attrs) -> name
+ | TSComp(isSpecial, name, attrs) -> (hackTypeName name)
  | TSFun(returnTs, argsTss, isSpecial, attrs) -> 
       "__FUN_FROM_" ^ (labelledArgTs argsTss 0) ^ (if isSpecial then "__VA_" else "") ^ "__FUN_TO_" ^ (barenameFromSig returnTs) 
  | TSEnum(enumName, attrs) -> enumName
