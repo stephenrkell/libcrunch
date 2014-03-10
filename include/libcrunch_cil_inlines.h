@@ -52,7 +52,7 @@ static inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_i
 	} while (0)
 #endif
 
-extern inline int __attribute__((always_inline,gnu_inline)) __is_aU(const void *obj, struct rec *r)
+extern inline int __attribute__((always_inline,gnu_inline)) __is_aU(const void *obj, struct uniqtype *r)
 {
 	LIBCRUNCH_BASIC_CHECKS;
 	
@@ -85,7 +85,7 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
 {
 	LIBCRUNCH_BASIC_CHECKS;
 	
-	const struct rec * r = __libcrunch_typestr_to_uniqtype(typestr);
+	const struct uniqtype * r = __libcrunch_typestr_to_uniqtype(typestr);
 
 	return __is_aU(obj, r);
 }
