@@ -117,7 +117,7 @@ else if (s = "wchar_t" or  false) then "wchar_t"
 
 (* WORKAROUND for CIL's anonymous structure types: 
    we undo the numbering (set to 1) and hope for the best. *)
-let hackTypeName s = if (string_match (regexp "__anonstruct_.*_[0-9]+$") s 0)
+let hackTypeName s = if (string_match (regexp "__anon\\(struct\\|union\\|enum\\)_.*_[0-9]+$") s 0)
    then Str.global_replace (Str.regexp "_[0-9]+$") "_1" s
    else s
 
