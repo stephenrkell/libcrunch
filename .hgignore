@@ -50,3 +50,5 @@ test/lazy-typing/lazy-typing
 test/like-a/like-a
 test/sloppy-dumptypes/sloppy-dumptypes
 frontend/c/src/base-types-translation
+test/hello-union/hello-union
+*.s
