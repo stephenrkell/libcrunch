@@ -45,43 +45,24 @@ symbol_redefinitions () {
 objcopy_and_redefine_c_names () {
     our_objfile="$1"
     
-    signpost_frag_regexp="__ARG[0-9]+_|__PTR_|__REF_|__RR_|__ARR[0-9]+_|__FUN_FROM_|__FUN_TO_|__VA_"
-    type_pred_regexp="__uniqtype__|${signpost_frag_regexp}"
-    type_succ_regexp="${signpost_frag_regexp}|\$"
-    
     candidate_symnames="$( nm -fposix -u "$our_objfile" | \
 sed -r 's/[[:blank:]]*U[[:blank:]]*$//' | grep __uniqtype__ )"
-    # join the substitutions into a big sed program
-    sed_program=""
-    echo ${BASE_TYPES_TRANSLATION} "$our_objfile" 1>&2
-    while read c_base canon_base; do
-        sed_program="${sed_program}; s/(${type_pred_regexp})${c_base}(${type_succ_regexp})/\1${canon_base}\2/g"
-    done<<<"$( ${BASE_TYPES_TRANSLATION} "$our_objfile" )"
-    
+
     echo "sed program is $sed_program" 1>&2
-    if [[ -n "$( echo "$sed_program" | tr -d '[:blank:]' )" ]]; then
 
-        # make a --defsym for each candidate symname
-        first_redefinition_args="$( while read cand; do
-            # apply the substitutions to this symname, til a fixed point
-            canon="$( echo "$cand" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" | \
-                sed -r "$sed_program" )"
-            # if any substitutions took effect, issue a redefine-sym command
-            if [[ "$cand" != "$canon" ]]; then
-                echo "--redefine-sym ${cand}=${canon}"
-            fi
-        done<<<"${candidate_symnames}" )"
-
+    # we need to push candidates into the filter and see what comes out;
+    # if it changes, add a --redefine-sym option to the list 
+    
+    . $( dirname $0 )/../lib/symname-funcs.sh
+    
+    # if any substitutions took effect, issue a redefine-sym command
+    while read cand && read canon <&3; do
+        if [[ "$cand" != "$canon" ]]; then
+            first_redefinition_args="${first_redefinition_args} --redefine-sym ${cand}=${canon}"
+        fi
+    done<<<"${candidate_symnames}" 3<<<"$( echo "${candidate_symnames}" | translate_symnames "$our_objfile" )"
+    
+    if [[ -n "${first_redefinition_args}" ]]; then
         # first, lower all undef typenames to canonical ones (but staying codeless)
         echo ${OBJCOPY} $first_redefinition_args "$our_objfile" 1>&2 && \
         ${OBJCOPY} $first_redefinition_args "$our_objfile" && \
