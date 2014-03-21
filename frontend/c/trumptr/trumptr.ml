@@ -149,6 +149,8 @@ let rec barenameFromSig ts =
  | TSBase(TVoid(attrs)) -> "void"
  | TSBase(tbase) -> baseTypeStr tbase
 
+let userTypeNameToBareName s = Str.global_replace (Str.regexp "[. /-]") "_" (canonicalizeBaseTypeStr (trim s))
+
 let symnameFromSig ts = "__uniqtype_" ^ "" ^ "_" ^ (barenameFromSig ts)
 
 (* Return an expression that evaluates to the address of the given lvalue.
@@ -283,6 +285,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
     DoChildren
   end
 
+  val likeAStr =  try begin
+    (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
+  end with Not_found -> ""
+  
   val likeATypeNames = try begin
     Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
   end with Not_found -> []
@@ -328,7 +334,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
           | TSPtr(TSBase(TInt(ISChar, [])), []) -> DoChildren
           | TSPtr(TSBase(TInt(IUChar, [])), []) -> DoChildren
           | TSPtr(ptdts, attrs) -> begin
-              let () = Printf.printf "cast to typesig %s from %s needs checking!\n" (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) in
+              output_string Pervasives.stderr ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
               (* enqueue the tmp var decl, assignment and assertion *)
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
               let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
@@ -337,11 +343,19 @@ class trumPtrExprVisitor = fun enclosingFile ->
               (* FIXME: use List API! *)
               let rec findLikeA barename l = match l with 
                    [] -> None
-              | x::xs -> if x = barename then Some(barename) else findLikeA barename xs
+              | x::xs -> if (userTypeNameToBareName x) = barename then Some(barename) else findLikeA barename xs
               in
-              let useLikeA = match (findLikeA (barenameFromSig ptdts) likeATypeNames) with
-                None -> false
-              | Some(_) -> true
+              let concretePtdts = (getConcreteType ptdts) 
+              in 
+              let canonicalName = barenameFromSig concretePtdts
+              in
+              let useLikeA = match (findLikeA canonicalName likeATypeNames) with
+                None ->
+                    output_string Pervasives.stderr ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                    false
+              | Some(_) -> 
+                    output_string Pervasives.stderr ("using __like_a! because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                    true
               in
               let (newMap, uniqtypeGlobalVar, newGlobals) = getOrCreateUniqtypeGlobal !uniqtypeGlobals symname concreteType enclosingFile.globals
               in 
