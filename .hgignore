@@ -52,3 +52,6 @@ test/sloppy-dumptypes/sloppy-dumptypes
 frontend/c/src/base-types-translation
 test/hello-union/hello-union
 *.s
+allocsites/find-allocated-type-size
+test/simple-multi-alloc/simple-multi-alloc
+test/hello-funptr/hello-funptr

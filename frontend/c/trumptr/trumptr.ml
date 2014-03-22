@@ -272,6 +272,7 @@ let getOrCreateUniqtypeGlobal m typename concreteType globals =
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
                            fun isAInternalFunDec ->
+                           fun checkArgsInternalFunDec -> 
                            fun isASInlineFun ->
                            fun isAUInlineFun ->
                            fun likeAUInlineFun ->
@@ -279,19 +280,85 @@ class trumPtrExprVisitor = fun enclosingFile ->
                                object(self)
   inherit nopCilVisitor
 
-  val currentInst : instr option ref = ref None
-  method vinst (i: instr) : instr list visitAction = begin
-    currentInst := Some(i);
-    DoChildren
-  end
-
   val likeAStr =  try begin
     (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
   end with Not_found -> ""
+
+  val sloppyFps = try begin
+    let envstr = (Sys.getenv "LIBCRUNCH_SLOPPY_FUNCTION_POINTERS")
+    in (String.length envstr) > 0
+  end with Not_found -> false
   
   val likeATypeNames = try begin
     Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
   end with Not_found -> []
+
+  val currentInst : instr option ref = ref None
+  method vinst (i: instr) : instr list visitAction = begin
+    currentInst := Some(i);
+    (* We handle indirect calls here. *)
+    if sloppyFps then begin
+        match i with 
+          Call(_, funExpr, args, location) -> begin
+            let getFunctionPointerTypeSig fexp : Cil.typsig option = 
+               match fexp with 
+                 Lval(Var(v), NoOffset) -> None (* not a function pointer *)
+             |   _ -> Some(typeSig (typeOf fexp))
+            in
+            let maybeFpts = getFunctionPointerTypeSig funExpr
+            in
+            match maybeFpts with
+            |   Some(fpts) -> begin
+                    (* For each pointer argument, we insert a check that the argument satisfies __is_a (or __like_a)
+                     * with the argument that the *called* function expects to receive. How do we get at the called
+                     * function's uniqtype? *)
+                    let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
+                    let makeCheckArgArg expr = 
+                        (* If the arg type is an integer or a pointer or enum, we just pass the arg
+                         * cast to a long. Otherwise it's a pass-by-value struct or union and we
+                         * pass zero. *)
+                        match (Cil.typeSig (Cil.typeOf expr)) with
+                        | TSBase(_) -> CastE(TInt(ILong, []), expr)
+                        | TSPtr(_, _) -> CastE(TInt(ILong, []), expr)
+                        | TSEnum(_, _) -> CastE(TInt(ILong, []), expr)
+                        | _ -> Const(CInt64((Int64.of_int 0), IInt, None))
+                    in 
+                    self#queueInstr [
+                      (* enqueue the checkargs call *)
+                      Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
+                            (Lval(Var(checkArgsInternalFunDec),NoOffset)),  (* lvalue of function to call *)
+                            [ 
+                              (* first arg is the function pointer *)
+                              funExpr; 
+                              (* second argument is the number of args *we're* passing *)
+                              Const(CInt64(Int64.of_int(List.length args), IInt, None))
+                            ] @ (List.map makeCheckArgArg args) (* remaining args are the same as we're passing *),
+                            locUnknown
+                      );
+                      (* then enqueue the assertion about its result *)
+                      Call( None,
+                            (Lval(Var(inlineAssertFun.svar),NoOffset)),
+                            [
+                              (* arg is the expression: check result == 0 *)
+                              BinOp(Eq, Lval(Var(checkTmpVar), NoOffset), Const(CInt64(Int64.of_int(0), IInt, None)), Cil.intType);
+                              Const(CStr("args check FIXME better message please"));
+                              Const(CStr( location.file ));
+                              Const(CInt64(Int64.of_int (if location.line == -1 then 0 else location.line), IUInt, None));
+                              Const(CStr( enclosingFunction.svar.vname ))
+                            ],
+                            locUnknown
+                      )
+                      (* FIXME: also force a cast if the typesig of the function ptr is a ptr. 
+                       * Can we do this by pretending that a pointer-returning function returns void*? *)
+                    ];
+                    DoChildren
+                end
+            |   None -> DoChildren
+           end
+      | _ -> DoChildren
+      end
+    else DoChildren
+  end
 
   (* Remember the named types we've seen, so that we can map them back to
    * source code locations.
@@ -317,14 +384,26 @@ class trumPtrExprVisitor = fun enclosingFile ->
          - they only affect qualifiers we don't care about
          - they are casts to void* 
        *)
-      CastE(t, subex) -> if getConcreteType(Cil.typeSig(t)) = getConcreteType(Cil.typeSig(Cil.typeOf(subex))) then DoChildren else begin
+      CastE(t, subex) -> 
+          let subexTs = getConcreteType(Cil.typeSig(Cil.typeOf(subex)))
+          in 
+          let targetTs = getConcreteType(Cil.typeSig(t))
+          in
+          let tsIsFunctionPointer ts = 
+              match ts with
+                  TSPtr(TSFun(_, _, _, _), _) -> true
+                | _ -> false
+          in 
+          if targetTs = subexTs then DoChildren else 
+          (* from any pointer (or int) to any function pointer is okay -- we check on use *)
+          if (sloppyFps && (tsIsFunctionPointer targetTs)) then DoChildren else begin
           let location = match !currentInst with
             None -> {line = -1; file = "(unknown)"; byte = 0}
           | Some(i) -> begin match i with
-            | Set(lv, e, l) -> l
-            | Call(olv, e, es, l) -> l
-            | Asm(attrs, instrs, locs, u, v, l) -> l
-          end
+                | Set(lv, e, l) -> l
+                | Call(olv, e, es, l) -> l
+                | Asm(attrs, instrs, locs, u, v, l) -> l
+            end
           in
           let ts = getConcreteType(Cil.typeSig(t))
           in
@@ -391,11 +470,11 @@ class trumPtrExprVisitor = fun enclosingFile ->
               ];
               (* change to a reference to the decl'd tmp var *)
               ChangeTo ( CastE(t, subex) )
-            end
+            end (* end TSPtr other cases *)
           | _ -> DoChildren
-        end 
+        end  (* end CastE case *)
     | _ -> DoChildren
-end
+end (* end match e *)
 
 let makeExternalFunctionInFile fl nm proto = (* findOrCreateFunc fl nm proto *) (* NO! doesn't let us have the fundec *)
   let funDec = emptyFunction nm in
@@ -487,6 +566,11 @@ class trumPtrFunVisitor = fun fl -> object
                              Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
+
+  val checkArgsInternalFunDec = makeExternalFunctionInFile fl "__check_args_internal" (TFun(intType, 
+                             Some [ ("obj", voidConstPtrType, []);
+                                   ("nargs", intType, []) ],
+                            true, [(*Attr("weak", [])*)]))
   
   val assertFailFunDec = makeExternalFunctionInFile fl "__assert_fail" (TFun(voidType, 
                             Some [ 
@@ -658,7 +742,7 @@ class trumPtrFunVisitor = fun fl -> object
          isFunction
 
   method vfunc (f: fundec) : fundec visitAction = 
-      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec isASInlineFun isAUInlineFun likeAUInlineFun inlineAssertFun in
+      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun inlineAssertFun in
       ChangeTo(visitCilFunction tpExprVisitor f)
 end
 

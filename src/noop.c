@@ -12,6 +12,11 @@ int __like_a_internal(const void *obj, const void *r)
 	return 1;
 }
 
+int __check_args_internal(const void *obj, int nargs, ...)
+{
+	return 0;
+}
+
 int __libcrunch_global_init(void)
 {
 	return 0;
