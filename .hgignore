@@ -55,3 +55,5 @@ test/hello-union/hello-union
 allocsites/find-allocated-type-size
 test/simple-multi-alloc/simple-multi-alloc
 test/hello-funptr/hello-funptr
+src/libdumpsmaps.so
+test/fail-funptr/fail-funptr
