@@ -1,10 +1,17 @@
 Correctness / usability to-do:
 
-fix lack of fps in frame layouts
+fix the incomplete types bug (requires CIL fix)
 
-generate typedescs for subprograms
+use the uniqtype cache word to actually do some caching
 
-check typestr consistency (OCaml <-> C++)
+relaxations for higher-order checks
+- function pointer wrappers? hmm...
+- mprotect() for write-through-void** and similar cases?
+- check-on-use instrumentation
+
+multithreaded programs: walking other threads' stacks
+
+multithreaded programs: lock-free memtable algs
 
 namespace-aware typestrs
 *** issue with struct/union/enum tags: 
@@ -19,33 +26,3 @@ namespace-aware typestrs
             then generate C-style names for them
             though DWARF doesn't record extern-Cness
 
-better sizeof-scraping
-
-automatically generate malloc-wrapper stubs
-
-support function pointer casts via wrappers
-
-** check-on-use instrumentation
-
-C-side caching of uniqtypes
-
-
-performance of libunwind?
-
-test 32(fp)-vs-64(nofp) perf
-
-multithreaded programs: walking other threads' stacks
-
-multithreaded programs: lock-free memtable algs
-
-
-Many, many optimisations:
-- fix inlining
-- cache recent search results in each uniqtype
-- don't call libunwind as much (see STACK case)
-- cache allocated uniqtype in heap trailer
-- separate table(s) for large objects
-
-Safeguards:
-- check that my "maximum vaddr range" holds
-- check that my "maximum static object size" holds
