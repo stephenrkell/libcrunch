@@ -31,24 +31,21 @@ Current limitations of metadata
 
 - no metadata (debug info) for actual parameters passed in varargs
 - no metadata (debug info) for address-taken temporaries
-- sizeof scraping is not completely reliable
-- heap metadata (sizeof-scraping) for indirect calls to allocation funcs
+- sizeof scraping is not completely reliable (but is really not bad)
 
 Current performance quirks
 
-- slow for on-stack data
-- slow (currently) for static data
-- heap_index's trailer implementation causes clownshoes bugs
+- heap_index's trailer implementation causes page-sized clownshoes
+- nested allocators sometimes slow down metadata quite a bit (bug!)
 
 Current usability quirks 
 
-- can't provide typedefs to __is_a (very fixable)
-- requires manual identification of alloc functions (--alloc-fn) (*)
-- requires manual instrumentation of external allocators
+- requires manual identification of alloc functions
 
 Current completeness quirks
 
 - assumes memory-correct execution
 - C frontend (trumptr) only instruments casts
 - ... i.e. check-on-cast is too eager for some C programming styles
-
+- higher-order (indirect, pointer-to-function) checks are conservative
+- ... i.e. false positives are possible in these cases
