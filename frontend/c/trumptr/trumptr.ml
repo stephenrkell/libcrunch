@@ -117,9 +117,9 @@ else if (s = "wchar_t" or  false) then "wchar_t"
 
 (* WORKAROUND for CIL's anonymous structure types: 
    we undo the numbering (set to 1) and hope for the best. *)
-let hackTypeName s = if (string_match (regexp "__anon\\(struct\\|union\\|enum\\)_.*_[0-9]+$") s 0)
+let hackTypeName s = (*if (string_match (regexp "__anon\\(struct\\|union\\|enum\\)_.*_[0-9]+$") s 0)
    then Str.global_replace (Str.regexp "_[0-9]+$") "_1" s
-   else s
+   else*) s
 
 let rec barenameFromSig ts = 
  let rec labelledArgTs ts startAt =
@@ -183,8 +183,8 @@ let addr_of_lv (lh,lo) =
 (* This effectively embodies our "default specification" for C code
  * -- it controls what we assert in "__is_a" tests, and
  * needs to mirror what we record for allocation sites in dumpallocs *)
-let rec getConcreteType tsig =
- match tsig with
+let rec getConcreteType ts =
+ match ts with
    TSArray(tsig, optSz, attrs) -> getConcreteType tsig
  | TSPtr(tsig, attrs) -> TSPtr(getConcreteType tsig, []) (* stays a pointer, but discard attributes *)
  | TSComp(isSpecial, name, attrs) -> TSComp(isSpecial, name, [])
@@ -193,9 +193,45 @@ let rec getConcreteType tsig =
  | TSBase(TVoid(attrs)) -> TSBase(TVoid([]))
  | TSBase(TInt(kind,attrs)) -> TSBase(TInt(kind, []))
  | TSBase(TFloat(kind,attrs)) -> TSBase(TFloat(kind, []))
- | _ -> tsig
+ | _ -> ts
 
-  
+let findCompDefinitionInFile isStruct name wholeFile = 
+    let rec findCompGlobal iss n globals = 
+        match globals with
+            []       -> None
+        |   g :: gs  -> begin match g with
+                GCompTag(ci, _) -> if ci.cstruct = isStruct && ci.cname = name then Some(g) else findCompGlobal iss n gs
+              | _ -> findCompGlobal iss n gs
+            end
+    in
+    findCompGlobal isStruct name wholeFile.globals
+
+(* How we deal with incompletes. 
+ * 
+ * incompletes themselves: by default, don't check anything (treat them like void)
+ *     because the name of an incomplete type is arbitrary
+ *     BUT, at the user's request, allow __named_a check (TODO).
+ *
+ * types built out of incompletes (__PTR_incomplete, __FUN_FROM_ ptr-to-incomplete, etc.)
+ *
+ *     we want to check only the "shape". This is a tricky relation to 
+ *     uncover in our uniqtypes. We basically need a function that can 
+ *     do a deep "like a" seeing through functions, pointers and arrays,
+ *     where our test type substitutes void (or empty) for the incomplete.
+ *     It feels like a lot of faff for little reward, sadly. *)
+
+let rec tsIsUndefinedType ts wholeFile = 
+    let rec anyTsIsUndefined tss = match tss with
+        []          -> false
+      | ts1 :: more -> (tsIsUndefinedType ts1 wholeFile) || (anyTsIsUndefined more)
+    in
+    match ts with
+        TSArray(tsig, optSz, attrs)                 -> tsIsUndefinedType tsig wholeFile
+    |   TSPtr(tsig, attrs)                          -> tsIsUndefinedType tsig wholeFile
+    |   TSComp(isStruct, name, attrs)               -> (findCompDefinitionInFile isStruct name wholeFile) = None
+    |   TSFun(returnTs, argsTss, isVarargs, attrs)  -> tsIsUndefinedType returnTs wholeFile || anyTsIsUndefined argsTss
+    |   _                                           -> false
+
   (* CIL "expressions" are defined to be side-effect-free. Side-effecting
      operations are pushed into "instructions". Since we want to insert
      a call to assert(), which is side-effecting, we need to visit instructions.
