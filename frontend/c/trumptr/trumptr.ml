@@ -294,6 +294,7 @@ let getOrCreateUniqtypeGlobal m typename concreteType globals =
        let tempGlobal = makeGlobalVar typename (TInt(IInt, [])); 
        in 
        tempGlobal.vstorage <- Extern;
+       tempGlobal.vattr <- [Attr("weak", [])];
        tempGlobal
      in
      let newGlobalVarInfo = GVarDecl(newGlobal, {line = -1; file = "BLAH FIXME"; byte = 0})

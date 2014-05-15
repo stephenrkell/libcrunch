@@ -46,7 +46,7 @@ objcopy_and_redefine_c_names () {
     our_objfile="$1"
     
     candidate_symnames="$( nm -fposix -u "$our_objfile" | \
-sed -r 's/[[:blank:]]*U[[:blank:]]*$//' | grep __uniqtype__ )"
+sed -r 's/[[:blank:]]*[Uw][[:blank:]]*$//' | grep __uniqtype__ )"
 
     echo "sed program is $sed_program" 1>&2
 

@@ -1,6 +1,4 @@
-CFLAGS += -std=gnu99 -g -O3 -fPIC -DNDEBUG -I../include
-HEAP_INDEX_HOOKS := heap_index_fast_hooks
-#HEAP_INDEX_HOOKS := heap_index_hooks
+CFLAGS += -std=gnu99 -g -O3 -flto -fPIC -DNDEBUG -I../include
 
 CXXFLAGS := $(filter-out -std=%,$(CFLAGS)) -std=c++11
 
@@ -16,7 +14,7 @@ endif
 default: libcrunch_preload.so libcrunch_noop.so libcrunch_noop.o
 
 # for addrmap.c and fake-libunwind.c
-vpath %.c $(PMIRROR)/src
+vpath %.c $(LIBALLOCS)/src
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
 C_SRC += fake-libunwind.c
@@ -43,18 +41,18 @@ $(CC_DEPS): .%.d : %.cc
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
-libcrunch_preload.so: libcrunch.o preload.o l0index.o maps.o addrmap.o $(FAKE_LIBUNWIND_OBJ) $(PMIRROR)/lib/lib$(HEAP_INDEX_HOOKS).a
-	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %hooks.a,$^) $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,--whole-archive -Wl,-Bstatic -l$(HEAP_INDEX_HOOKS) -Wl,--no-whole-archive -Wl,-Bdynamic 
+libcrunch_preload.so: libcrunch.o $(FAKE_LIBUNWIND_OBJ) $(LIBALLOCS)/lib/liballocs_preload.a
+	$(CC) $(CFLAGS) -O4 -flto -Wl,-O2 -shared -o "$@" $(filter-out %allocs_preload.a,$^) $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload -Wl,--no-whole-archive -Wl,-Bdynamic 
 
 libdumpsmaps.so: libdumpsmaps.o
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %hooks.a,$^) $(LDFLAGS) 
 
-libcrunch_nomemtable_preload.so: libcrunch_nomemtable.o preload.o l0index.o maps.o addrmap.o $(FAKE_LIBUNWIND_OBJ) dummy_thread_locals.o
+libcrunch_nomemtable_preload.so: libcrunch_nomemtable.o $(FAKE_LIBUNWIND_OBJ) dummy_thread_locals.o
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %hooks.a,$^) $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS)
 
 # this version lacks preload stuff
-libcrunch.so: libcrunch.o l0index.o maps.o addrmap.o $(FAKE_LIBUNWIND_OBJ)
-	$(CC) $(CFLAGS) -shared -o "$@" $^ $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) #-lheap_index_hooks
+libcrunch.so: libcrunch.o $(FAKE_LIBUNWIND_OBJ) $(LIBALLOCS)/lib/liballocs.a
+	$(CC) $(CFLAGS) -shared -o "$@" $^ $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,--whole-archive -Wl,-Bstatic -lallocs -Wl,--no-whole-archive -Wl,-Bdynamic #-lheap_index_hooks
 
 noop.o: CFLAGS += -fPIC 
 
