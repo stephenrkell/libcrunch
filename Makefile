@@ -1,15 +1,11 @@
 default: src lib frontend test
 
 .PHONY: src
-src: | allocsites
+src:
 	$(MAKE) -C src
 
-.PHONY: allocsites
-allocsites:
-	$(MAKE) -C allocsites
-
 .PHONY: frontend
-frontend: | allocsites
+frontend:
 	$(MAKE) -C frontend
 
 .PHONY: lib
@@ -21,7 +17,6 @@ lib: src
 .PHONY: clean
 clean:
 	$(MAKE) -C src clean
-	$(MAKE) -C allocsites clean
 	rm -f lib/*.so lib/*.o lib/.??*
 	$(MAKE) -C frontend clean
 	$(MAKE) -C test clean

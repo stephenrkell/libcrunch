@@ -1,15 +1,15 @@
 DEPS := 
 
-ALLOCSITES ?= ../../../allocsites
+ALLOCSITES ?= ../../../../liballocs.hg/tools/
 
 CXXFLAGS += -std=c++0x -g -O0 -I$(ALLOCSITES)
 CXXFLAGS += -Wno-deprecated-declarations # while we're using old libdwarfpp -- FIXME
 LDFLAGS += -L`pwd` -Wl,-R`pwd` -L$(ALLOCSITES) -Wl,-R$(realpath $(ALLOCSITES))
-LDLIBS += -lallocs -lcxxgen -ldwarfpp -ldwarf -lboost_regex -lboost_filesystem -lboost_system -lboost_serialization -lc++fileno -lsrk31c++ -lelf
+LDLIBS += -lallocstool -lcxxgen -ldwarfpp -ldwarf -lboost_regex -lboost_filesystem -lboost_system -lboost_serialization -lc++fileno -lsrk31c++ -lelf
 
 CPP_SRC := $(wildcard *.cpp)
 
-default: base-types-translation #lower-typenames 
+default: # base-types-translation #lower-typenames 
 
 .PHONY: clean
 clean:
@@ -30,5 +30,5 @@ endif
 %: %.cpp
 	$(CXX) $(LDFLAGS) $(CXXFLAGS) -o "$@" "$<" $(LDLIBS)
 
-lower-typenames: lower-typenames.cpp $(ALLOCSITES)/liballocs.a
-base-types-translation: base-types-translation.cpp $(ALLOCSITES)/liballocs.a
+lower-typenames: lower-typenames.cpp $(ALLOCSITES)/liballocstool.a
+base-types-translation: base-types-translation.cpp $(ALLOCSITES)/liballocstool.a
