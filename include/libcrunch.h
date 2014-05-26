@@ -1,11 +1,7 @@
 #ifndef LIBCRUNCH_H_
 #define LIBCRUNCH_H_
 
-/* public interface to libcrunch */
-extern void warnx(const char *fmt, ...); // avoid repeating proto
-
-/* Copied from dumptypes.cpp */
-struct uniqtype; // opaque
+#include "liballocs.h"
 
 extern int __libcrunch_debug_level;
 extern _Bool __libcrunch_is_initialized __attribute__((weak));

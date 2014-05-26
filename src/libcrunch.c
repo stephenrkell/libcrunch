@@ -38,8 +38,6 @@ static unsigned lazy_heap_types_count;
 static const char **lazy_heap_typenames;
 static struct uniqtype **lazy_heap_types;
 
-static int iterate_types(void *typelib_handle, int (*cb)(struct uniqtype *t, void *arg), void *arg);
-
 static int print_type_cb(struct uniqtype *t, void *ignored)
 {
 	fprintf(stderr, "uniqtype addr %p, name %s, size %d bytes\n", 
@@ -67,7 +65,7 @@ static int match_typename_cb(struct uniqtype *t, void *ignored)
 
 void __libcrunch_scan_lazy_typenames(void *typelib_handle)
 {
-	iterate_types(typelib_handle, match_typename_cb, NULL);
+	__liballocs_iterate_types(typelib_handle, match_typename_cb, NULL);
 
 	// for (unsigned i = 0; i < lazy_heap_types_count; ++i)
 	// {
@@ -98,51 +96,6 @@ static ElfW(Dyn) *get_dynamic_entry_from_section(void *dynsec, unsigned long tag
 static ElfW(Dyn) *get_dynamic_entry_from_handle(void *handle, unsigned long tag)
 {
 	return get_dynamic_entry_from_section(((struct link_map *) handle)->l_ld, tag);
-}
-
-static int iterate_types(void *typelib_handle, int (*cb)(struct uniqtype *t, void *arg), void *arg)
-{
-	/* Don't use dladdr() to iterate -- too slow! Instead, iterate 
-	 * directly over the dynsym section. */
-	unsigned char *load_addr = (unsigned char *) ((struct link_map *) typelib_handle)->l_addr;
-	/* We don't have to add load_addr, because ld.so has already done it. */
-	ElfW(Sym) *dynsym = (ElfW(Sym) *) get_dynamic_entry_from_handle(typelib_handle, DT_SYMTAB)->d_un.d_ptr;
-	assert(dynsym);
-	
-	/* If dynsym is greater than STACK_BEGIN, it means it's the vdso --
-	 * skip it, because it doesn't contain any uniqtypes and we may fault
-	 * trying to read its dynsym. */
-	if ((uintptr_t) dynsym > STACK_BEGIN) return 0;
-	
-	// check that we start with a null symtab entry
-	static const ElfW(Sym) nullsym = { 0, 0, 0, 0, 0, 0 };
-	assert(0 == memcmp(&nullsym, dynsym, sizeof nullsym));
-	assert((unsigned char *) dynsym > load_addr);
-	unsigned char *dynstr = (unsigned char *) get_dynamic_entry_from_handle(typelib_handle, DT_STRTAB)->d_un.d_ptr;
-	assert(dynstr > (unsigned char *) dynsym);
-	size_t dynsym_size = dynstr - (unsigned char *) dynsym;
-	// round down, because dynstr might be padded
-	dynsym_size = (dynsym_size / sizeof (ElfW(Sym))) * sizeof (ElfW(Sym));
-	int cb_ret = 0;
-
-	for (ElfW(Sym) *p_sym = dynsym; (unsigned char *) p_sym < (unsigned char *) dynsym + dynsym_size; 
-		++p_sym)
-	{
-		if (ELF64_ST_TYPE(p_sym->st_info) == STT_OBJECT && 
-			p_sym->st_shndx != SHN_UNDEF &&
-			0 == strncmp("__uniqty", dynstr + p_sym->st_name, 8))
-		{
-			struct uniqtype *t = (struct uniqtype *) (load_addr + p_sym->st_value);
-			// if our name comes out as null, we've probably done something wrong
-			if (t->name)
-			{
-				cb_ret = cb(t, arg);
-				if (cb_ret != 0) break;
-			}
-		}
-	}
-	
-	return cb_ret;
 }
 
 static _Bool is_lazy_uniqtype(const void *u)
@@ -336,148 +289,6 @@ int __libcrunch_global_init(void)
 	return 0;
 }
 
-
-static inline _Bool descend_to_first_subobject_spanning(
-	signed *p_target_offset_within_uniqtype,
-	struct uniqtype **p_cur_obj_uniqtype,
-	struct uniqtype **p_cur_containing_uniqtype,
-	struct contained **p_cur_contained_pos)
-{
-	struct uniqtype *cur_obj_uniqtype = *p_cur_obj_uniqtype;
-	signed target_offset_within_uniqtype = *p_target_offset_within_uniqtype;
-	/* Calculate the offset to descend to, if any. This is different for 
-	 * structs versus arrays. */
-	if (cur_obj_uniqtype->is_array)
-	{
-		unsigned num_contained = cur_obj_uniqtype->array_len;
-		struct uniqtype *element_uniqtype = cur_obj_uniqtype->contained[0].ptr;
-		unsigned target_element_index
-		 = target_offset_within_uniqtype / element_uniqtype->pos_maxoff;
-		if (num_contained > target_element_index)
-		{
-			*p_cur_containing_uniqtype = cur_obj_uniqtype;
-			*p_cur_contained_pos = &cur_obj_uniqtype->contained[0];
-			*p_cur_obj_uniqtype = element_uniqtype;
-			*p_target_offset_within_uniqtype = target_offset_within_uniqtype % element_uniqtype->pos_maxoff;
-			return 1;
-		} else return 0;
-	}
-	else // struct/union case
-	{
-		unsigned num_contained = cur_obj_uniqtype->nmemb;
-
-		int lower_ind = 0;
-		int upper_ind = num_contained;
-		while (lower_ind + 1 < upper_ind) // difference of >= 2
-		{
-			/* Bisect the interval */
-			int bisect_ind = (upper_ind + lower_ind) / 2;
-			__liballocs_private_assert(bisect_ind > lower_ind, "bisection progress", 
-				__FILE__, __LINE__, __func__);
-			if (cur_obj_uniqtype->contained[bisect_ind].offset > target_offset_within_uniqtype)
-			{
-				/* Our solution lies in the lower half of the interval */
-				upper_ind = bisect_ind;
-			} else lower_ind = bisect_ind;
-		}
-
-		if (lower_ind + 1 == upper_ind)
-		{
-			/* We found one offset */
-			__liballocs_private_assert(cur_obj_uniqtype->contained[lower_ind].offset <= target_offset_within_uniqtype,
-				"offset underapproximates", __FILE__, __LINE__, __func__);
-
-			/* ... but we might not have found the *lowest* index, in the 
-			 * case of a union. Scan backwards so that we have the lowest. 
-			 * FIXME: need to account for the element size? Or here are we
-			 * ignoring padding anyway? */
-			while (lower_ind > 0 
-				&& cur_obj_uniqtype->contained[lower_ind-1].offset
-					 == cur_obj_uniqtype->contained[lower_ind].offset)
-			{
-				--lower_ind;
-			}
-			*p_cur_contained_pos = &cur_obj_uniqtype->contained[lower_ind];
-			*p_cur_containing_uniqtype = cur_obj_uniqtype;
-			*p_cur_obj_uniqtype
-			 = cur_obj_uniqtype->contained[lower_ind].ptr;
-			/* p_cur_obj_uniqtype now points to the subobject's uniqtype. 
-			 * We still have to adjust the offset. */
-			*p_target_offset_within_uniqtype
-			 = target_offset_within_uniqtype - cur_obj_uniqtype->contained[lower_ind].offset;
-
-			return 1;
-		}
-		else /* lower_ind >= upper_ind */
-		{
-			// this should mean num_contained == 0
-			__liballocs_private_assert(num_contained == 0,
-				"no contained objects", __FILE__, __LINE__, __func__);
-			return 0;
-		}
-	}
-}
-
-//static inline 
-_Bool recursively_test_subobjects(signed target_offset_within_uniqtype,
-	struct uniqtype *cur_obj_uniqtype, struct uniqtype *test_uniqtype, 
-	struct uniqtype **last_attempted_uniqtype, signed *last_uniqtype_offset,
-		signed *p_cumulative_offset_searched)
-{
-	if (target_offset_within_uniqtype == 0 && cur_obj_uniqtype == test_uniqtype) return 1;
-	else
-	{
-		/* We might have *multiple* subobjects spanning the offset. 
-		 * Test all of them. */
-		struct uniqtype *containing_uniqtype = NULL;
-		struct contained *contained_pos = NULL;
-		
-		signed sub_target_offset = target_offset_within_uniqtype;
-		struct uniqtype *contained_uniqtype = cur_obj_uniqtype;
-		
-		_Bool success = descend_to_first_subobject_spanning(
-			&sub_target_offset, &contained_uniqtype,
-			&containing_uniqtype, &contained_pos);
-		// now we have a *new* sub_target_offset and contained_uniqtype
-		
-		if (!success) return 0;
-		
-		*p_cumulative_offset_searched += contained_pos->offset;
-		
-		if (last_attempted_uniqtype) *last_attempted_uniqtype = contained_uniqtype;
-		if (last_uniqtype_offset) *last_uniqtype_offset = sub_target_offset;
-		do {
-			assert(containing_uniqtype == cur_obj_uniqtype);
-			_Bool recursive_test = recursively_test_subobjects(
-					sub_target_offset,
-					contained_uniqtype, test_uniqtype, 
-					last_attempted_uniqtype, last_uniqtype_offset, p_cumulative_offset_searched);
-			if (__builtin_expect(recursive_test, 1)) return 1;
-			// else look for a later contained subobject at the same offset
-			unsigned subobj_ind = contained_pos - &containing_uniqtype->contained[0];
-			assert(subobj_ind >= 0);
-			assert(subobj_ind == 0 || subobj_ind < containing_uniqtype->nmemb);
-			if (__builtin_expect(
-					containing_uniqtype->nmemb <= subobj_ind + 1
-					|| containing_uniqtype->contained[subobj_ind + 1].offset != 
-						containing_uniqtype->contained[subobj_ind].offset,
-				1))
-			{
-				// no more subobjects at the same offset, so fail
-				return 0;
-			} 
-			else
-			{
-				contained_pos = &containing_uniqtype->contained[subobj_ind + 1];
-				contained_uniqtype = contained_pos->ptr;
-			}
-		} while (1);
-		
-		assert(0);
-	}
-}
-
-
 /* Optimised version, for when you already know the uniqtype address. */
 int __is_a_internal(const void *obj, const void *arg)
 {
@@ -495,7 +306,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	const void *alloc_site;
 	signed target_offset_within_uniqtype;
 	
-	_Bool abort = get_alloc_info(obj, 
+	_Bool abort = __liballocs_get_alloc_info(obj, 
 		arg, 
 		&reason,
 		&reason_ptr,
@@ -524,10 +335,10 @@ int __is_a_internal(const void *obj, const void *arg)
 // 			++__libcrunch_succeeded;
 // 			return 1;
 // 		}
-// 	} while (descend_to_first_subobject_spanning(&target_offset_within_uniqtype, &cur_obj_uniqtype,
+// 	} while (__liballocs_first_subobject_spanning(&target_offset_within_uniqtype, &cur_obj_uniqtype,
 // 			&cur_containing_uniqtype, &cur_contained_pos));
 	signed cumulative_offset_searched = 0;
-	_Bool success = recursively_test_subobjects(target_offset_within_uniqtype, 
+	_Bool success = __liballocs_find_matching_subobject(target_offset_within_uniqtype, 
 			cur_obj_uniqtype, (struct uniqtype *) test_uniqtype, &cur_obj_uniqtype, 
 			&target_offset_within_uniqtype, &cumulative_offset_searched);
 	if (__builtin_expect(success, 1))
@@ -606,7 +417,7 @@ int __like_a_internal(const void *obj, const void *arg)
 	signed target_offset_within_uniqtype;
 	void *caller_address = __builtin_return_address(0);
 	
-	_Bool abort = get_alloc_info(obj, 
+	_Bool abort = __liballocs_get_alloc_info(obj, 
 		arg, 
 		&reason,
 		&reason_ptr,
@@ -627,7 +438,7 @@ int __like_a_internal(const void *obj, const void *arg)
 	 * we were passed (obj). */
 	while (target_offset_within_uniqtype != 0)
 	{
-		_Bool success = descend_to_first_subobject_spanning(
+		_Bool success = __liballocs_first_subobject_spanning(
 				&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
 				&cur_contained_pos);
 		if (!success) goto like_a_failed;
@@ -750,7 +561,7 @@ __check_args_internal(const void *obj, int nargs, ...)
 
 	struct uniqtype *fun_uniqtype = NULL;
 	
-	_Bool abort = get_alloc_info(obj, 
+	_Bool abort = __liballocs_get_alloc_info(obj, 
 		NULL, 
 		&reason,
 		&reason_ptr,

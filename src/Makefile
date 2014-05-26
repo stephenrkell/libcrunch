@@ -13,7 +13,7 @@ endif
 
 default: libcrunch_preload.so libcrunch_noop.so libcrunch_noop.o
 
-# for addrmap.c and fake-libunwind.c
+# for addrmap.c and fake-libunwind.c (WHY do we need these in libcrunch)
 vpath %.c $(LIBALLOCS)/src
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
@@ -35,12 +35,16 @@ $(CC_DEPS): .%.d : %.cc
 
 -include $(DEPS)
 
+# We want to make sure that the libcrunch--liballocs interface is 
+# linked in the fastest possible way.
+libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS +=  -O4 -flto -Bsymbolic -Wl,-O2
+
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
 libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
-	$(CC) $(CFLAGS) -O4 -flto -Wl,-O2 -shared -o "$@" $(filter-out %allocs_preload.a,$^) $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload -Wl,--no-whole-archive -Wl,-Bdynamic 
+	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$^) $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload -Wl,--no-whole-archive -Wl,-Bdynamic 
 
 libdumpsmaps.so: libdumpsmaps.o
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %hooks.a,$^) $(LDFLAGS) 
@@ -57,11 +61,11 @@ noop.o: CFLAGS += -fPIC
 libcrunch_nomemtable.o: libcrunch.c
 	$(CC) $(CFLAGS) -DNO_MEMTABLE -c -o "$@" "$<" 
 
-libcrunch_noop.so: noop.o
-	$(CC) $(CFLAGS) -shared -o "$@" $^ $(LDFLAGS)
+libcrunch_noop.so: noop.o $(LIBALLOCS)/lib/liballocs_noop.o
+	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS)
 
-libcrunch_noop.o: noop.o
-	ln -s "$<" "$@"
+libcrunch_noop.o: noop.o $(LIBALLOCS)/lib/liballocs_noop.o
+	$(LD) -r -o "$@" $+
 
 # have to preload the hooks yourself if you want them to hook!
 
