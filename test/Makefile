@@ -7,12 +7,21 @@ export CFLAGS
 
 UNIQTYPES_BASE ?= /usr/lib/allocsites
 ALLOCSITES_BASE ?= /usr/lib/allocsites
+LIBALLOCS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../liballocs.hg)
 
 export UNIQTYPES_BASE
 export ALLOCSITES_BASE
 
 export CC := $(realpath $(dir $(THIS_MAKEFILE))/../frontend/c/bin/crunchcc)
 export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include
+export LDFLAGS += -L$(LIBALLOCS)/lib
+
+ifneq ($(USE_FAKE_LIBUNWIND),)
+CFLAGS += -fno-omit-frame-pointer
+LIBUNWIND_LDLIBS :=
+else
+LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
+endif
 
 ifeq ($(CC),)
 $(error Could not find crunchcc)

@@ -10,7 +10,8 @@ int main(void)
 {
 	void *fake = &f;
 	
-	/* Want a cast that will exercise check_args but nevertheless succeed. */
+	/* Want a cast that will exercise check_args but nevertheless succeed
+	 * *iff* we're using sloppy function pointers. */
 	int *(*fake_fun)(void *, void *) = (int *(*)(void*, void*)) fake;
 	
 	long l = 42;

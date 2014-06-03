@@ -4,9 +4,9 @@ objfile="$1"
 
 test -n "$objfile" || (echo "Please specify an object file"; false) || exit 1
 
-USEDTYPES=${USEDTYPES:-$( dirname $0 )/../../../allocsites/usedtypes}
-LOWER_TYPENAMES=${LOWER_TYPENAMES:-$( dirname $0 )/../src/lower-typenames}
-BASE_TYPES_TRANSLATION=${BASE_TYPES_TRANSLATION:-$( dirname $0 )/../src/base-types-translation}
+LIBALLOCS_BASE=${USEDTYPES:-$( dirname $0 )/../../../../liballocs.hg} # HACK: FIXME
+USEDTYPES=${USEDTYPES:-${LIBALLOCS_BASE}/tools/usedtypes}
+BASE_TYPES_TRANSLATION=${BASE_TYPES_TRANSLATION:-$( dirname $0 )/../bin/base-types-translation}
 CC=${CC:-$(which cc)}
 LD=${LD:-$(which ld)}
 OBJCOPY=${OBJCOPY:-$(which objcopy)}
@@ -53,7 +53,7 @@ sed -r 's/[[:blank:]]*[Uw][[:blank:]]*$//' | grep __uniqtype__ )"
     # we need to push candidates into the filter and see what comes out;
     # if it changes, add a --redefine-sym option to the list 
     
-    . $( dirname $0 )/../lib/symname-funcs.sh
+    . ${LIBALLOCS_BASE}/tools/lang/c/lib/symname-funcs.sh
     
     # if any substitutions took effect, issue a redefine-sym command
     while read cand && read canon <&3; do
