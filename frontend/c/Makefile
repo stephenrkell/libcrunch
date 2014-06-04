@@ -3,9 +3,10 @@
 CIL_TOOLS := dumpallocs trumptr
 CIL ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/../../../cil
 
+LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
 CIL_TOOLS_SRC := $(shell find $(CIL_TOOLS) -name '*.ml')
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
-CIL_EXTRASRC := $(addprefix $(realpath $(dir $(THIS_MAKEFILE)))/,$(CIL_TOOLS))
+CIL_EXTRASRC :=  $(LIBALLOCS_BASE)/tools/lang/c/dumpallocs $(realpath $(dir $(THIS_MAKEFILE)))/trumptr 
 
 default: src lib $(CIL)/bin/cilly sanity-tests
 
@@ -16,9 +17,12 @@ clean:
 	for dir in $(CIL_TOOLS); do (cd $$dir && rm -f *.o *.cil.c *.i ); done
 	$(MAKE) -C src clean
 
+print_cilly_path:
+	@echo $(CIL)/bin/cilly
+
 $(CIL)/bin/cilly: $(CIL_TOOLS_SRC)
 	cd $(CIL) && \
-	(grep '$(firstword $(CIL_TOOLS))' config.log || \
+	(grep '.$(foreach subpat,$(CIL_EXTRASRC) $(CIL_TOOLS),\?$(subpat).*)' config.log || \
 	    ./configure EXTRASRCDIRS="$(CIL_EXTRASRC)" EXTRAFEATURES="$(CIL_TOOLS)" ) && \
 	COMPILE_FLAGS=-g $(MAKE) && \
 	touch $(CIL)/bin/cilly
