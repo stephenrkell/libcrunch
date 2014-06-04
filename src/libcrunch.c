@@ -159,7 +159,9 @@ static void print_exit_summary(void)
 				suppression_count);
 	}
 	
+	fprintf(stderr, "====================================================\n");
 	fprintf(stderr, "libcrunch summary: \n");
+	fprintf(stderr, "----------------------------------------------------\n");
 	fprintf(stderr, "checks begun:                              % 9ld\n", __libcrunch_begun);
 	fprintf(stderr, "----------------------------------------------------\n");
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
@@ -169,11 +171,10 @@ static void print_exit_summary(void)
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
 	fprintf(stderr, "checks trivially passed:                   % 9ld\n", __libcrunch_trivially_succeeded);
 #endif
-	fprintf(stderr, "====================================================\n");
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(stderr, "checks remaining                           % 9ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __liballocs_aborted_typestr + __libcrunch_aborted_init));
+	fprintf(stderr, "checks remaining                           % 9ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr + __libcrunch_aborted_init));
 #else
-	fprintf(stderr, "checks remaining                           % 9ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __liballocs_aborted_typestr));
+	fprintf(stderr, "checks remaining                           % 9ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
 #endif	
 	fprintf(stderr, "----------------------------------------------------\n");
 	fprintf(stderr, "   of which did lazy heap type assignment: % 9ld\n", __libcrunch_lazy_heap_type_assignment);
@@ -181,6 +182,7 @@ static void print_exit_summary(void)
 	fprintf(stderr, "checks failed inside allocation functions: % 9ld\n", __libcrunch_failed_in_alloc);
 	fprintf(stderr, "checks failed otherwise:                   % 9ld\n", __libcrunch_failed);
 	fprintf(stderr, "checks nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
+	fprintf(stderr, "====================================================\n");
 
 	if (getenv("LIBCRUNCH_DUMP_SMAPS_AT_EXIT"))
 	{
@@ -535,6 +537,95 @@ like_a_failed:
 		++__libcrunch_failed;
 		debug_printf(0, "Failed check __like_a_internal(%p, %p a.k.a. \"%s\") at %p, allocation was a %s%s%s originating at %p\n", 
 			obj, test_uniqtype, test_uniqtype->name,
+			__builtin_return_address(0), // make sure our *caller*, if any, is inlined
+			name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
+			alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+			alloc_site);
+	}
+	return 1; // HACK: so that the program will continue
+}
+
+int __named_a_internal(const void *obj, const void *arg)
+{
+	// FIXME: use our recursive subobject search here? HMM -- semantics are non-obvious.
+	
+	/* We might not be initialized yet (recall that __libcrunch_global_init is 
+	 * not a constructor, because it's not safe to call super-early). */
+	__libcrunch_check_init();
+	
+	const char* test_typestr = (const char *) arg;
+	const char *reason = NULL; // if we abort, set this to a string lit
+	const void *reason_ptr = NULL; // if we abort, set this to a useful address
+	memory_kind k;
+	const void *object_start;
+	unsigned block_element_count = 1;
+	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
+	const void *alloc_site;
+	signed target_offset_within_uniqtype;
+	void *caller_address = __builtin_return_address(0);
+	
+	_Bool abort = __liballocs_get_alloc_info(obj, 
+		arg, 
+		&reason,
+		&reason_ptr,
+		&k,
+		&object_start,
+		&block_element_count,
+		&alloc_uniqtype, 
+		&alloc_site,
+		&target_offset_within_uniqtype);
+	
+	if (__builtin_expect(abort, 0)) return 1; // we've already counted it
+	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
+	struct uniqtype *cur_containing_uniqtype = NULL;
+	struct contained *cur_contained_pos = NULL;
+	signed cumulative_offset_searched = 0;
+
+	/* Look for a matching subobject. */
+	_Bool success;
+	do 
+	{
+		_Bool success = __liballocs_find_matching_subobject(target_offset_within_uniqtype, 
+			cur_obj_uniqtype, NULL, &cur_obj_uniqtype, 
+			&target_offset_within_uniqtype, &cumulative_offset_searched);
+		if (__builtin_expect(success, 1))
+		{
+			/* This means we got a subobject of *some* type. Does it match
+			 * the name? */
+			// FIXME: cache names
+			if 	(0 == strcmp(test_typestr, cur_obj_uniqtype->name)) goto named_a_succeeded;
+			else
+			{
+				/* If we can descend to the first member of this type
+				 * and try again, do it. */
+				if (cur_obj_uniqtype->nmemb > 0
+						&& cur_obj_uniqtype->contained[0].offset == 0)
+				{
+					cur_obj_uniqtype = cur_obj_uniqtype->contained[0].ptr;
+					continue;
+				} else goto named_a_failed;
+			}
+		}
+	} while (1);
+	
+
+named_a_succeeded:
+	++__libcrunch_succeeded;
+	return 1;
+	
+	// if we got here, we've failed
+	// if we got here, the check failed
+named_a_failed:
+	if (__currently_allocating || __currently_freeing) 
+	{
+		++__libcrunch_failed_in_alloc;
+		// suppress warning
+	}
+	else
+	{
+		++__libcrunch_failed;
+		debug_printf(0, "Failed check __named_a_internal(%p, \"%s\") at %p, allocation was a %s%s%s originating at %p\n", 
+			obj, test_typestr,
 			__builtin_return_address(0), // make sure our *caller*, if any, is inlined
 			name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
 			alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 

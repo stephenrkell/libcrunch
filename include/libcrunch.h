@@ -18,6 +18,7 @@ const void *__libcrunch_typestr_to_uniqtype(const char *typestr) __attribute__((
 void *__libcrunch_my_typeobj(void) __attribute__((weak));
 int __is_a_internal(const void *obj, const void *uniqtype) __attribute__((weak));
 int __like_a_internal(const void *obj, const void *uniqtype) __attribute__((weak));
+int __named_a_internal(const void *obj, const void *typestr) __attribute__((weak));
 int __check_args_internal(const void *obj, int nargs, ...) __attribute__((weak));
 
 /* The main public API to libcrunch is through several small functions 

@@ -83,7 +83,7 @@ let rec is_bitfield lo = match lo with
 let voidConstPtrType = TPtr(TVoid([Attr("const", [])]),[])
 
 let rec canonicalizeBaseTypeStr s = 
- (* generated from a table maintained in srk's libcxxgen  *)
+ (* 'generated' from a table maintained in srk's libcxxgen  *)
 if (s = "signed char" or s = "char" or s = "char signed" or  false) then "signed char"
 else if (s = "unsigned char" or s = "char unsigned" or  false) then "unsigned char"
 else if (s = "short int" or s = "short" or s = "int short" or  false) then "short int"
@@ -313,6 +313,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                            fun isASInlineFun ->
                            fun isAUInlineFun ->
                            fun likeAUInlineFun ->
+                           fun namedAUInlineFun ->
                            fun inlineAssertFun -> 
                                object(self)
   inherit nopCilVisitor
@@ -465,13 +466,17 @@ class trumPtrExprVisitor = fun enclosingFile ->
               in 
               let canonicalName = barenameFromSig concretePtdts
               in
-              let useLikeA = match (findLikeA canonicalName likeATypeNames) with
-                None ->
-                    output_string Pervasives.stderr ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
-                    false
-              | Some(_) -> 
-                    output_string Pervasives.stderr ("using __like_a! because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
-                    true
+              let testfunVar, testfunName = begin
+                  if (tsIsUndefinedType concretePtdts enclosingFile) then
+                      (namedAUInlineFun.svar, "__named_aU")
+                  else match (findLikeA canonicalName likeATypeNames) with
+                    None ->
+                        output_string Pervasives.stderr ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                        (isAUInlineFun.svar, "__is_aU")
+                  | Some(_) -> 
+                        output_string Pervasives.stderr ("using __like_a! because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                        (likeAUInlineFun.svar, "__like_aU")
+              end
               in
               let (newMap, uniqtypeGlobalVar, newGlobals) = getOrCreateUniqtypeGlobal !uniqtypeGlobals symname concreteType enclosingFile.globals
               in 
@@ -480,14 +485,18 @@ class trumPtrExprVisitor = fun enclosingFile ->
               self#queueInstr [
                 (* first enqueue an assignment of the whole cast to exprTmpVar *)
                 Set( (Var(exprTmpVar), NoOffset), e, locUnknown );
-                (* next enqueue the is_a call *)
+                (* next enqueue the is_a (or whatever) call *)
                 Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
-                      (Lval(Var(if useLikeA then likeAUInlineFun.svar else isAUInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
+                      (Lval(Var(testfunVar),NoOffset)),  (* lvalue of function to call *)
                       [ 
                         (* first arg is the expression result *)
                         Lval(Var(exprTmpVar), NoOffset);
-                        (* second argument is the uniqtype *)
-                        CastE(voidConstPtrType, Cil.mkAddrOf(Var(uniqtypeGlobalVar), NoOffset))
+                        (* second argument is the uniqtype or the typestr *)
+                        CastE(voidConstPtrType, 
+                           if testfunName = "__named_aU" then 
+                               Cil.mkString(barenameFromSig concreteType)
+                           else Cil.mkAddrOf(Var(uniqtypeGlobalVar), NoOffset)
+                        )
                       ],
                       locUnknown
                 );
@@ -497,7 +506,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                       [
                         (* arg is the check result *)
                         Lval(Var(checkTmpVar), NoOffset);
-                        Const(CStr((if useLikeA then "__like_aU(" else "__is_aU(") ^ exprTmpVar.vname ^ ", &" ^ symname ^ ")"));
+                        Const(CStr(testfunName ^ "(" ^ exprTmpVar.vname ^ ", " ^ (barenameFromSig concreteType) ^ ")"));
                         Const(CStr( location.file ));
                         Const(CInt64(Int64.of_int (if location.line == -1 then 0 else location.line), IUInt, None));
                         Const(CStr( enclosingFunction.svar.vname ))
@@ -603,6 +612,11 @@ class trumPtrFunVisitor = fun fl -> object
                              Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
+  
+  val namedAInternalFunDec = makeExternalFunctionInFile fl "__named_a_internal" (TFun(intType, 
+                             Some [ ("obj", voidConstPtrType, []);
+                                   ("typestr", voidConstPtrType, []) ],
+                            false, [(*Attr("weak", [])*)]))
 
   val checkArgsInternalFunDec = makeExternalFunctionInFile fl "__check_args_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
@@ -624,6 +638,7 @@ class trumPtrFunVisitor = fun fl -> object
   val mutable isAUInlineFun = emptyFunction "__is_aU"
   val mutable isASInlineFun = emptyFunction "__is_aS"
   val mutable likeAUInlineFun = emptyFunction "__like_aU"
+  val mutable namedAUInlineFun = emptyFunction "__named_aU"
   
 
   initializer
@@ -762,6 +777,42 @@ class trumPtrFunVisitor = fun fl -> object
            (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
                 "unrecognised typename (see stack trace)"); *)
     
+    namedAUInlineFun <- makeInlineFunctionInFile fl namedAUInlineFun "__named_aU" (TFun(intType, 
+                            Some [ ("obj", voidConstPtrType, []);
+                                   ("s", voidConstPtrType, [])
+                                 ], 
+                            false, [])) "\
+        if (!%v:obj) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        // int inited = __libcrunch_check_init (); \n\
+        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // { \n\
+        //     return 1; \n\
+        // } \n\
+        \n\
+        /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
+         * linked with enough uniqtypes data. */ \n\
+        if (/*__builtin_expect(*/ !s/*, 0)*/) \n\
+        { \n\
+           __libcrunch_begun += 1; \n\
+           __libcrunch_aborted_typestr += 1; \n\
+             return 1; \n\
+        } \n\
+        /* No need for the char check in the CIL version */ \n\
+        // now we're really started \n\
+        __libcrunch_begun += 1; \n\
+        int ret = __named_a_internal(obj, s); \n\
+        return ret;"
+     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
+      ("warnx", (Fv warnxFunDec.svar)); 
+      ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
+      ("__libcrunch_begun", (Fv libcrunchBegun));
+      ("__named_a_internal", (Fv namedAInternalFunDec.svar)) ]; 
+           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
+                "unrecognised typename (see stack trace)"); *)
+    
     fl.globals <- newGlobalsList fl.globals [
          GVarDecl(libcrunchIsInitialized, {line = -1; file = "BLAH FIXME"; byte = 0});
          GVarDecl(libcrunchBegun, {line = -1; file = "BLAH FIXME"; byte = 0});
@@ -774,12 +825,13 @@ class trumPtrFunVisitor = fun fl -> object
          GFun(inlineAssertFun, {line = -1; file = "BLAH FIXME"; byte = 0});
          GFun(isAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); 
          GFun(isASInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0});
-         GFun(likeAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0})
+         GFun(likeAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0});
+         GFun(namedAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0})
          ] 
          isFunction
 
   method vfunc (f: fundec) : fundec visitAction = 
-      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun inlineAssertFun in
+      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun inlineAssertFun in
       ChangeTo(visitCilFunction tpExprVisitor f)
 end
 
