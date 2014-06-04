@@ -13,7 +13,7 @@ export UNIQTYPES_BASE
 export ALLOCSITES_BASE
 
 export CC := $(realpath $(dir $(THIS_MAKEFILE))/../frontend/c/bin/crunchcc)
-export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include
+export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include -I$(LIBALLOCS)/include
 export LDFLAGS += -L$(LIBALLOCS)/lib
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
@@ -27,7 +27,7 @@ ifeq ($(CC),)
 $(error Could not find crunchcc)
 endif
 
-cases := $(wildcard [-a-z]*)
+cases := $(filter-out checks.sh,$(wildcard [-a-z]*))
 
 ifneq ($(LIBCRUNCH_USE_PRELOAD),no)
 LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/../lib/libcrunch_preload.so)
@@ -60,9 +60,9 @@ checkrun-fail-%:
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-$* 1>$$out 2>$$err && \
-		tail -n6 "$$err" | tr '\n' '\f' | \
-		grep ' 0.* 0.* 0.* 0\+.* [1-9][0-9]*.* 0\+$$' >/dev/null || \
-		(tail -n20 $$err; false)
+		. ./checks.sh && tail -n26 "$$err" | \
+		    match "checks failed otherwise" '[1-9][0-9]*' >/dev/null || \
+		(tail -n26 $$err; false)
 
 # Most test cases should output a libcrunch summary in which 
 # -- zero or more checks passed (trivially or by lazy typing)
@@ -73,9 +73,11 @@ checkrun-%:
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-$* 1>$$out 2>$$err && \
-		tail -n6 "$$err" | tr '\n' '\f' | \
-		grep ' 0.* 0.* 0.* [0-9]\+.* 0.* [0-9]\+$$' >/dev/null || \
-		(tail -n20 $$err; false)
+		. ./checks.sh && tail -n26 "$$err" | \
+		    match "checks nontrivially passed" '[1-9][0-9]*' | \
+		    match "checks failed inside"        '0' | \
+		    match "checks failed otherwise"     '0' >/dev/null || \
+		(tail -n26 $$err; false)
 
 # Some cases are special and require only an exit status of zero
 checkrun-hello: 
