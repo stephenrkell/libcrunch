@@ -324,29 +324,33 @@ int __is_a_internal(const void *obj, const void *arg)
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
 	struct contained *cur_contained_pos = NULL;
-// 	do
-// 	{
-// 		/* If we have offset == 0, we can check at this uniqtype.
-// 		 * We also pass if our current object is an array of the test uniqtype
-// 		 * and the offset is a multiple of the array element size. 
-// 		 * FIXME: we don't check the bounds of the array, but I think we 
-// 		 * don't have to. */
-// 		if (target_offset_within_uniqtype == 0
-// 					&& cur_obj_uniqtype == test_uniqtype) 
-// 		{
-// 			++__libcrunch_succeeded;
-// 			return 1;
-// 		}
-// 	} while (__liballocs_first_subobject_spanning(&target_offset_within_uniqtype, &cur_obj_uniqtype,
-// 			&cur_containing_uniqtype, &cur_contained_pos));
+
 	signed cumulative_offset_searched = 0;
 	_Bool success = __liballocs_find_matching_subobject(target_offset_within_uniqtype, 
 			cur_obj_uniqtype, (struct uniqtype *) test_uniqtype, &cur_obj_uniqtype, 
 			&target_offset_within_uniqtype, &cumulative_offset_searched);
+	
 	if (__builtin_expect(success, 1))
 	{
-			++__libcrunch_succeeded;
-			return 1;
+		++__libcrunch_succeeded;
+		return 1;
+	}
+	
+	// if we got here, we might still need to apply lazy heap typing
+	if (__builtin_expect(k == HEAP
+			&& alloc_site != NULL // i.e. we haven't yet written a uniqtype ptr into the heap chunk
+			&& is_lazy_uniqtype(alloc_uniqtype)
+			&& !__currently_allocating, 0))
+	{
+		++__libcrunch_lazy_heap_type_assignment;
+		
+		// update the heap chunk's info to say that its type is our test_uniqtype
+		struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
+		assert(ins);
+		ins->alloc_site_flag = 1;
+		ins->alloc_site = (uintptr_t) test_uniqtype;
+		
+		return 1;
 	}
 	
 	// if we got here, the check failed
@@ -383,7 +387,7 @@ int __is_a_internal(const void *obj, const void *arg)
 					"(deepest subobject: %s at offset %d) "
 					"originating at %p\n", 
 				obj, test_uniqtype, test_uniqtype->name,
-				__builtin_return_address(0), // make sure our *caller*, if any, is inlined
+				__builtin_return_address(0),
 				(char*) obj - (char*) object_start,
 				name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
 				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
@@ -597,7 +601,12 @@ int __named_a_internal(const void *obj, const void *arg)
 			else
 			{
 				/* If we can descend to the first member of this type
-				 * and try again, do it. */
+				 * and try again, do it.
+				 * 
+				 * FIXME: it's not the first that matters; it's all zero-offset
+				 * members. Ideally we want to refactor find_matching_subobject 
+				 * so that it can match by name, but that seems to bring callbacks,
+				 * meaning we must be careful not to forestall compiler optimisations. */
 				if (cur_obj_uniqtype->nmemb > 0
 						&& cur_obj_uniqtype->contained[0].offset == 0)
 				{
@@ -693,12 +702,18 @@ __check_args_internal(const void *obj, int nargs, ...)
 	}
 	if (i == nargs && i < fun_uniqtype->array_len)
 	{
-		/* This means we exhausted nargs before we got to the end of the array. */
+		/* This means we exhausted nargs before we got to the end of the array.
+		 * In other words, the function takes more arguments than we were passed
+		 * for checking, i.e. more arguments than the call site passes. 
+		 * Not good! */
+		success = 0;
 	}
 	if (i < nargs && i == fun_uniqtype->array_len)
 	{
-		/* This means we passed more args than the uniqtype told us about. 
-		 * FIXME: check for its varargs-ness. */
+		/* This means we were passed more args than the uniqtype told us about. 
+		 * FIXME: check for its varargs-ness. If it's varargs, we're allowed to
+		 * pass more. For now, fail. */
+		success = 0;
 	}
 	
 	va_end(ap);
