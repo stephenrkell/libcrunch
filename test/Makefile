@@ -93,6 +93,18 @@ checkrun-sloppy-dumptypes:
 checkrun-section-group:
 	$(MAKE) cleanrun-section-group >/dev/null 2>&1
 
+# Some cases are special and have their own matching criteria
+checkrun-lazy-typing:
+	@echo "case is lazy-typing" && \
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	$(MAKE) cleanrun-lazy-typing 1>$$out 2>$$err && \
+		. ./checks.sh && tail -n26 "$$err" | \
+		    match "of which did lazy heap type assignment" '[1-9][0-9]*' | \
+		    match "checks failed inside"        '0' | \
+		    match "checks failed otherwise"     '0' >/dev/null || \
+		(tail -n26 $$err; false)
+
 _onlyrun-%:
 	LD_PRELOAD=$(PRELOAD) ./$*
 
