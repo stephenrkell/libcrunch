@@ -4,9 +4,9 @@ CIL_TOOLS := dumpallocs trumptr
 CIL ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/../../../cil
 
 LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
-CIL_TOOLS_SRC := $(shell find $(CIL_TOOLS) -name '*.ml')
-THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 CIL_EXTRASRC :=  $(LIBALLOCS_BASE)/tools/lang/c/dumpallocs $(realpath $(dir $(THIS_MAKEFILE)))/trumptr 
+CIL_TOOLS_SRC := $(shell find $(CIL_EXTRASRC) -name '*.ml')
+THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 
 default: src lib $(CIL)/bin/cilly sanity-tests
 
