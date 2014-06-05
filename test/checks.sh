@@ -3,6 +3,12 @@ match () {
     count_pattern="$2"
     
     input="$(cat)"
+    
+    # if we get no input, we don't fail
+    if [ -z "$input" ]; then
+        exit 0
+    fi
+    
     matched="$( echo "$input" | grep "$line" )"
     nlines_matched="$( echo "$matched" | wc -l )"
     
@@ -16,5 +22,4 @@ match () {
     
     # only chain if we succeeded
     echo "$input"
-    
 }
