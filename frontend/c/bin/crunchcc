@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# ... or for debugging, use something like
+#!/home/stephen/bin/gdbrun python
 
 # Compiler wrapper for libcrunch.
 # We identify the input source file in the commandline,
