@@ -1,4 +1,8 @@
-CFLAGS += -std=gnu99 -g -O4 -flto -fPIC -DNDEBUG -I../include
+CFLAGS += -std=gnu99 -g -fPIC -I../include
+CFLAGS += -O4 -flto -DNDEBUG
+FINAL_LDFLAGS += -O4 -flto -Bsymbolic -Wl,-O2
+#CFLAGS += -O0 
+#FINAL_LDFLAGS += -Bsymbolic
 
 CXXFLAGS := $(filter-out -std=%,$(CFLAGS)) -std=c++11
 
@@ -17,7 +21,7 @@ default: libcrunch_preload.so libcrunch_noop.so libcrunch_noop.o
 vpath %.c $(LIBALLOCS)/src
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
-CFLAGS += -fno-omit-frame-pointer
+CFLAGS += -fno-omit-frame-pointer -DUSE_FAKE_LIBUNWIND
 LIBUNWIND_LDLIBS :=
 else
 LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
@@ -37,14 +41,17 @@ $(CC_DEPS): .%.d : %.cc
 
 # We want to make sure that the libcrunch--liballocs interface is 
 # linked in the fastest possible way.
-libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS +=  -O4 -flto -Bsymbolic -Wl,-O2
+libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
 
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
 libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
-	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$^) $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload -Wl,--no-whole-archive -Wl,-Bdynamic 
+	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$^) \
+$(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) \
+-Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
+-Wl,--no-whole-archive -Wl,-Bdynamic 
 
 libdumpsmaps.so: libdumpsmaps.o
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %hooks.a,$^) $(LDFLAGS) 
