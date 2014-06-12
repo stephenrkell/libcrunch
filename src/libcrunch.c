@@ -301,7 +301,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
 	const char *reason = NULL; // if we abort, set this to a string lit
 	const void *reason_ptr = NULL; // if we abort, set this to a useful address
-	memory_kind k;
+	memory_kind k = UNKNOWN;
 	const void *object_start;
 	unsigned block_element_count = 1;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
@@ -319,7 +319,38 @@ int __is_a_internal(const void *obj, const void *arg)
 		&alloc_site,
 		&target_offset_within_uniqtype);
 	
-	if (__builtin_expect(abort, 0)) return 1; // we've already counted it
+	if (__builtin_expect(abort, 0))
+	{
+		/* If heap classification failed, null out the allocsite 
+		 * to avoid repeated searching. We only do this for non-debug
+		 * builds because it makes debugging a bit harder.
+		 */
+		if (__builtin_expect(k == HEAP
+				&& reason_ptr != NULL
+				&& reason_ptr == alloc_site, 0))
+		{
+			struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
+			assert(INSERT_DESCRIBES_OBJECT(ins));
+			/* Update the heap chunk's info to null the alloc site. 
+			 * PROBLEM: we need to make really sure that we're not nulling
+			 * out a redirected (deep) chunk's alloc site. 
+			 * 
+			 * NOTE that we don't want the insert to look like a deep-index
+			 * terminator, so we set the flag.
+			 */
+			if (ins)
+			{
+#ifdef NDEBUG
+				ins->alloc_site_flag = 1;
+				ins->alloc_site = 0;
+#endif
+				assert(INSERT_DESCRIBES_OBJECT(ins));
+				assert(!INSERT_IS_TERMINATOR(ins));
+			}
+		}
+		
+		return 1; // liballocs has already counted this abort
+	}
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
