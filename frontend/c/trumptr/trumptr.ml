@@ -418,11 +418,16 @@ class trumPtrExprVisitor = fun enclosingFile ->
   method vexpr (e: exp) : exp visitAction = 
     match e with 
       (* Check casts, unless 
-         - FIXME: they are not to a pointer typesig
          - they only affect qualifiers we don't care about
-         - they are casts to void* 
+         - they are casts to void* etc. _from another pointer type_? NO, we allow these
+             because they only "fail" if they don't point to valid memory, 
+             which is a memory-safety issue
        *)
       CastE(t, subex) -> 
+          let tsIsPointer testTs = match testTs with 
+              TSPtr(_, _) -> true
+            | _ -> false
+          in
           let subexTs = getConcreteType(Cil.typeSig(Cil.typeOf(subex)))
           in 
           let targetTs = getConcreteType(Cil.typeSig(t))
@@ -446,10 +451,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
           let ts = getConcreteType(Cil.typeSig(t))
           in
           match ts with 
-            TSPtr(TSBase(TVoid([])), []) -> DoChildren
-          | TSPtr(TSBase(TInt(IChar, [])), []) -> DoChildren
-          | TSPtr(TSBase(TInt(ISChar, [])), []) -> DoChildren
-          | TSPtr(TSBase(TInt(IUChar, [])), []) -> DoChildren
+            TSPtr(TSBase(TVoid([])), []) (* when tsIsPointer subexTs *) -> DoChildren
+          | TSPtr(TSBase(TInt(IChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
+          | TSPtr(TSBase(TInt(ISChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
+          | TSPtr(TSBase(TInt(IUChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(ptdts, attrs) -> begin
               output_string Pervasives.stderr ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
               (* enqueue the tmp var decl, assignment and assertion *)
