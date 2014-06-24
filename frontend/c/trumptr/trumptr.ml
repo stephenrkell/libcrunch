@@ -38,173 +38,13 @@
  *
  *)
 
-open Pretty
 open Cil
+open Pretty
 open Map
 open Str
-module NamedTypeMap = Map.Make(String)
-
-(* Module-ify Cil.tysSig *)
-module CilTypeSig = struct
-   type t = Cil.typsig
-   let compare ts1 ts2 = String.compare (Pretty.sprint 80 (d_typsig () ts1)) (Pretty.sprint 80 (d_typsig () ts2))
-end
-
-module UniqtypeMap = Map.Make(CilTypeSig)
+open Cilallocs
 module E = Errormsg
 module H = Hashtbl
-
-(* stolen from StackOverflow:  http://stackoverflow.com/questions/1584758/
-   -- eventually want to change to use Ocaml Batteries Included *)
-let trim str =   if str = "" then "" else   let search_pos init p next =
-    let rec search i =
-      if p i then raise(Failure "empty") else
-      match str.[i] with
-      | ' ' | '\n' | '\r' | '\t' -> search (next i)
-      | _ -> i
-    in
-    search init   in   let len = String.length str in   try
-    let left = search_pos 0 (fun i -> i >= len) (succ)
-    and right = search_pos (len - 1) (fun i -> i < 0) (pred)
-    in
-    String.sub str left (right - left + 1)   with   | Failure "empty" -> "" ;;
-    
-(* David Park at Stanford points out that you cannot take the address of a
- * bitfield in GCC. *)
-
-(* Returns true if the given lvalue offset ends in a bitfield access. *) 
-let rec is_bitfield lo = match lo with
-  | NoOffset -> false
-  | Field(fi,NoOffset) -> not (fi.fbitfield = None)
-  | Field(_,lo) -> is_bitfield lo
-  | Index(_,lo) -> is_bitfield lo 
-
-(* CIL doesn't give us a const void * type builtin, so we define one. *)
-let voidConstPtrType = TPtr(TVoid([Attr("const", [])]),[])
-
-let rec canonicalizeBaseTypeStr s = 
- (* 'generated' from a table maintained in srk's libcxxgen  *)
-if (s = "signed char" or s = "char" or s = "char signed" or  false) then "signed char"
-else if (s = "unsigned char" or s = "char unsigned" or  false) then "unsigned char"
-else if (s = "short int" or s = "short" or s = "int short" or  false) then "short int"
-else if (s = "short unsigned int" or s = "unsigned short" or s = "short unsigned" or s = "unsigned short int" or s = "int unsigned short" or s = "int short unsigned" or s = "unsigned int short" or s = "short int unsigned" or  false) then "short unsigned int"
-else if (s = "int" or s = "signed" or s = "signed int" or s = "int signed" or  false) then "int"
-else if (s = "unsigned int" or s = "unsigned" or s = "int unsigned" or  false) then "unsigned int"
-else if (s = "long int" or s = "long" or s = "int long" or s = "signed long int" or s = "int signed long" or s = "int long signed" or s = "long signed int" or s = "signed int long" or s = "long signed" or s = "signed long" or  false) then "long int"
-else if (s = "unsigned long int" or s = "int unsigned long" or s = "int long unsigned" or s = "long unsigned int" or s = "unsigned int long" or s = "long unsigned" or s = "unsigned long" or  false) then "unsigned long int"
-else if (s = "long long int" or s = "long long" or s = "long int long" or s = "int long long" or s = "long long signed" or s = "long signed long" or s = "signed long long" or s = "long long int signed" or s = "long long signed int" or s = "long signed long int" or s = "signed long long int" or s = "long int long signed" or s = "long int signed long" or s = "long signed int long" or s = "signed long int long" or s = "int long long signed" or s = "int long signed long" or s = "int signed long long" or s = "signed int long long" or  false) then "long long int"
-else if (s = "long long unsigned int" or s = "long long unsigned" or s = "long unsigned long" or s = "unsigned long long" or s = "long long int unsigned" or s = "long unsigned long int" or s = "unsigned long long int" or s = "long int long unsigned" or s = "long int unsigned long" or s = "long unsigned int long" or s = "unsigned long int long" or s = "int long long unsigned" or s = "int long unsigned long" or s = "int unsigned long long" or s = "unsigned int long long" or  false) then "long long unsigned int"
-else if (s = "float" or  false) then "float"
-else if (s = "double" or  false) then "double"
-else if (s = "long double" or s = "double long" or  false) then "long double"
-else if (s = "bool" or  false) then "bool"
-else if (s = "wchar_t" or  false) then "wchar_t"
-  else s
-
-(* HACK: pasted from dumpallocs *)
- 
-
-            (* The string representation needs tweaking to make it a symname:
-               - prepend "__uniqtype_" 
-               - insert the defining header file, with the usual munging for slashes, hyphens, dots, and spaces
-               - FIXME: fix up base types specially!
-               - replace '^' with '__PTR_' 
-               - replace '()=>' with '__FUN_'.
-               NOTE that arrays probably shouldn't come up here.
-
-               We can't get the declaring file/line ("location" in CIL-speak) from a typesig,
-               nor from its type -- we need the global.  *)
-
-(* WORKAROUND for CIL's anonymous structure types: 
-   we undo the numbering (set to 1) and hope for the best. *)
-let hackTypeName s = (*if (string_match (regexp "__anon\\(struct\\|union\\|enum\\)_.*_[0-9]+$") s 0)
-   then Str.global_replace (Str.regexp "_[0-9]+$") "_1" s
-   else*) s
-
-let rec barenameFromSig ts = 
- let rec labelledArgTs ts startAt =
-   match ts with
-     [] -> ""
-  | t :: morets -> 
-      let remainder = (labelledArgTs morets (startAt + 1))
-      in
-      "__ARG" ^ (string_of_int startAt) ^ "_" ^ (barenameFromSig t) ^ remainder
- in
- let baseTypeStr ts = 
-   let rawString = match ts with 
-     TInt(kind,attrs) -> (Pretty.sprint 80 (d_ikind () kind))
-   | TFloat(kind,attrs) -> (Pretty.sprint 80 (d_fkind () kind))
-   | TBuiltin_va_list(attrs) -> "__builtin_va_list"
-   | _ -> raise(Failure ("bad base type: " ^ (Pretty.sprint 80 (Pretty.dprintf "%a" d_type ts))))
-   in 
-   Str.global_replace (Str.regexp "[. /-]") "_" (canonicalizeBaseTypeStr (trim rawString))
- in
- match ts with
-   TSArray(tNestedSig, optSz, attrs) -> "__ARR" ^ (match optSz with Some(s) -> (string_of_int (i64_to_int s)) | None -> "0") ^ "_" ^ (barenameFromSig tNestedSig)
- | TSPtr(tNestedSig, attrs) -> "__PTR_" ^ (barenameFromSig tNestedSig)
- | TSComp(isSpecial, name, attrs) -> (hackTypeName name)
- | TSFun(returnTs, argsTss, isSpecial, attrs) -> 
-      "__FUN_FROM_" ^ (labelledArgTs argsTss 0) ^ (if isSpecial then "__VA_" else "") ^ "__FUN_TO_" ^ (barenameFromSig returnTs) 
- | TSEnum(enumName, attrs) -> enumName
- | TSBase(TVoid(attrs)) -> "void"
- | TSBase(tbase) -> baseTypeStr tbase
-
-let userTypeNameToBareName s = Str.global_replace (Str.regexp "[. /-]") "_" (canonicalizeBaseTypeStr (trim s))
-
-let symnameFromSig ts = "__uniqtype_" ^ "" ^ "_" ^ (barenameFromSig ts)
-
-(* Return an expression that evaluates to the address of the given lvalue.
- * For most lvalues, this is merely AddrOf(lv). However, for bitfields
- * we do some offset gymnastics. 
- *)
-let addr_of_lv (lh,lo) = 
-  if is_bitfield lo then begin
-    (* we figure out what the address would be without the final bitfield
-     * access, and then we add in the offset of the bitfield from the
-     * beginning of its enclosing comp *) 
-    let rec split_offset_and_bitfield lo = match lo with 
-      | NoOffset -> failwith "trumptr: impossible" 
-      | Field(fi,NoOffset) -> (NoOffset,fi)
-      | Field(e,lo) ->  let a,b = split_offset_and_bitfield lo in 
-                        ((Field(e,a)),b)
-      | Index(e,lo) ->  let a,b = split_offset_and_bitfield lo in
-                        ((Index(e,a)),b)
-    in 
-    let new_lv_offset, bf = split_offset_and_bitfield lo in
-    let new_lv = (lh, new_lv_offset) in 
-    let enclosing_type = TComp(bf.fcomp, []) in 
-    let bits_offset, bits_width = 
-      bitsOffset enclosing_type (Field(bf,NoOffset)) in
-    let bytes_offset = bits_offset / 8 in 
-    let lvPtr = mkCast ~e:(mkAddrOf (new_lv)) ~newt:(charPtrType) in
-    (BinOp(PlusPI, lvPtr, (integer bytes_offset), ulongType))
-  end else (AddrOf (lh,lo))
-
-(* This effectively embodies our "default specification" for C code
- * -- it controls what we assert in "__is_a" tests, and
- * needs to mirror what we record for allocation sites in dumpallocs *)
-let rec getConcreteType ts =
- match ts with
-   TSArray(tsig, optSz, attrs) -> getConcreteType tsig
- | TSPtr(tsig, attrs) -> TSPtr(getConcreteType tsig, []) (* stays a pointer, but discard attributes *)
- | TSComp(isSpecial, name, attrs) -> TSComp(isSpecial, name, [])
- | TSFun(returnTs, argsTss, isSpecial, attrs) -> TSFun(returnTs, argsTss, isSpecial, [])
- | TSEnum(enumName, attrs) -> TSEnum(enumName, [])
- | TSBase(TVoid(attrs)) -> TSBase(TVoid([]))
- | TSBase(TInt(kind,attrs)) -> TSBase(TInt(kind, []))
- | TSBase(TFloat(kind,attrs)) -> TSBase(TFloat(kind, []))
- | _ -> ts
-
-let findCompDefinitionInFile isStruct name wholeFile = 
-    let rec findCompGlobal iss n globals = 
-        match globals with
-            []       -> None
-        |   g :: gs  -> begin match g with
-                GCompTag(ci, _) -> if ci.cstruct = isStruct && ci.cname = name then Some(g) else findCompGlobal iss n gs
-              | _ -> findCompGlobal iss n gs
-            end
-    in
-    findCompGlobal isStruct name wholeFile.globals
 
 (* How we deal with incompletes. 
  * 
@@ -219,18 +59,6 @@ let findCompDefinitionInFile isStruct name wholeFile =
  *     do a deep "like a" seeing through functions, pointers and arrays,
  *     where our test type substitutes void (or empty) for the incomplete.
  *     It feels like a lot of faff for little reward, sadly. *)
-
-let rec tsIsUndefinedType ts wholeFile = 
-    let rec anyTsIsUndefined tss = match tss with
-        []          -> false
-      | ts1 :: more -> (tsIsUndefinedType ts1 wholeFile) || (anyTsIsUndefined more)
-    in
-    match ts with
-        TSArray(tsig, optSz, attrs)                 -> tsIsUndefinedType tsig wholeFile
-    |   TSPtr(tsig, attrs)                          -> tsIsUndefinedType tsig wholeFile
-    |   TSComp(isStruct, name, attrs)               -> (findCompDefinitionInFile isStruct name wholeFile) = None
-    |   TSFun(returnTs, argsTss, isVarargs, attrs)  -> tsIsUndefinedType returnTs wholeFile || anyTsIsUndefined argsTss
-    |   _                                           -> false
 
   (* CIL "expressions" are defined to be side-effect-free. Side-effecting
      operations are pushed into "instructions". Since we want to insert
@@ -252,60 +80,6 @@ let rec tsIsUndefinedType ts wholeFile =
        --- i.e. replace a cast expression with a reference to a temporary...
        ... and insert the definition + assertion *before* the containing instr.
    *)
- 
- let matchIgnoringLocation g1 g2 = match g1 with 
-    GType(ti, loc) ->        begin match g2 with GType(ti2, _)        -> ti = ti2 | _ -> false end
-  | GCompTag(ci, loc) ->     begin match g2 with GCompTag(ci2, _)     -> ci = ci2 | _ -> false end
-  | GCompTagDecl(ci, loc) -> begin match g2 with GCompTagDecl(ci2, _) -> ci = ci2 | _ -> false end
-  | GEnumTag(ei, loc) ->     begin match g2 with GEnumTag(ei2, _)     -> ei = ei2 | _ -> false end
-  | GEnumTagDecl(ei, loc) -> begin match g2 with GEnumTagDecl(ei2, _) -> ei = ei2 | _ -> false end
-  | GVarDecl(vi, loc) ->     begin match g2 with GVarDecl(vi2, loc)   -> vi = vi2 | _ -> false end
-  | GVar(vi, ii, loc) ->     begin match g2 with GVar(vi2, ii2, loc)  -> ((vi = vi2) (* and (ii = ii2) *)) | _ -> false end
-  | GFun(f, loc) ->          begin match g2 with GFun(f2, loc)        -> f  = f2  | _ -> false end
-  | GAsm(s, loc) ->          begin match g2 with GAsm(s2, loc)        -> s  = s2  | _ -> false end
-  | GPragma(a, loc) ->       begin match g2 with GPragma(a2, loc)     -> a  = a2  | _ -> false end
-  | GText(s) ->              begin match g2 with GText(s2)            -> s  = s2  | _ -> false end
-
-let isFunction g = match g with
-  GFun(_, _) -> true
-| _ -> false
-
-let newGlobalsList globals toAdd insertBeforePred = 
-  let (preList, postList) = 
-      let rec buildPre l accumPre = match l with 
-          [] -> (accumPre, [])
-       |  x::xs -> if (insertBeforePred x) then (accumPre, x :: xs) else buildPre xs (accumPre @ [x])
-      in 
-      buildPre globals []
-  in
-  preList @ toAdd @ postList
-
-let getOrCreateUniqtypeGlobal m typename concreteType globals = 
-  try 
-      let found = UniqtypeMap.find concreteType m
-      in
-      let foundVar = match found with 
-        GVarDecl(v, i) -> v
-      | _ -> raise(Failure "unexpected state")
-      in 
-      (m, foundVar, globals)
-  with Not_found -> 
-     let newGlobal = 
-       let tempGlobal = makeGlobalVar typename (TInt(IInt, [])); 
-       in 
-       tempGlobal.vstorage <- Extern;
-       tempGlobal.vattr <- [Attr("weak", [])];
-       tempGlobal
-     in
-     let newGlobalVarInfo = GVarDecl(newGlobal, {line = -1; file = "BLAH FIXME"; byte = 0})
-     in 
-     let newMap = (UniqtypeMap.add concreteType newGlobalVarInfo m)
-     in 
-     let newGlobals = newGlobalsList globals [newGlobalVarInfo] isFunction
-     in
-     (newMap, newGlobal, newGlobals)
-
-
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
                            fun isAInternalFunDec ->
@@ -693,6 +467,10 @@ class trumPtrFunVisitor = fun fl -> object
         { \n\
             return 1; \n\
         } \n\
+        if (%v:obj == (void*) -1) \n\
+        { \n\
+            return 1; \n\
+        } \n\
         // int inited = __libcrunch_check_init (); \n\
         // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
         // { \n\
@@ -729,6 +507,10 @@ class trumPtrFunVisitor = fun fl -> object
         { \n\
             return 1; \n\
         } \n\
+        if (%v:obj == (void*) -1) \n\
+        { \n\
+            return 1; \n\
+        } \n\
         // int inited = __libcrunch_check_init (); \n\
         // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
         // { \n\
@@ -752,6 +534,10 @@ class trumPtrFunVisitor = fun fl -> object
                                  ], 
                             false, [])) "\
         if (!%v:obj) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        if (%v:obj == (void*) -1) \n\
         { \n\
             return 1; \n\
         } \n\
@@ -788,6 +574,10 @@ class trumPtrFunVisitor = fun fl -> object
                                  ], 
                             false, [])) "\
         if (!%v:obj) \n\
+        { \n\
+            return 1; \n\
+        } \n\
+        if (%v:obj == (void*) -1) \n\
         { \n\
             return 1; \n\
         } \n\
@@ -840,10 +630,10 @@ class trumPtrFunVisitor = fun fl -> object
       ChangeTo(visitCilFunction tpExprVisitor f)
 end
 
-let feature : featureDescr = 
+let feature : Feature.t = 
   { fd_name = "trumptr";
-    fd_enabled = ref false;
-    fd_description = "generation of code to assert object data types";
+    fd_enabled = false;
+    fd_description = "dynamic checking of pointer casts";
     fd_extraopt = [];
     fd_doit = 
     (function (fl: file) -> 
@@ -854,3 +644,4 @@ let feature : featureDescr =
     fd_post_check = true;
   } 
 
+let () = Feature.register feature

@@ -1,34 +1,37 @@
-# This makefile handles all the CIL building for our subdirs
-# (currently dumpallocs and trumptr)
-CIL_TOOLS := dumpallocs trumptr
-CIL ?= $(realpath $(dir $(lastword $(MAKEFILE_LIST))))/../../../cil
-
-LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
-CIL_EXTRASRC :=  $(LIBALLOCS_BASE)/tools/lang/c/dumpallocs $(realpath $(dir $(THIS_MAKEFILE)))/trumptr 
-CIL_TOOLS_SRC := $(shell find $(CIL_EXTRASRC) -name '*.ml')
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 
-default: src lib $(CIL)/bin/cilly sanity-tests
+LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
 
-%.cil.o: %.c $(CIL)/bin/cilly
-	cd "$(dir $<)" && $(CIL)/bin/cilly --do$$( echo $(dir $<) | tr -d '/' ) --save-temps -c -o "$(notdir $@)" "$(notdir $<)"
+OCAMLFIND ?= ocamlfind
+CILLY ?= cilly
+CIL_TOOLS := trumptr
+OCAMLFLAGS +=  -package findlib -package cil
+OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/lib #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
+
+default: src lib cil sanity-tests
+
+.PHONY: cil
+cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs)
+
+# until cilly can --load multiple plugins, we have to do this
+%.cmxs: $(LIBALLOCS_BASE)/tools/lang/c/lib/cilallocs.cmx $(LIBALLOCS_BASE)/tools/lang/c/dumpallocs/dumpallocs.cmx %.cmx 
+%.cmxs: $(LIBALLOCS_BASE)/tools/lang/c/lib/cilallocs.cmx %.cmx 
+	$(OCAMLFIND) ocamlopt -shared -o "$@" $(OCAMLOPTFLAGS) $(OCAMLFLAGS) $+
+%.cmx %.cmi: %.ml
+	$(OCAMLFIND) ocamlopt -o "$@" $(OCAMLOPTFLAGS) $(OCAMLFLAGS) -c "$<"
+%.cmo %.cmi: %.ml
+	$(OCAMLFIND) ocamlc -o "$@" $(OCAMLFLAGS) -c "$<"
+
+# for testing
+%.cil.o: %.c
+	cd "$(dir $<)" && $(CILLY) --do$$( echo $(dir $<) | tr -d '/' ) --save-temps -c -o "$(notdir $@)" "$(notdir $<)"
 
 clean:
-	for dir in $(CIL_TOOLS); do (cd $$dir && rm -f *.o *.cil.c *.i ); done
+	for dir in $(CIL_TOOLS); do (cd $$dir && rm -f *.o *.cmo *.cma *.cmi *.cmx *.cmxa *.cmxs *.cil.c *.i ); done
 	$(MAKE) -C src clean
 
-print_cilly_path:
-	@echo $(CIL)/bin/cilly
-
-$(CIL)/bin/cilly: $(CIL_TOOLS_SRC)
-	cd $(CIL) && \
-	(grep '.$(foreach subpat,$(CIL_EXTRASRC) $(CIL_TOOLS),\?$(subpat).*)' config.log || \
-	    ./configure EXTRASRCDIRS="$(CIL_EXTRASRC)" EXTRAFEATURES="$(CIL_TOOLS)" ) && \
-	COMPILE_FLAGS=-g $(MAKE) && \
-	touch $(CIL)/bin/cilly
-
 .PHONY: sanity-tests
-sanity-tests: | default
+sanity-tests: | src lib cil
 	$(MAKE) -C ../../test cleanrun-hello cleanrun-hello-errno cleanrun-hello-static cleanrun-hello-stack cleanrun-hello-heap
 
 .PHONY: src

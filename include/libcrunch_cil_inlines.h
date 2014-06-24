@@ -98,6 +98,10 @@ static inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 	{ 
 		return 1; 
 	} 
+	if (obj = (void*) -1) 
+	{ 
+		return 1; 
+	} 
 	// int inited = __libcrunch_check_init (); 
 	// if (__builtin_expect((inited == -1), 0)) 
 	// { 
@@ -125,6 +129,10 @@ static inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const voi
 	{
 		return 1;
 	}
+	if (obj == (void*) -1)
+	{
+		return 1;
+	}
 	// int inited = __libcrunch_check_init ();
 	// if (__builtin_expect((inited == -1), 0))
 	// {
@@ -144,6 +152,10 @@ static inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const v
 	{ 
 		return 1; 
 	} 
+	if (obj == (void*) -1)
+	{
+		return 1;
+	}
 	// int inited = __libcrunch_check_init (); 
 	// if (__builtin_expect((inited == -1), 0)) 
 	// { 

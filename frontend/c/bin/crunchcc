@@ -29,9 +29,16 @@ class CrunchCC(AllocsCC):
             return ret  # give up now
         
         return AllocsCC.fixupDotO(self, filename)
-    
+        
     def getCillyArgs(self):
-        return AllocsCC.getCillyArgs(self) + ["--dotrumptr"]
+        # do dumpallocs et al *and* trumptr
+        return AllocsCC.getCillyArgs(self) + \
+            ["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr"]
+    
+#    def getCillyArgs(self):
+#        # do dumpallocs et al *and* trumptr, loading only trumptr.cmxs (which contains dumpallocs)
+#        return ["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
+#            "--dodumpallocs", "--dotrumptr"]
     
     def getLdLibBase(self):
         return "-lcrunch"
