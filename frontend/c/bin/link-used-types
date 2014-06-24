@@ -89,6 +89,7 @@ objcopy_and_redefine_codeless_names () {
 echo ${USEDTYPES} "$objfile" 1>&2 # for debugging
 (  objcopy_and_redefine_c_names "$objfile" && \
    echo "Successfully did objcopy_and_redefine_c_names" 1>&2 && \
+   echo ${USEDTYPES} "$objfile" 1>&2 && \
    ${USEDTYPES} "$objfile" > "$usedtypes_src" && \
    echo "Successfully did usedtypes" 1>&2 && \
    compile "$usedtypes_src" "$usedtypes_obj" && \
