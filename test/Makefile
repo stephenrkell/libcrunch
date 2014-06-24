@@ -1,3 +1,4 @@
+CFLAGS += -D_GNU_SOURCE # HACK
 CFLAGS += -g3 -gstrict-dwarf -std=c99 -fno-eliminate-unused-debug-types -O2
 CFLAGS += -DUSE_STARTUP_BRK
 
