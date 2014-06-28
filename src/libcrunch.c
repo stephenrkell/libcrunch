@@ -23,6 +23,9 @@
 int __libcrunch_debug_level;
 _Bool __libcrunch_is_initialized;
 
+const char *exe_basename __attribute__((visibility("hidden")));
+FILE *stream_err __attribute__((visibility("hidden")));
+
 // helper
 static const void *typestr_to_uniqtype_from_lib(void *handle, const char *typestr);
 
@@ -40,9 +43,9 @@ static struct uniqtype **lazy_heap_types;
 
 static int print_type_cb(struct uniqtype *t, void *ignored)
 {
-	fprintf(stderr, "uniqtype addr %p, name %s, size %d bytes\n", 
+	fprintf(stream_err, "uniqtype addr %p, name %s, size %d bytes\n", 
 		t, t->name, t->pos_maxoff);
-	fflush(stderr);
+	fflush(stream_err);
 	return 0;
 }
 
@@ -155,34 +158,34 @@ static void print_exit_summary(void)
 	
 	if (suppression_count > 0)
 	{
-		debug_printf(0, "Suppressed %d further occurrences of the previous error\n", 
+		debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
 				suppression_count);
 	}
 	
-	fprintf(stderr, "====================================================\n");
-	fprintf(stderr, "libcrunch summary: \n");
-	fprintf(stderr, "----------------------------------------------------\n");
-	fprintf(stderr, "checks begun:                              % 9ld\n", __libcrunch_begun);
-	fprintf(stderr, "----------------------------------------------------\n");
+	fprintf(stream_err, "====================================================\n");
+	fprintf(stream_err, "libcrunch summary: \n");
+	fprintf(stream_err, "----------------------------------------------------\n");
+	fprintf(stream_err, "checks begun:                              % 9ld\n", __libcrunch_begun);
+	fprintf(stream_err, "----------------------------------------------------\n");
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(stderr, "checks aborted due to init failure:        % 9ld\n", __libcrunch_aborted_init);
+	fprintf(stream_err, "checks aborted due to init failure:        % 9ld\n", __libcrunch_aborted_init);
 #endif
-	fprintf(stderr, "checks aborted for bad typename:           % 9ld\n", __libcrunch_aborted_typestr);
+	fprintf(stream_err, "checks aborted for bad typename:           % 9ld\n", __libcrunch_aborted_typestr);
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(stderr, "checks trivially passed:                   % 9ld\n", __libcrunch_trivially_succeeded);
+	fprintf(stream_err, "checks trivially passed:                   % 9ld\n", __libcrunch_trivially_succeeded);
 #endif
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(stderr, "checks remaining                           % 9ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr + __libcrunch_aborted_init));
+	fprintf(stream_err, "checks remaining                           % 9ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr + __libcrunch_aborted_init));
 #else
-	fprintf(stderr, "checks remaining                           % 9ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
+	fprintf(stream_err, "checks remaining                           % 9ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
 #endif	
-	fprintf(stderr, "----------------------------------------------------\n");
-	fprintf(stderr, "   of which did lazy heap type assignment: % 9ld\n", __libcrunch_lazy_heap_type_assignment);
-	fprintf(stderr, "----------------------------------------------------\n");
-	fprintf(stderr, "checks failed inside allocation functions: % 9ld\n", __libcrunch_failed_in_alloc);
-	fprintf(stderr, "checks failed otherwise:                   % 9ld\n", __libcrunch_failed);
-	fprintf(stderr, "checks nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
-	fprintf(stderr, "====================================================\n");
+	fprintf(stream_err, "----------------------------------------------------\n");
+	fprintf(stream_err, "   of which did lazy heap type assignment: % 9ld\n", __libcrunch_lazy_heap_type_assignment);
+	fprintf(stream_err, "----------------------------------------------------\n");
+	fprintf(stream_err, "checks failed inside allocation functions: % 9ld\n", __libcrunch_failed_in_alloc);
+	fprintf(stream_err, "checks failed otherwise:                   % 9ld\n", __libcrunch_failed);
+	fprintf(stream_err, "checks nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
+	fprintf(stream_err, "====================================================\n");
 
 	if (getenv("LIBCRUNCH_DUMP_SMAPS_AT_EXIT"))
 	{
@@ -193,10 +196,10 @@ static void print_exit_summary(void)
 		{
 			while (0 < (bytes = fread(buffer, 1, sizeof(buffer), smaps)))
 			{
-				fwrite(buffer, 1, bytes, stderr);
+				fwrite(buffer, 1, bytes, stream_err);
 			}
 		}
-		else fprintf(stderr, "Couldn't read from smaps!\n");
+		else fprintf(stream_err, "Couldn't read from smaps!\n");
 	}
 }
 
@@ -224,6 +227,28 @@ int __libcrunch_global_init(void)
 		sleep(10);
 	}
 
+		// figure out where our output goes
+	const char *errvar = getenv("LIBCRUNCH_ERR");
+	if (errvar)
+	{
+		// try opening it
+		stream_err = fopen(errvar, "w");
+		if (!stream_err)
+		{
+			stream_err = stderr;
+			debug_printf(0, "could not open %s for writing\n", errvar);
+		}
+	} else stream_err = stderr;
+	assert(stream_err);
+
+	// grab the executable's basename
+	char exename[4096];
+	ssize_t readlink_ret = readlink("/proc/self/exe", exename, sizeof exename);
+	if (readlink_ret != -1)
+	{
+		exe_basename = basename(exename); // GNU basename
+	}
+	
 	const char *debug_level_str = getenv("LIBCRUNCH_DEBUG_LEVEL");
 	if (debug_level_str) __libcrunch_debug_level = atoi(debug_level_str);
 
@@ -409,17 +434,17 @@ int __is_a_internal(const void *obj, const void *arg)
 		{
 			if (suppression_count > 0)
 			{
-				debug_printf(0, "Suppressed %d further occurrences of the previous error\n", 
+				debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
 						suppression_count);
 			}
 			
 			debug_printf(0, "Failed check __is_a_internal(%p, %p a.k.a. \"%s\") at %p, "
-					"%d bytes into an allocation of a %s%s%s "
+					"%ld bytes into an allocation of a %s%s%s "
 					"(deepest subobject: %s at offset %d) "
 					"originating at %p\n", 
 				obj, test_uniqtype, test_uniqtype->name,
 				__builtin_return_address(0),
-				(char*) obj - (char*) object_start,
+				(long)((char*) obj - (char*) object_start),
 				name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
 				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
 				(cur_obj_uniqtype ? cur_obj_uniqtype->name : "(none)"), 
