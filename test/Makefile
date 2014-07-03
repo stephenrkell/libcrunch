@@ -14,11 +14,13 @@ export UNIQTYPES_BASE
 export ALLOCSITES_BASE
 
 export CC := $(realpath $(dir $(THIS_MAKEFILE))/../frontend/c/bin/crunchcc)
+export CXX := $(realpath $(dir $(THIS_MAKEFILE))/../frontend/c++/bin/crunchc++)
 export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include -I$(LIBALLOCS)/include
 export LDFLAGS += -L$(LIBALLOCS)/lib
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
 CFLAGS += -fno-omit-frame-pointer
+CXXFLAGS += -fno-omit-frame-pointer
 LIBUNWIND_LDLIBS :=
 else
 LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
@@ -26,6 +28,9 @@ endif
 
 ifeq ($(CC),)
 $(error Could not find crunchcc)
+endif
+ifeq ($(CXX),)
+$(error Could not find crunchc++)
 endif
 
 cases := $(filter-out checks.sh,$(wildcard [-a-z]*))
@@ -83,6 +88,8 @@ checkrun-%:
 # Some cases are special and require only an exit status of zero
 checkrun-hello: 
 	$(MAKE) cleanrun-hello >/dev/null 2>&1
+checkrun-hello-c++: 
+	$(MAKE) cleanrun-hello-c++ >/dev/null 2>&1
 checkrun-hello-errno: 
 	$(MAKE) cleanrun-hello-errno >/dev/null 2>&1
 checkrun-hello-qualified-char:
@@ -139,4 +146,5 @@ default:
 # generic clean rule that we can run from test dirs too (with $(MAKE) -f ../Makefile)
 clean: # (delete anything whose name is a prefix of a .c file's and doesn't contain a dot)
 	rm -f $(filter-out .,$(patsubst %.c,%,$(shell find -name '*.c')))
+	rm -f $(filter-out .,$(patsubst %.cc,%,$(shell find -name '*.cc')))
 	find -name '*.cil.*'  -o -name '*.i' -o -name '*.o' -o -name '*.s' -o -name '*.allocs' | xargs rm -f
