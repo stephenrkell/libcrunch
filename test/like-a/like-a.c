@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <assert.h>
 #include <sys/socket.h>
@@ -6,7 +5,6 @@
 #include <dlfcn.h>
 
 #include "libcrunch.h"
-#include "libcrunch_cil_inlines.h" // for __like_aU
 
 void *test_void_ptr;
 struct sockaddr test_sockaddr;

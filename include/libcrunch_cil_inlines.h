@@ -1,4 +1,29 @@
-static inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void)
+/* the functions are *not* weak -- they're defined in the noop library. 
+ * we would like the noop library not to be necessary. */
+int __libcrunch_global_init (void);
+int __is_a_internal(const void *obj, const void *u);
+int __like_a_internal(const void *obj, const void *u);
+int __named_a_internal(const void *obj, const void *u);
+/* This function is weak, but FIXME: that might be broken. */
+const void *__libcrunch_typestr_to_uniqtype (const char *) __attribute__((weak));
+/* This is not weak. */
+void __assert_fail();
+
+extern _Bool __libcrunch_is_initialized __attribute__((weak));
+extern unsigned long __libcrunch_begun __attribute__((weak));
+extern unsigned long __libcrunch_aborted_typestr __attribute__((weak));
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
+	int cond, const char *assertion, const char *file, unsigned int line, const char *func
+		);
+extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
+	int cond, const char *assertion, const char *file, unsigned int line, const char *func
+		){
+	if (!cond) __assert_fail(assertion, file, line, func);
+}
+
+extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void);
+extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void)
 {
 	if (__builtin_expect(! & __libcrunch_is_initialized, 0))
 	{
@@ -92,13 +117,14 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
 
 */
 
-static inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype)
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype)
 {
 	if (!obj) 
 	{ 
 		return 1; 
 	} 
-	if (obj = (void*) -1) 
+	if (obj == (void*) -1) 
 	{ 
 		return 1; 
 	} 
@@ -123,7 +149,8 @@ static inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 	return ret;
 }
 
-static inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const void *obj, const char *typestr)
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const void *obj, const char *typestr);
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const void *obj, const char *typestr)
 {
 	if (!obj)
 	{
@@ -146,7 +173,8 @@ static inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const voi
 
 }
 
-static inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const void *obj, const void *uniqtype)
+extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const void *obj, const void *uniqtype)
 {
 	if (!obj) 
 	{ 
@@ -174,5 +202,37 @@ static inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const v
 	// now we're really started 
 	__libcrunch_begun += 1; 
 	int ret = __like_a_internal(obj, uniqtype); 
+	return ret;
+}
+
+extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const void *obj, const char *s);
+extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const void *obj, const char *s)
+{
+	if (!obj)
+	{
+		return 1;
+	}
+	if (obj == (void*) -1)
+	{
+		return 1;
+	}
+	// int inited = __libcrunch_check_init ();
+	// if (/*__builtin_expect(*/(inited == -1)/*, 0)*/)
+	// {
+	//	 return 1;
+	// }
+
+	/* Null uniqtype means __is_aS got a bad typestring, OR we're not  
+	 * linked with enough uniqtypes data. */
+	if (/*__builtin_expect(*/ !s/*, 0)*/)
+	{
+		__libcrunch_begun += 1;
+		__libcrunch_aborted_typestr += 1;
+		return 1;
+	}
+	/* No need for the char check in the CIL version */ 
+	// now we're really started 
+	__libcrunch_begun += 1;
+	int ret = __named_a_internal(obj, s);
 	return ret;
 }

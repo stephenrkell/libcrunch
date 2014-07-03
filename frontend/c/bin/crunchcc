@@ -33,7 +33,14 @@ class CrunchCC(AllocsCC):
     def getCillyArgs(self):
         # do dumpallocs et al *and* trumptr
         return AllocsCC.getCillyArgs(self) + \
-            ["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr"]
+            ["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
+            "--dotrumptr", \
+            "--keepunused", "-include", os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
+            "-Wno-unused-variable", "-Wno-unused-label"]
+            # We need the above -Wno-unused-... because CIL creates
+            # some unused stuff (unavoidably, I believe) which will
+            # make compilation done with -Werror barf if we don't
+            # silence them.
     
 #    def getCillyArgs(self):
 #        # do dumpallocs et al *and* trumptr, loading only trumptr.cmxs (which contains dumpallocs)

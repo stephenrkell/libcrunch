@@ -301,11 +301,21 @@ class trumPtrExprVisitor = fun enclosingFile ->
     | _ -> DoChildren
 end (* end match e *)
 
-let makeExternalFunctionInFile fl nm proto = (* findOrCreateFunc fl nm proto *) (* NO! doesn't let us have the fundec *)
-  let funDec = emptyFunction nm in
-    funDec.svar.vtype <- proto;
-    fl.globals <- newGlobalsList fl.globals [GVarDecl(funDec.svar, {line = -1; file = "BLAH FIXME"; byte = 0})] isFunction; 
-    funDec
+let findOrCreateExternalFunctionInFile fl nm proto : fundec = (* findOrCreateFunc fl nm proto *) (* NO! doesn't let us have the fundec *)
+  let rec findFun gs = match gs with
+      [] -> None
+   |  g :: gg -> match g with 
+            GFun(dec, _) ->
+                output_string stderr ("saw a function, name " ^ dec.svar.vname ^ "\n");
+                if dec.svar.vname = nm then Some(dec) else findFun gg
+          | _ -> findFun gg
+  in 
+  match findFun fl.globals with 
+    Some(d) -> d
+  | None -> let funDec = emptyFunction nm in
+        funDec.svar.vtype <- proto;
+        fl.globals <- newGlobalsList fl.globals [GVarDecl(funDec.svar, {line = -1; file = "BLAH FIXME"; byte = 0})] isFunction; 
+        funDec
 
 
 let makeInlineFunctionInFile fl ourFun nm proto body referencedValues = begin
@@ -370,39 +380,39 @@ class trumPtrFunVisitor = fun fl -> object
   val mutable libcrunchAbortedTypestr = makeGlobalVar "__libcrunch_aborted_typestr" (TInt(IULong, [Attr("weak", [])]))
   val mutable libcrunchBegun = makeGlobalVar "__libcrunch_begun" (TInt(IULong, [Attr("weak", [])]))
 
-  val warnxFunDec = makeExternalFunctionInFile fl "warnx" (TFun(voidType, 
+  val warnxFunDec = findOrCreateExternalFunctionInFile fl "warnx" (TFun(voidType, 
                              Some [ ("fmt", charConstPtrType, []) ],
                             true, []))
 
-  val libcrunchGlobalInitFunDec = makeExternalFunctionInFile fl "__libcrunch_global_init" (TFun(intType, 
+  val libcrunchGlobalInitFunDec = findOrCreateExternalFunctionInFile fl "__libcrunch_global_init" (TFun(intType, 
                              Some [],
                             false, [Attr("weak", [])]))
   
-  val typestrToUniqtypeFunDec = makeExternalFunctionInFile fl "__libcrunch_typestr_to_uniqtype" (TFun(voidConstPtrType, 
+  val typestrToUniqtypeFunDec = findOrCreateExternalFunctionInFile fl "__libcrunch_typestr_to_uniqtype" (TFun(voidConstPtrType, 
                              Some [("typestr", charConstPtrType, [])],
                             false, [Attr("weak", [])]))
   
-  val isAInternalFunDec = makeExternalFunctionInFile fl "__is_a_internal" (TFun(intType, 
+  val isAInternalFunDec = findOrCreateExternalFunctionInFile fl "__is_a_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
   
-  val likeAInternalFunDec = makeExternalFunctionInFile fl "__like_a_internal" (TFun(intType, 
+  val likeAInternalFunDec = findOrCreateExternalFunctionInFile fl "__like_a_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
   
-  val namedAInternalFunDec = makeExternalFunctionInFile fl "__named_a_internal" (TFun(intType, 
+  val namedAInternalFunDec = findOrCreateExternalFunctionInFile fl "__named_a_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
 
-  val checkArgsInternalFunDec = makeExternalFunctionInFile fl "__check_args_internal" (TFun(intType, 
+  val checkArgsInternalFunDec = findOrCreateExternalFunctionInFile fl "__check_args_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
                                    ("nargs", intType, []) ],
                             true, [(*Attr("weak", [])*)]))
   
-  val assertFailFunDec = makeExternalFunctionInFile fl "__assert_fail" (TFun(voidType, 
+  val assertFailFunDec = findOrCreateExternalFunctionInFile fl "__assert_fail" (TFun(voidType, 
                             Some [ 
                             ("assertion", charConstPtrType, []);
                             ("file", charConstPtrType, []);
@@ -428,25 +438,33 @@ class trumPtrFunVisitor = fun fl -> object
      * to avoid implicit declaration problems. So we split the list at this element, 
      * then build a new list. *)
 
-    inlineAssertFun <- makeInlineFunctionInFile fl inlineAssertFun "__inline_assert" (TFun(voidType, 
+    inlineAssertFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
+                            fl (* inlineAssertFun *) "__inline_assert" (TFun(voidType, 
                             Some [ ("cond", intType, []);
                                    ("assertion", charConstPtrType, []);
                                    ("file", charConstPtrType, []);
                                    ("line", uintType, []);
                                    ("function", charConstPtrType, [])
                                     ], 
-                            false, [])) "if (!%v:cond) %v:__assert_fail(%v:assertion, %v:file, %v:line, %v:function);" [("__assert_fail", (Fv assertFailFunDec.svar) )];
+                            false, [])) 
+                            (*
+                            "if (!%v:cond) %v:__assert_fail(%v:assertion, %v:file, %v:line, %v:function);" 
+                            [("__assert_fail", (Fv assertFailFunDec.svar) )]
+                            *)
+                            ;
 
-    libcrunchCheckInitFun <- makeInlineFunctionInFile fl libcrunchCheckInitFun "__libcrunch_check_initialized" (TFun(TInt(IInt, []), 
+    libcrunchCheckInitFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
+                            fl (* libcrunchCheckInitFun *) "__libcrunch_check_initialized" (TFun(TInt(IInt, []), 
                             Some [], 
-                            false, [])) "\
-    if (/*__builtin_expect (*/ ! & %v:__libcrunch_is_initialized/*, 0)*/) \n\
+                            false, [])) 
+    (*                        "\
+    if (/*__builtin_expect ( */ ! & %v:__libcrunch_is_initialized/*, 0)*/) \n\
     { \n\
         /* This means that we're not linked with libcrunch.  \n\
          * There's nothing we can do! */ \n\
         return -1; \n\
     } \n\
-    if ( /*__builtin_expect (*/ ! %v:__libcrunch_is_initialized/*, 0)*/) \n\
+    if ( /*__builtin_expect ( */ ! %v:__libcrunch_is_initialized/*, 0)*/) \n\
     { \n\
         /* This means we haven't initialized. \n\
          * Try that now (it won't try more than once). */ \n\
@@ -467,19 +485,19 @@ class trumPtrFunVisitor = fun fl -> object
         { \n\
             return 1; \n\
         } \n\
-        if (%v:obj == (void*) -1) \n\
+        if (%v:obj == (void * ) -1) \n\
         { \n\
             return 1; \n\
         } \n\
         // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // if (/*__builtin_expect( */(inited == -1)/*, 0)*/) \n\
         // { \n\
         //     return 1; \n\
         // } \n\
         \n\
         /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
          * linked with enough uniqtypes data. */ \n\
-        if (/*__builtin_expect(*/ !r/*, 0)*/) \n\
+        if (/*__builtin_expect( */ !r/*, 0)*/) \n\
         { \n\
            __libcrunch_begun += 1; \n\
            __libcrunch_aborted_typestr += 1; \n\
@@ -494,25 +512,27 @@ class trumPtrFunVisitor = fun fl -> object
       ("warnx", (Fv warnxFunDec.svar)); 
       ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
       ("__libcrunch_begun", (Fv libcrunchBegun));
-      ("__is_a_internal", (Fv isAInternalFunDec.svar)) ]; 
-           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
-                "unrecognised typename (see stack trace)"); *)
+      ("__is_a_internal", (Fv isAInternalFunDec.svar)) ]
+    *)
+    ;
 
-    isASInlineFun <- makeInlineFunctionInFile fl isASInlineFun "__is_aS" (TFun(intType, 
+    isASInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
+                            fl (* isASInlineFun *) "__is_aS" (TFun(intType, 
                             Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", charConstPtrType, [])
                                  ], 
-                            false, [])) "\
+                            false, [])) 
+                            (* "\
         if (!%v:obj) \n\
         { \n\
             return 1; \n\
         } \n\
-        if (%v:obj == (void*) -1) \n\
+        if (%v:obj == (void * ) -1) \n\
         { \n\
             return 1; \n\
         } \n\
         // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // if (/*__builtin_expect( */ (inited == -1)/*, 0)*/) \n\
         // { \n\
         //     return 1; \n\
         // } \n\
@@ -524,32 +544,34 @@ class trumPtrFunVisitor = fun fl -> object
        "
      [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
       ("__libcrunch_typestr_to_uniqtype", (Fv typestrToUniqtypeFunDec.svar)); 
-      ("__is_aU", (Fv isAUInlineFun.svar)) ]; 
-           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
-                "unrecognised typename (see stack trace)"); *)
+      ("__is_aU", (Fv isAUInlineFun.svar)) ]
+*)
+    ; 
 
-    likeAUInlineFun <- makeInlineFunctionInFile fl likeAUInlineFun "__like_aU" (TFun(intType, 
+    likeAUInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile 
+                            fl (* likeAUInlineFun *) "__like_aU" (TFun(intType, 
                             Some [ ("obj", voidConstPtrType, []);
                                    ("r", voidConstPtrType, [])
                                  ], 
-                            false, [])) "\
+                            false, [])) 
+                            (* "\
         if (!%v:obj) \n\
         { \n\
             return 1; \n\
         } \n\
-        if (%v:obj == (void*) -1) \n\
+        if (%v:obj == (void * ) -1) \n\
         { \n\
             return 1; \n\
         } \n\
         // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // if (/*__builtin_expect( */ (inited == -1)/*, 0)*/) \n\
         // { \n\
         //     return 1; \n\
         // } \n\
         \n\
         /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
          * linked with enough uniqtypes data. */ \n\
-        if (/*__builtin_expect(*/ !r/*, 0)*/) \n\
+        if (/*__builtin_expect ( */ !r/*, 0)*/) \n\
         { \n\
            __libcrunch_begun += 1; \n\
            __libcrunch_aborted_typestr += 1; \n\
@@ -564,32 +586,34 @@ class trumPtrFunVisitor = fun fl -> object
       ("warnx", (Fv warnxFunDec.svar)); 
       ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
       ("__libcrunch_begun", (Fv libcrunchBegun));
-      ("__like_a_internal", (Fv likeAInternalFunDec.svar)) ]; 
-           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
-                "unrecognised typename (see stack trace)"); *)
-    
-    namedAUInlineFun <- makeInlineFunctionInFile fl namedAUInlineFun "__named_aU" (TFun(intType, 
+      ("__like_a_internal", (Fv likeAInternalFunDec.svar)) ]
+    *)
+    ;
+
+    namedAUInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
+                            fl (* namedAUInlineFun *) "__named_aU" (TFun(intType, 
                             Some [ ("obj", voidConstPtrType, []);
                                    ("s", voidConstPtrType, [])
                                  ], 
-                            false, [])) "\
+                            false, [])) 
+                            (* "\
         if (!%v:obj) \n\
         { \n\
             return 1; \n\
         } \n\
-        if (%v:obj == (void*) -1) \n\
+        if (%v:obj == (void * ) -1) \n\
         { \n\
             return 1; \n\
         } \n\
         // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect(*/(inited == -1)/*, 0)*/) \n\
+        // if (/*__builtin_expect( */(inited == -1)/*, 0)*/) \n\
         // { \n\
         //     return 1; \n\
         // } \n\
         \n\
         /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
          * linked with enough uniqtypes data. */ \n\
-        if (/*__builtin_expect(*/ !s/*, 0)*/) \n\
+        if (/*__builtin_expect( */ !s/*, 0)*/) \n\
         { \n\
            __libcrunch_begun += 1; \n\
            __libcrunch_aborted_typestr += 1; \n\
@@ -605,23 +629,23 @@ class trumPtrFunVisitor = fun fl -> object
       ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
       ("__libcrunch_begun", (Fv libcrunchBegun));
       ("__named_a_internal", (Fv namedAInternalFunDec.svar)) ]; 
-           (* %v:warnx("Aborted __is_a(%%p, %%p), reason: %%s \n", obj, r, 
-                "unrecognised typename (see stack trace)"); *)
+    *)
+    ;
     
     fl.globals <- newGlobalsList fl.globals [
          GVarDecl(libcrunchIsInitialized, {line = -1; file = "BLAH FIXME"; byte = 0});
          GVarDecl(libcrunchBegun, {line = -1; file = "BLAH FIXME"; byte = 0});
          GVarDecl(libcrunchAbortedTypestr, {line = -1; file = "BLAH FIXME"; byte = 0});
          (* GFun(libcrunchGlobalInitFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
-         GFun(libcrunchCheckInitFun, {line = -1; file = "BLAH FIXME"; byte = 0});
+         (* GFun(libcrunchCheckInitFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
          (* GFun(warnxFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
          (* GFun(isAInternalFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
          (* GFun(assertFailFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
-         GFun(inlineAssertFun, {line = -1; file = "BLAH FIXME"; byte = 0});
-         GFun(isAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); 
-         GFun(isASInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0});
-         GFun(likeAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0});
-         GFun(namedAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0})
+         (* GFun(inlineAssertFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
+         (* GFun(isAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0});  *)
+         (* GFun(isASInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
+         (* GFun(likeAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
+        (*  GFun(namedAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}) *)
          ] 
          isFunction
 
