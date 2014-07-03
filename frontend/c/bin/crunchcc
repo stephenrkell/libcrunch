@@ -3,19 +3,10 @@
 #!/home/stephen/bin/gdbrun python
 
 # Compiler wrapper for libcrunch.
-# We identify the input source file in the commandline,
-# and export it as an environment variable.
-# We then delegate to cilly,
-# passing --save-temps=$( dirname "$inputfile" )
-# i.e. to ensure that temporaries get created in the source file's location
-# FIXME: This might break some builds using a separate objdir.
-# The Right Thing to do is to somehow replicate the source directory structure
-# rooted at the current directory. But it's not clear how to do this in general.
-
 import os, sys, re, subprocess, tempfile
 
 # HACK
-sys.path.append(os.path.realpath(os.path.dirname(sys.argv[0]) + "/../../../../liballocs.hg/tools/lang/c/lib"))
+sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../../../../liballocs.hg/tools/lang/c/lib"))
 from allocscc import AllocsCC
 
 class CrunchCC(AllocsCC):
@@ -41,11 +32,6 @@ class CrunchCC(AllocsCC):
             # some unused stuff (unavoidably, I believe) which will
             # make compilation done with -Werror barf if we don't
             # silence them.
-    
-#    def getCillyArgs(self):
-#        # do dumpallocs et al *and* trumptr, loading only trumptr.cmxs (which contains dumpallocs)
-#        return ["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
-#            "--dodumpallocs", "--dotrumptr"]
     
     def getLdLibBase(self):
         return "-lcrunch"

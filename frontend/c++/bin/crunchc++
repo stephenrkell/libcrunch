@@ -1,0 +1,43 @@
+#!/usr/bin/env python
+# ... or for debugging, use something like
+#!/home/stephen/bin/gdbrun python
+
+# c++ compiler wrapper for libcrunch.
+# We identify the input source file in the commandline,
+# and export it as an environment variable.
+# We then delegate to cilly,
+# passing --save-temps=$( dirname "$inputfile" )
+# i.e. to ensure that temporaries get created in the source file's location
+# FIXME: This might break some builds using a separate objdir.
+# The Right Thing to do is to somehow replicate the source directory structure
+# rooted at the current directory. But it's not clear how to do this in general.
+
+import os, sys, re, subprocess, tempfile
+
+# HACK
+sys.path.append(os.path.realpath(os.path.dirname(sys.argv[0]) + "/../../../../liballocs.hg/tools/lang/c++/lib"))
+from allocscxx import AllocsCxx
+
+class CrunchCxx(AllocsCxx):
+ 
+    def fixupDotO(self, filename):
+        # also link the file with the uniqtypes it references
+        cmd = [os.path.dirname(sys.argv[0]) + "/../c/link-used-types", filename]
+        sys.stderr.write("Calling " + " ".join(cmd) + "\n")
+        ret = subprocess.call(cmd)
+        if ret != 0:
+            return ret  # give up now
+        
+        return AllocsCxx.fixupDotO(self, filename)
+        
+    def getLdLibBase(self):
+        return "-lcrunch"
+     
+    def getLinkPath(self):
+        return os.path.dirname(__file__) + "/../../../lib"
+
+if __name__ == '__main__':
+    wrapper = CrunchCxx()
+    ret = wrapper.main()
+    exit(ret)
+
