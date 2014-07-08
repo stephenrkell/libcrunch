@@ -333,7 +333,6 @@ int __is_a_internal(const void *obj, const void *arg)
 	signed target_offset_within_uniqtype;
 	
 	_Bool abort = __liballocs_get_alloc_info(obj, 
-		arg, 
 		&reason,
 		&reason_ptr,
 		&k,
@@ -479,7 +478,6 @@ int __like_a_internal(const void *obj, const void *arg)
 	void *caller_address = __builtin_return_address(0);
 	
 	_Bool abort = __liballocs_get_alloc_info(obj, 
-		arg, 
 		&reason,
 		&reason_ptr,
 		&k,
@@ -624,7 +622,6 @@ int __named_a_internal(const void *obj, const void *arg)
 	void *caller_address = __builtin_return_address(0);
 	
 	_Bool abort = __liballocs_get_alloc_info(obj, 
-		arg, 
 		&reason,
 		&reason_ptr,
 		&k,
@@ -717,7 +714,6 @@ __check_args_internal(const void *obj, int nargs, ...)
 	struct uniqtype *fun_uniqtype = NULL;
 	
 	_Bool abort = __liballocs_get_alloc_info(obj, 
-		NULL, 
 		&reason,
 		&reason_ptr,
 		&k,
