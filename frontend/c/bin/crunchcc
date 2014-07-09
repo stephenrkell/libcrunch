@@ -11,15 +11,19 @@ from allocscc import AllocsCC
 
 class CrunchCC(AllocsCC):
  
-    def fixupDotO(self, filename):
+    def fixupDotO(self, filename, errfile):
         # also link the file with the uniqtypes it references
         cmd = [os.path.dirname(sys.argv[0]) + "/./link-used-types", filename]
-        sys.stderr.write("Calling " + " ".join(cmd) + "\n")
-        ret = subprocess.call(cmd)
-        if ret != 0:
-            return ret  # give up now
+        self.debugMsg("Calling " + " ".join(cmd) + "\n")
         
-        return AllocsCC.fixupDotO(self, filename)
+        errfilename = os.path.realpath(filename) + ".fixuplog"
+
+        with (open(errfilename, "w") if not errfile else errfile) as errfile:
+            ret = subprocess.call(cmd, stderr=errfile)
+            if ret != 0:
+                return ret  # give up now
+
+            return AllocsCC.fixupDotO(self, filename, errfile)
         
     def getCillyArgs(self):
         # do dumpallocs et al *and* trumptr
@@ -33,8 +37,8 @@ class CrunchCC(AllocsCC):
             # make compilation done with -Werror barf if we don't
             # silence them.
     
-    def getLdLibBase(self):
-        return "-lcrunch"
+    def getLibNameStem(self):
+        return "crunch"
      
     def getLinkPath(self):
         return os.path.dirname(__file__) + "/../../../lib"

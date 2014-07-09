@@ -230,7 +230,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
           | TSPtr(TSBase(TInt(ISChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(TSBase(TInt(IUChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(ptdts, attrs) -> begin
-              output_string Pervasives.stderr ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
+              debug_print 1 ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
               (* enqueue the tmp var decl, assignment and assertion *)
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
               let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
@@ -250,10 +250,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
                       (namedAUInlineFun.svar, "__named_aU")
                   else match (findLikeA canonicalName likeATypeNames) with
                     None ->
-                        output_string Pervasives.stderr ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                        debug_print 1 ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
                         (isAUInlineFun.svar, "__is_aU")
                   | Some(_) -> 
-                        output_string Pervasives.stderr ("using __like_a! because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                        debug_print 1 ("using __like_a! because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
                         (likeAUInlineFun.svar, "__like_aU")
               end
               in
@@ -306,7 +306,7 @@ let findOrCreateExternalFunctionInFile fl nm proto : fundec = (* findOrCreateFun
       [] -> None
    |  g :: gg -> match g with 
             GFun(dec, _) ->
-                output_string stderr ("saw a function, name " ^ dec.svar.vname ^ "\n");
+                (* output_string stderr ("saw a function, name " ^ dec.svar.vname ^ "\n"); *)
                 if dec.svar.vname = nm then Some(dec) else findFun gg
           | _ -> findFun gg
   in 
@@ -662,7 +662,7 @@ let feature : Feature.t =
     fd_doit = 
     (function (fl: file) -> 
       let tpFunVisitor = new trumPtrFunVisitor fl in
-      output_string Pervasives.stderr ("command line args are:\n"
+      debug_print 1 ("command line args are:\n"
        ^ (String.concat ", " (Array.to_list Sys.argv) ) );
       visitCilFileSameGlobals tpFunVisitor fl);
     fd_post_check = true;
