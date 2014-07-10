@@ -15,7 +15,7 @@ ifeq ($(notdir $(CC)),crunchcc)
 export CC := cc
 endif
 
-default: libcrunch_preload.so libcrunch_noop.so libcrunch_noop.o
+default: libcrunch_preload.so libcrunch_preload.a libcrunch_noop.so libcrunch_noop.o
 
 # for addrmap.c and fake-libunwind.c (WHY do we need these in libcrunch)
 vpath %.c $(LIBALLOCS)/src
@@ -52,6 +52,9 @@ libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
 $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) \
 -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
 -Wl,--no-whole-archive -Wl,-Bdynamic 
+
+libcrunch_preload.a: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
+	$(AR) r "$@" $+
 
 libdumpsmaps.so: libdumpsmaps.o
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %hooks.a,$^) $(LDFLAGS) 
