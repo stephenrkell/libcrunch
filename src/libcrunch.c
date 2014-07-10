@@ -445,8 +445,10 @@ int __is_a_internal(const void *obj, const void *arg)
 				(long)((char*) obj - (char*) object_start),
 				name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
 				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
-				(cur_obj_uniqtype ? cur_obj_uniqtype->name : "(none)"), 
-					cumulative_offset_searched, 
+				(cur_obj_uniqtype ? 
+					((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : cur_obj_uniqtype->name) 
+					: "(none)"), 
+				cumulative_offset_searched, 
 				alloc_site);
 			last_failed_site = __builtin_return_address(0);
 			last_failed_object_start = object_start;
