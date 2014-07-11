@@ -4,6 +4,7 @@ int __libcrunch_global_init (void);
 int __is_a_internal(const void *obj, const void *u);
 int __like_a_internal(const void *obj, const void *u);
 int __named_a_internal(const void *obj, const void *u);
+int __is_a_function_refining_internal(const void *obj, const void *u);
 /* This function is weak, but FIXME: that might be broken. */
 const void *__libcrunch_typestr_to_uniqtype (const char *) __attribute__((weak));
 /* This is not weak. */
@@ -234,5 +235,35 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const 
 	// now we're really started 
 	__libcrunch_begun += 1;
 	int ret = __named_a_internal(obj, s);
+	return ret;
+}
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_refiningU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_refiningU )(const void *obj, const void *uniqtype)
+{
+	if (!obj)
+	{
+		return 1;
+	}
+	if (obj == (void*) -1)
+	{
+		return 1;
+	}
+	// int inited = __libcrunch_check_init ();
+	// if (__builtin_expect((inited == -1), 0))
+	// {
+	//	 return 1;
+	// }
+	
+	/* Null uniqtype means __is_aS got a bad typestring, OR we're not 
+	 * linked with enough uniqtypes data. */
+	if (__builtin_expect( !uniqtype, 0))
+	{
+		__libcrunch_begun += 1;
+		__libcrunch_aborted_typestr += 1;
+		return 1;
+	}
+	// now we're really started
+	__libcrunch_begun += 1;
+	int ret = __is_a_function_refining_internal(obj, uniqtype);
 	return ret;
 }

@@ -88,7 +88,8 @@ class trumPtrExprVisitor = fun enclosingFile ->
                            fun isAUInlineFun ->
                            fun likeAUInlineFun ->
                            fun namedAUInlineFun ->
-                           fun inlineAssertFun -> 
+                           fun isAFunctionRefiningUInlineFun ->
+                          fun inlineAssertFun -> 
                                object(self)
   inherit nopCilVisitor
 
@@ -108,7 +109,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
   val currentInst : instr option ref = ref None
   method vinst (i: instr) : instr list visitAction = begin
     currentInst := Some(i);
-    (* We handle indirect calls here. *)
+    (* We handle check-on-use of indirect calls here. *)
     if sloppyFps then begin
         match i with 
           Call(_, funExpr, args, location) -> begin
@@ -121,6 +122,13 @@ class trumPtrExprVisitor = fun enclosingFile ->
             in
             match maybeFpts with
             |   Some(fpts) -> begin
+                    (* For function pointers, we take the following approach.
+                       We try the __is_a check first, because it is fast and if it passes,
+                       we are okay.
+                       Otherwise we do the more expensive check_args check.
+                       We only report a failure if the more expensive check fails. *)
+                  
+                  
                     (* For each pointer argument, we insert a check that the argument satisfies __is_a (or __like_a)
                      * with the argument that the *called* function expects to receive. How do we get at the called
                      * function's uniqtype? *)
@@ -212,7 +220,9 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 | _ -> false
           in 
           if targetTs = subexTs then DoChildren else 
-          (* from any pointer (or int) to any function pointer is okay -- we check on use *)
+          (* from any pointer (or int) to any function pointer is okay -- we check on use 
+           * -- IFF we're being sloppy. There is a significant performance penalty for
+           * check-on-use in some codebases (e.g. gcc). *)
           if (sloppyFps && (tsIsFunctionPointer targetTs)) then DoChildren else begin
           let location = match !currentInst with
             None -> {line = -1; file = "(unknown)"; byte = 0}
@@ -222,14 +232,15 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 | Asm(attrs, instrs, locs, u, v, l) -> l
             end
           in
-          let ts = getConcreteType(Cil.typeSig(t))
-          in
-          match ts with 
+          match targetTs with 
             TSPtr(TSBase(TVoid([])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(TSBase(TInt(IChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(TSBase(TInt(ISChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(TSBase(TInt(IUChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
-          | TSPtr(ptdts, attrs) -> begin
+            (* We could use our own constant folding to detect always-null pointers here. 
+               But we just let the compiler do it! It will inline our __is_aU and will
+               simplify it down to nothing if the pointer is null. *)
+          | TSPtr(ptdts, attrs) (* when not isStaticallyNullPtr subex *) -> begin
               debug_print 1 ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
               (* enqueue the tmp var decl, assignment and assertion *)
               let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
@@ -243,11 +254,44 @@ class trumPtrExprVisitor = fun enclosingFile ->
               in
               let concretePtdts = (getConcreteType ptdts) 
               in 
+                    (* If the target type is a singly indirect function pointer, 
+                       we apply a more liberal test than __is_a, 
+                       namely __is_a_function_refining.
+                       
+                       This succeeds for distinct function pointer types 
+                       IFF the implicit casts done at a call site (including return)
+                       ... using the cast's target type 
+                       ... would always pass __is_a.
+                       
+                       NOTE that this is NOT the same as __check_args that we do for sloppy FPs.
+                       __check_args is a check-on-use for function pointers
+                       (inserted at indirect calls -- see way above in the code) 
+                       whereas this is a check-on cast.
+                       
+                       We could roll this special function test together with __is_a,
+                       but since it's a much rarer case, 
+                       it seems better to keep it separate (e.g. for cache reasons). 
+                       
+                       Is check-on-use ever wanted?
+                       YES if we want to cast to void*( * )(void * )
+                            then use it with argument Foo
+                            where it actually creates a Bar --
+                            if we want to permissively let the fp cast go ahead, 
+                            we have to check [all subsequent] function pointer uses.
+                            
+                       What about multiply-indirect function pointers? 
+                             e.g. int( ****fn)(void* ) 
+                             
+                             We need to take the super-strict approach as usual here.
+                     *)
+
               let canonicalName = barenameFromSig concretePtdts
               in
               let testfunVar, testfunName = begin
                   if (tsIsUndefinedType concretePtdts enclosingFile) then
                       (namedAUInlineFun.svar, "__named_aU")
+                  else if (tsIsFunctionPointer targetTs) then
+                      (isAFunctionRefiningUInlineFun.svar, "__is_a_function_refiningU")
                   else match (findLikeA canonicalName likeATypeNames) with
                     None ->
                         debug_print 1 ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
@@ -394,17 +438,22 @@ class trumPtrFunVisitor = fun fl -> object
   
   val isAInternalFunDec = findOrCreateExternalFunctionInFile fl "__is_a_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
-                                   ("typestr", voidConstPtrType, []) ],
+                                   ("t", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
   
   val likeAInternalFunDec = findOrCreateExternalFunctionInFile fl "__like_a_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
-                                   ("typestr", voidConstPtrType, []) ],
+                                   ("t", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
   
   val namedAInternalFunDec = findOrCreateExternalFunctionInFile fl "__named_a_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
                                    ("typestr", voidConstPtrType, []) ],
+                            false, [(*Attr("weak", [])*)]))
+
+  val isAFunctionRefiningInternalFunDec = findOrCreateExternalFunctionInFile fl "__is_a_function_refining_internal" (TFun(intType, 
+                             Some [ ("obj", voidConstPtrType, []);
+                                   ("t", voidConstPtrType, []) ],
                             false, [(*Attr("weak", [])*)]))
 
   val checkArgsInternalFunDec = findOrCreateExternalFunctionInFile fl "__check_args_internal" (TFun(intType, 
@@ -428,6 +477,7 @@ class trumPtrFunVisitor = fun fl -> object
   val mutable isASInlineFun = emptyFunction "__is_aS"
   val mutable likeAUInlineFun = emptyFunction "__like_aU"
   val mutable namedAUInlineFun = emptyFunction "__named_aU"
+  val mutable isAFunctionRefiningUInlineFun = emptyFunction "__is_a_function_refiningU"
   
 
   initializer
@@ -447,73 +497,12 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("function", charConstPtrType, [])
                                     ], 
                             false, [])) 
-                            (*
-                            "if (!%v:cond) %v:__assert_fail(%v:assertion, %v:file, %v:line, %v:function);" 
-                            [("__assert_fail", (Fv assertFailFunDec.svar) )]
-                            *)
                             ;
 
     libcrunchCheckInitFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
                             fl (* libcrunchCheckInitFun *) "__libcrunch_check_initialized" (TFun(TInt(IInt, []), 
                             Some [], 
                             false, [])) 
-    (*                        "\
-    if (/*__builtin_expect ( */ ! & %v:__libcrunch_is_initialized/*, 0)*/) \n\
-    { \n\
-        /* This means that we're not linked with libcrunch.  \n\
-         * There's nothing we can do! */ \n\
-        return -1; \n\
-    } \n\
-    if ( /*__builtin_expect ( */ ! %v:__libcrunch_is_initialized/*, 0)*/) \n\
-    { \n\
-        /* This means we haven't initialized. \n\
-         * Try that now (it won't try more than once). */ \n\
-        int ret = __libcrunch_global_init (); \n\
-        return ret; \n\
-    } \n\
-     \n\
-    return 0; \n\
-                           " [("__libcrunch_is_initialized", (Fv libcrunchIsInitialized)); 
-                              ("__libcrunch_global_init", (Fv libcrunchGlobalInitFunDec.svar)) ];
-                           
-    isAUInlineFun <- makeInlineFunctionInFile fl isAUInlineFun "__is_aU" (TFun(intType, 
-                            Some [ ("obj", voidConstPtrType, []);
-                                   ("r", voidConstPtrType, [])
-                                 ], 
-                            false, [])) "\
-        if (!%v:obj) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        if (%v:obj == (void * ) -1) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect( */(inited == -1)/*, 0)*/) \n\
-        // { \n\
-        //     return 1; \n\
-        // } \n\
-        \n\
-        /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
-         * linked with enough uniqtypes data. */ \n\
-        if (/*__builtin_expect( */ !r/*, 0)*/) \n\
-        { \n\
-           __libcrunch_begun += 1; \n\
-           __libcrunch_aborted_typestr += 1; \n\
-             return 1; \n\
-        } \n\
-        /* No need for the char check in the CIL version */ \n\
-        // now we're really started \n\
-        __libcrunch_begun += 1; \n\
-        int ret = __is_a_internal(obj, r); \n\
-        return ret;"
-     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
-      ("warnx", (Fv warnxFunDec.svar)); 
-      ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
-      ("__libcrunch_begun", (Fv libcrunchBegun));
-      ("__is_a_internal", (Fv isAInternalFunDec.svar)) ]
-    *)
     ;
 
     isASInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
@@ -522,30 +511,6 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("typestr", charConstPtrType, [])
                                  ], 
                             false, [])) 
-                            (* "\
-        if (!%v:obj) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        if (%v:obj == (void * ) -1) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect( */ (inited == -1)/*, 0)*/) \n\
-        // { \n\
-        //     return 1; \n\
-        // } \n\
-        \n\
-        void * r = __libcrunch_typestr_to_uniqtype(typestr); \n\
-        \n\
-        int ret = __is_aU(obj, r);\n\
-        return ret; \n\
-       "
-     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
-      ("__libcrunch_typestr_to_uniqtype", (Fv typestrToUniqtypeFunDec.svar)); 
-      ("__is_aU", (Fv isAUInlineFun.svar)) ]
-*)
     ; 
 
     likeAUInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile 
@@ -554,40 +519,6 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("r", voidConstPtrType, [])
                                  ], 
                             false, [])) 
-                            (* "\
-        if (!%v:obj) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        if (%v:obj == (void * ) -1) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect( */ (inited == -1)/*, 0)*/) \n\
-        // { \n\
-        //     return 1; \n\
-        // } \n\
-        \n\
-        /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
-         * linked with enough uniqtypes data. */ \n\
-        if (/*__builtin_expect ( */ !r/*, 0)*/) \n\
-        { \n\
-           __libcrunch_begun += 1; \n\
-           __libcrunch_aborted_typestr += 1; \n\
-             return 1; \n\
-        } \n\
-        /* No need for the char check in the CIL version */ \n\
-        // now we're really started \n\
-        __libcrunch_begun += 1; \n\
-        int ret = __like_a_internal(obj, r); \n\
-        return ret;"
-     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
-      ("warnx", (Fv warnxFunDec.svar)); 
-      ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
-      ("__libcrunch_begun", (Fv libcrunchBegun));
-      ("__like_a_internal", (Fv likeAInternalFunDec.svar)) ]
-    *)
     ;
 
     namedAUInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
@@ -596,40 +527,13 @@ class trumPtrFunVisitor = fun fl -> object
                                    ("s", voidConstPtrType, [])
                                  ], 
                             false, [])) 
-                            (* "\
-        if (!%v:obj) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        if (%v:obj == (void * ) -1) \n\
-        { \n\
-            return 1; \n\
-        } \n\
-        // int inited = __libcrunch_check_init (); \n\
-        // if (/*__builtin_expect( */(inited == -1)/*, 0)*/) \n\
-        // { \n\
-        //     return 1; \n\
-        // } \n\
-        \n\
-        /* Null uniqtype means __is_aS got a bad typestring, OR we're not  \n\
-         * linked with enough uniqtypes data. */ \n\
-        if (/*__builtin_expect( */ !s/*, 0)*/) \n\
-        { \n\
-           __libcrunch_begun += 1; \n\
-           __libcrunch_aborted_typestr += 1; \n\
-             return 1; \n\
-        } \n\
-        /* No need for the char check in the CIL version */ \n\
-        // now we're really started \n\
-        __libcrunch_begun += 1; \n\
-        int ret = __named_a_internal(obj, s); \n\
-        return ret;"
-     [("__libcrunch_check_init", (Fv libcrunchCheckInitFun.svar)); 
-      ("warnx", (Fv warnxFunDec.svar)); 
-      ("__libcrunch_aborted_typestr", (Fv libcrunchAbortedTypestr)); 
-      ("__libcrunch_begun", (Fv libcrunchBegun));
-      ("__named_a_internal", (Fv namedAInternalFunDec.svar)) ]; 
-    *)
+    ;
+    isAFunctionRefiningUInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
+                            fl (* namedAUInlineFun *) "__is_a_function_refiningU" (TFun(intType, 
+                            Some [ ("obj", voidConstPtrType, []);
+                                   ("t", voidConstPtrType, [])
+                                 ], 
+                            false, [])) 
     ;
     
     fl.globals <- newGlobalsList fl.globals [
@@ -646,11 +550,12 @@ class trumPtrFunVisitor = fun fl -> object
          (* GFun(isASInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
          (* GFun(likeAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}); *)
         (*  GFun(namedAUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}) *)
+        (*  GFun(isAFunctionRefiningUInlineFun, {line = -1; file = "BLAH FIXME"; byte = 0}) *)
          ] 
          isFunction
 
   method vfunc (f: fundec) : fundec visitAction = 
-      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun inlineAssertFun in
+      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun inlineAssertFun in
       ChangeTo(visitCilFunction tpExprVisitor f)
 end
 

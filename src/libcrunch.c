@@ -746,9 +746,9 @@ __check_args_internal(const void *obj, int nargs, ...)
 		struct uniqtype *expected_arg = fun_uniqtype->contained[i+1].ptr;
 		/* We only check casts that are to pointer targets types.
 		 * How to test this? */
-		if (!expected_arg->is_array && expected_arg->array_len == MAGIC_LENGTH_POINTER)
+		if (UNIQTYPE_IS_POINTER_TYPE(expected_arg))
 		{
-			struct uniqtype *expected_arg_pointee_type = expected_arg->contained[0].ptr;
+			struct uniqtype *expected_arg_pointee_type = UNIQTYPE_POINTEE_TYPE(expected_arg);
 			success &= __is_aU(argval, expected_arg_pointee_type);
 		}
 		if (!success) break;
@@ -772,4 +772,183 @@ __check_args_internal(const void *obj, int nargs, ...)
 	va_end(ap);
 	
 	return success ? 0 : i; // 0 means success here
+}
+
+int __is_a_function_refining_internal(const void *obj, const void *arg)
+{
+	/* We might not be initialized yet (recall that __libcrunch_global_init is 
+	 * not a constructor, because it's not safe to call super-early). */
+	__libcrunch_check_init();
+	
+	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
+	const char *reason = NULL; // if we abort, set this to a string lit
+	const void *reason_ptr = NULL; // if we abort, set this to a useful address
+	memory_kind k = UNKNOWN;
+	const void *object_start;
+	unsigned block_element_count = 1;
+	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
+	const void *alloc_site;
+	signed target_offset_within_uniqtype;
+	
+	_Bool abort = __liballocs_get_alloc_info(obj, 
+		&reason,
+		&reason_ptr,
+		&k,
+		&object_start,
+		&block_element_count,
+		&alloc_uniqtype,
+		&alloc_site,
+		&target_offset_within_uniqtype);
+	
+	if (__builtin_expect(abort, 0))
+	{
+		/* If heap classification failed, null out the allocsite 
+		 * to avoid repeated searching. We only do this for non-debug
+		 * builds because it makes debugging a bit harder.
+		 */
+		if (__builtin_expect(k == HEAP
+				&& reason_ptr != NULL
+				&& reason_ptr == alloc_site, 0))
+		{
+			struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
+			assert(INSERT_DESCRIBES_OBJECT(ins));
+			/* Update the heap chunk's info to null the alloc site. 
+			 * PROBLEM: we need to make really sure that we're not nulling
+			 * out a redirected (deep) chunk's alloc site. 
+			 * 
+			 * NOTE that we don't want the insert to look like a deep-index
+			 * terminator, so we set the flag.
+			 */
+			if (ins)
+			{
+#ifdef NDEBUG
+				ins->alloc_site_flag = 1;
+				ins->alloc_site = 0;
+#endif
+				assert(INSERT_DESCRIBES_OBJECT(ins));
+				assert(!INSERT_IS_TERMINATOR(ins));
+			}
+		}
+		
+		return 1; // liballocs has already counted this abort
+	}
+	
+	/* If we're offset-zero, that's good... */
+	if (object_start == obj)
+	{
+		/* If we're an exact match, that's good.... */
+		if (alloc_uniqtype == arg)
+		{
+			++__libcrunch_succeeded;
+			return 1;
+		}
+		else
+		{
+			/* If we're not a function, that's bad. */
+			if (UNIQTYPE_IS_SUBPROGRAM(alloc_uniqtype))
+			{
+				/* If our argument counts don't match, that's bad. */
+				if (alloc_uniqtype->array_len == test_uniqtype->array_len)
+				{
+					/* For each argument, we want to make sure that 
+					 * the "implicit" cast done on the argument, from
+					 * the cast-from type to the cast-to type, i.e. that 
+					 * the passed argument *is_a* received argument, i.e. that
+					 * the cast-to argument *is_a* cast-from argument. */
+					_Bool success = 1;
+					/* Recall: return type is in [0] and arguments are in 1..array_len. */
+					
+					/* Would the cast from the return value to the post-cast return value
+					 * always succeed? If so, this cast is okay. */
+					struct uniqtype *alloc_return_type = alloc_uniqtype->contained[0].ptr;
+					struct uniqtype *cast_return_type = test_uniqtype->contained[0].ptr;
+					
+					/* HACK: a little bit of C-specifity is creeping in here. */
+					#define would_always_succeed(from, to) \
+						( \
+							!UNIQTYPE_IS_POINTER_TYPE((to)) \
+						||  (UNIQTYPE_POINTEE_TYPE((to)) == &__uniqtype__void) \
+						||  (UNIQTYPE_POINTEE_TYPE((to)) == &__uniqtype__signed_char) \
+						||  (UNIQTYPE_IS_POINTER_TYPE((from)) && \
+							__liballocs_find_matching_subobject( \
+							/* target_offset_within_uniqtype */ 0, \
+							/* cur_obj_uniqtype */ UNIQTYPE_POINTEE_TYPE((from)), \
+							/* test_uniqtype */ UNIQTYPE_POINTEE_TYPE((to)), \
+							/* last_attempted_uniqtype */ NULL, \
+							/* last_uniqtype_offset */ NULL, \
+							/* p_cumulative_offset_searched */ NULL)) \
+						)
+						
+					/* ARGH. Are these the right way round?  
+					 * The "implicit cast" is from the alloc'd return type to the 
+					 * cast-to return type. */
+					success &= would_always_succeed(alloc_return_type, cast_return_type);
+					
+					if (success) for (int i = 1; i <= alloc_uniqtype->array_len; ++i)
+					{
+						/* ARGH. Are these the right way round?  
+						 * The "implicit cast" is from the cast-to arg type to the 
+						 * alloc'd arg type. */
+						success &= would_always_succeed(
+							test_uniqtype->contained[i].ptr,
+							alloc_uniqtype->contained[i].ptr
+						);
+
+						if (!success) break;
+					}
+					
+					if (success)
+					{
+						++__libcrunch_succeeded;
+						return 1;
+					}
+				}
+			}
+		}
+	}
+	
+	// if we got here, the check failed
+	if (__currently_allocating || __currently_freeing)
+	{
+		++__libcrunch_failed_in_alloc;
+		// suppress warning
+	}
+	else
+	{
+		++__libcrunch_failed;
+		
+		static const void *last_failed_site;
+		static const void *last_failed_object_start;
+		static const struct uniqtype *last_failed_test_type;
+		
+		if (last_failed_site == __builtin_return_address(0)
+				&& last_failed_object_start == object_start
+				&& last_failed_test_type == test_uniqtype
+				&& last_suppressed_check_kind == IS_A)
+		{
+			++suppression_count;
+		}
+		else
+		{
+			if (suppression_count > 0)
+			{
+				debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
+						suppression_count);
+			}
+			
+			debug_printf(0, "Failed check __is_a_function_refining_internal(%p, %p a.k.a. \"%s\") at %p, "
+					"found an allocation of a %s%s%s "
+					"originating at %p\n", 
+				obj, test_uniqtype, test_uniqtype->name,
+				__builtin_return_address(0),
+				name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
+				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+				alloc_site);
+			last_failed_site = __builtin_return_address(0);
+			last_failed_object_start = object_start;
+			last_failed_test_type = test_uniqtype;
+			suppression_count = 0;
+		}
+	}
+	return 1; // HACK: so that the program will continue
 }

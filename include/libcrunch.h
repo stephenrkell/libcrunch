@@ -20,6 +20,7 @@ int __is_a_internal(const void *obj, const void *uniqtype) __attribute__((weak))
 int __like_a_internal(const void *obj, const void *uniqtype) __attribute__((weak)) __attribute__((hot));;
 int __named_a_internal(const void *obj, const void *typestr) __attribute__((weak)) __attribute__((hot));;
 int __check_args_internal(const void *obj, int nargs, ...) __attribute__((weak)) __attribute__((hot));;
+int __is_a_function_refining(const void *obj, const void *uniqtype) __attribute__((weak)) __attribute__((hot));
 
 /* The main public API to libcrunch is through several small functions 
  * which are *always* inlined. NOTE: repeat these in trumptr.ml so that

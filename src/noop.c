@@ -31,3 +31,8 @@ int __check_args_internal(const void *obj, int nargs, ...)
 {
         return 0;
 }
+
+int __is_a_function_refining_internal(const void *obj, const void *r)
+{
+        return 0;
+}
