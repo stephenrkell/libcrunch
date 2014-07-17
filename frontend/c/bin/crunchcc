@@ -18,9 +18,10 @@ class CrunchCC(AllocsCC):
         
         errfilename = os.path.realpath(filename) + ".fixuplog"
 
-        with (self.makeErrFile(errfilename, "w") if not errfile else errfile) as errfile:
+        with (self.makeErrFile(errfilename, "w+") if not errfile else errfile) as errfile:
             ret = subprocess.call(cmd, stderr=errfile)
             if ret != 0:
+                self.print_errors(errfile)
                 return ret  # give up now
 
             return AllocsCC.fixupDotO(self, filename, errfile)

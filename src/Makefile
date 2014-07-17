@@ -42,6 +42,7 @@ $(CC_DEPS): .%.d : %.cc
 # We want to make sure that the libcrunch--liballocs interface is 
 # linked in the fastest possible way.
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
+libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size
 
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
