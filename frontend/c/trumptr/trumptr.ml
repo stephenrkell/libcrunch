@@ -507,8 +507,18 @@ class trumPtrFunVisitor = fun fl -> object
          isFunction
 
   method vfunc (f: fundec) : fundec visitAction = 
-      let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun inlineAssertFun in
-      ChangeTo(visitCilFunction tpExprVisitor f)
+      (* Don't instrument liballocs functions that get -include'd .
+         This is actually mostly harmless, but causes warnings because
+         we end up using __inline_assert before we define it. *)
+      let startswith s pref = 
+          if (String.length s) >= (String.length pref) then (String.sub s 0 (String.length pref)) = pref else false
+      in 
+      if startswith f.svar.vname "__liballocs_" then
+          SkipChildren
+      else
+          let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun inlineAssertFun
+          in
+          ChangeTo(visitCilFunction tpExprVisitor f)
 end
 
 let feature : Feature.t = 
