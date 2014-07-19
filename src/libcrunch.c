@@ -315,6 +315,33 @@ int __libcrunch_global_init(void)
 	return 0;
 }
 
+static void clear_alloc_site_metadata(const void *alloc_start)
+{
+	/* In cases where heap classification failed, we null out the allocsite 
+	 * to avoid repeated searching. We only do this for non-debug
+	 * builds because it makes debugging a bit harder.
+	 */
+
+	struct insert *ins = lookup_object_info((void*) alloc_start, NULL, NULL, NULL);
+	assert(INSERT_DESCRIBES_OBJECT(ins));
+	/* Update the heap chunk's info to null the alloc site. 
+	 * PROBLEM: we need to make really sure that we're not nulling
+	 * out a redirected (deep) chunk's alloc site. 
+	 * 
+	 * NOTE that we don't want the insert to look like a deep-index
+	 * terminator, so we set the flag.
+	 */
+	if (ins)
+	{
+#ifdef NDEBUG
+		ins->alloc_site_flag = 1;
+		ins->alloc_site = 0;
+#endif
+		assert(INSERT_DESCRIBES_OBJECT(ins));
+		assert(!INSERT_IS_TERMINATOR(ins));
+	}
+}
+
 /* Optimised version, for when you already know the uniqtype address. */
 int __is_a_internal(const void *obj, const void *arg)
 {
@@ -326,53 +353,34 @@ int __is_a_internal(const void *obj, const void *arg)
 	const char *reason = NULL; // if we abort, set this to a string lit
 	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	memory_kind k = UNKNOWN;
-	const void *object_start;
-	unsigned block_element_count = 1;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
-	signed target_offset_within_uniqtype;
 	
-	_Bool abort = __liballocs_get_alloc_info(obj, 
-		&reason,
-		&reason_ptr,
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
 		&k,
-		&object_start,
-		&block_element_count,
+		&alloc_start,
+		&alloc_size_bytes,
 		&alloc_uniqtype,
-		&alloc_site,
-		&target_offset_within_uniqtype);
+		&alloc_site);
 	
-	if (__builtin_expect(abort, 0))
+	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
 	{
-		/* If heap classification failed, null out the allocsite 
-		 * to avoid repeated searching. We only do this for non-debug
-		 * builds because it makes debugging a bit harder.
-		 */
-		if (__builtin_expect(k == HEAP
-				&& reason_ptr != NULL
-				&& reason_ptr == alloc_site, 0))
-		{
-			struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
-			assert(INSERT_DESCRIBES_OBJECT(ins));
-			/* Update the heap chunk's info to null the alloc site. 
-			 * PROBLEM: we need to make really sure that we're not nulling
-			 * out a redirected (deep) chunk's alloc site. 
-			 * 
-			 * NOTE that we don't want the insert to look like a deep-index
-			 * terminator, so we set the flag.
-			 */
-			if (ins)
-			{
-#ifdef NDEBUG
-				ins->alloc_site_flag = 1;
-				ins->alloc_site = 0;
-#endif
-				assert(INSERT_DESCRIBES_OBJECT(ins));
-				assert(!INSERT_IS_TERMINATOR(ins));
-			}
-		}
-		
-		return 1; // liballocs has already counted this abort
+		clear_alloc_site_metadata(alloc_start);
+	}
+	
+	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
+
+	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	/* If we're searching in a heap array, we need to take the offset modulo the 
+	 * element size. Otherwise just take the whole-block offset. */
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
+			&& alloc_uniqtype
+			&& alloc_uniqtype->pos_maxoff != 0 
+			&& alloc_uniqtype->neg_maxoff == 0)
+	{
+		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
@@ -418,11 +426,11 @@ int __is_a_internal(const void *obj, const void *arg)
 		++__libcrunch_failed;
 		
 		static const void *last_failed_site;
-		static const void *last_failed_object_start;
+		static const void *last_failed_alloc_start;
 		static const struct uniqtype *last_failed_test_type;
 		
 		if (last_failed_site == __builtin_return_address(0)
-				&& last_failed_object_start == object_start
+				&& last_failed_alloc_start == alloc_start
 				&& last_failed_test_type == test_uniqtype
 				&& last_suppressed_check_kind == IS_A)
 		{
@@ -442,8 +450,9 @@ int __is_a_internal(const void *obj, const void *arg)
 					"originating at %p\n", 
 				obj, test_uniqtype, test_uniqtype->name,
 				__builtin_return_address(0),
-				(long)((char*) obj - (char*) object_start),
-				name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
+				(long)((char*) obj - (char*) alloc_start),
+				name_for_memory_kind(k), 
+				(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
 				(cur_obj_uniqtype ? 
 					((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : cur_obj_uniqtype->name) 
@@ -451,7 +460,7 @@ int __is_a_internal(const void *obj, const void *arg)
 				cumulative_offset_searched, 
 				alloc_site);
 			last_failed_site = __builtin_return_address(0);
-			last_failed_object_start = object_start;
+			last_failed_alloc_start = alloc_start;
 			last_failed_test_type = test_uniqtype;
 			suppression_count = 0;
 		}
@@ -469,27 +478,38 @@ int __like_a_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
-	const char *reason = NULL; // if we abort, set this to a string lit
-	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	memory_kind k;
-	const void *object_start;
-	unsigned block_element_count = 1;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
-	signed target_offset_within_uniqtype;
 	void *caller_address = __builtin_return_address(0);
 	
-	_Bool abort = __liballocs_get_alloc_info(obj, 
-		&reason,
-		&reason_ptr,
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
 		&k,
-		&object_start,
-		&block_element_count,
+		&alloc_start,
+		&alloc_size_bytes,
 		&alloc_uniqtype, 
-		&alloc_site,
-		&target_offset_within_uniqtype);
+		&alloc_site);
 	
-	if (__builtin_expect(abort, 0)) return 1; // we've already counted it
+	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
+	{
+		clear_alloc_site_metadata(alloc_start);
+	}
+	
+	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
+	
+	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	/* If we're searching in a heap array, we need to take the offset modulo the 
+	 * element size. Otherwise just take the whole-block offset. */
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
+			&& alloc_uniqtype
+			&& alloc_uniqtype->pos_maxoff != 0 
+			&& alloc_uniqtype->neg_maxoff == 0)
+	{
+		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+	}
+	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
 	struct contained *cur_contained_pos = NULL;
@@ -597,7 +617,8 @@ like_a_failed:
 		debug_printf(0, "Failed check __like_a_internal(%p, %p a.k.a. \"%s\") at %p, allocation was a %s%s%s originating at %p\n", 
 			obj, test_uniqtype, test_uniqtype->name,
 			__builtin_return_address(0), // make sure our *caller*, if any, is inlined
-			name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
+			name_for_memory_kind(k), 
+			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 			alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
 			alloc_site);
 	}
@@ -613,27 +634,37 @@ int __named_a_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const char* test_typestr = (const char *) arg;
-	const char *reason = NULL; // if we abort, set this to a string lit
-	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	memory_kind k;
-	const void *object_start;
-	unsigned block_element_count = 1;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
-	signed target_offset_within_uniqtype;
 	void *caller_address = __builtin_return_address(0);
 	
-	_Bool abort = __liballocs_get_alloc_info(obj, 
-		&reason,
-		&reason_ptr,
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
 		&k,
-		&object_start,
-		&block_element_count,
+		&alloc_start,
+		&alloc_size_bytes,
 		&alloc_uniqtype, 
-		&alloc_site,
-		&target_offset_within_uniqtype);
+		&alloc_site);
 	
-	if (__builtin_expect(abort, 0)) return 1; // we've already counted it
+	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
+	{
+		clear_alloc_site_metadata(alloc_start);
+	}
+	if (__builtin_expect(err != NULL, 0)) return 1; // we've already counted it
+	
+	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	/* If we're searching in a heap array, we need to take the offset modulo the 
+	 * element size. Otherwise just take the whole-block offset. */
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
+			&& alloc_uniqtype
+			&& alloc_uniqtype->pos_maxoff != 0 
+			&& alloc_uniqtype->neg_maxoff == 0)
+	{
+		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+	}
+	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
 	struct contained *cur_contained_pos = NULL;
@@ -690,7 +721,8 @@ named_a_failed:
 		debug_printf(0, "Failed check __named_a_internal(%p, \"%s\") at %p, allocation was a %s%s%s originating at %p\n", 
 			obj, test_typestr,
 			__builtin_return_address(0), // make sure our *caller*, if any, is inlined
-			name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
+			name_for_memory_kind(k), 
+			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 			alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
 			alloc_site);
 	}
@@ -704,29 +736,26 @@ __check_args_internal(const void *obj, int nargs, ...)
 	 * not a constructor, because it's not safe to call super-early). */
 	__libcrunch_check_init();
 
-	const char *reason = NULL; // if we abort, set this to a string lit
-	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	memory_kind k;
-	const void *object_start;
-	unsigned block_element_count = 1;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
 	signed target_offset_within_uniqtype;
 
 	struct uniqtype *fun_uniqtype = NULL;
 	
-	_Bool abort = __liballocs_get_alloc_info(obj, 
-		&reason,
-		&reason_ptr,
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
 		&k,
-		&object_start,
-		&block_element_count,
+		&alloc_start,
+		&alloc_size_bytes,
 		&fun_uniqtype,
-		&alloc_site,
-		&target_offset_within_uniqtype);
+		&alloc_site);
+	
+	if (err != NULL) return 1;
 	
 	assert(fun_uniqtype);
-	assert(object_start == obj);
+	assert(alloc_start == obj);
 	assert(UNIQTYPE_IS_SUBPROGRAM(fun_uniqtype));
 	
 	/* Walk the arguments that the function expects. Simultaneously, 
@@ -781,60 +810,27 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
-	const char *reason = NULL; // if we abort, set this to a string lit
-	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	memory_kind k = UNKNOWN;
-	const void *object_start;
-	unsigned block_element_count = 1;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
 	signed target_offset_within_uniqtype;
 	
-	_Bool abort = __liballocs_get_alloc_info(obj, 
-		&reason,
-		&reason_ptr,
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
 		&k,
-		&object_start,
-		&block_element_count,
+		&alloc_start,
+		&alloc_size_bytes,
 		&alloc_uniqtype,
-		&alloc_site,
-		&target_offset_within_uniqtype);
+		&alloc_site);
 	
-	if (__builtin_expect(abort, 0))
+	if (__builtin_expect(err != NULL, 0))
 	{
-		/* If heap classification failed, null out the allocsite 
-		 * to avoid repeated searching. We only do this for non-debug
-		 * builds because it makes debugging a bit harder.
-		 */
-		if (__builtin_expect(k == HEAP
-				&& reason_ptr != NULL
-				&& reason_ptr == alloc_site, 0))
-		{
-			struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
-			assert(INSERT_DESCRIBES_OBJECT(ins));
-			/* Update the heap chunk's info to null the alloc site. 
-			 * PROBLEM: we need to make really sure that we're not nulling
-			 * out a redirected (deep) chunk's alloc site. 
-			 * 
-			 * NOTE that we don't want the insert to look like a deep-index
-			 * terminator, so we set the flag.
-			 */
-			if (ins)
-			{
-#ifdef NDEBUG
-				ins->alloc_site_flag = 1;
-				ins->alloc_site = 0;
-#endif
-				assert(INSERT_DESCRIBES_OBJECT(ins));
-				assert(!INSERT_IS_TERMINATOR(ins));
-			}
-		}
-		
-		return 1; // liballocs has already counted this abort
+		return 1;
 	}
 	
 	/* If we're offset-zero, that's good... */
-	if (object_start == obj)
+	if (alloc_start == obj)
 	{
 		/* If we're an exact match, that's good.... */
 		if (alloc_uniqtype == arg)
@@ -918,11 +914,11 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 		++__libcrunch_failed;
 		
 		static const void *last_failed_site;
-		static const void *last_failed_object_start;
+		static const void *last_failed_alloc_start;
 		static const struct uniqtype *last_failed_test_type;
 		
 		if (last_failed_site == __builtin_return_address(0)
-				&& last_failed_object_start == object_start
+				&& last_failed_alloc_start == alloc_start
 				&& last_failed_test_type == test_uniqtype
 				&& last_suppressed_check_kind == IS_A)
 		{
@@ -941,11 +937,12 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 					"originating at %p\n", 
 				obj, test_uniqtype, test_uniqtype->name,
 				__builtin_return_address(0),
-				name_for_memory_kind(k), (k == HEAP && block_element_count > 1) ? " block of " : " ", 
+				name_for_memory_kind(k), 
+				(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
 				alloc_site);
 			last_failed_site = __builtin_return_address(0);
-			last_failed_object_start = object_start;
+			last_failed_alloc_start = alloc_start;
 			last_failed_test_type = test_uniqtype;
 			suppression_count = 0;
 		}
