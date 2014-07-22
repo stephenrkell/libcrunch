@@ -1,5 +1,8 @@
 CFLAGS += -std=gnu99 -g -fPIC -I../include
+# experiment to see what's faster -- plain old -O4 -flto seems marginally faster than with -Os
 CFLAGS += -O4 -flto -DNDEBUG
+#CFLAGS += -Os -flto -DNDEBUG
+#CFLAGS += -O3 -DNDEBUG
 FINAL_LDFLAGS += -O4 -flto -Bsymbolic -Wl,-O2
 #CFLAGS += -O0 
 #FINAL_LDFLAGS += -Bsymbolic
@@ -44,12 +47,16 @@ $(CC_DEPS): .%.d : %.cc
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
 libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size
 
+uniqtypes.o: uniqtypes.c
+	$(CC) -o "$@" $(filter-out -flto,$(CFLAGS)) -c "$<" && \
+	../frontend/c/bin/link-used-types "$@" || (rm -f "$@"; false)
+
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
-libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
-	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$^) \
+libcrunch_preload.so: uniqtypes.o libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
+	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$+) \
 $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) \
 -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
 -Wl,--no-whole-archive -Wl,-Bdynamic 
