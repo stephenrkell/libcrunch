@@ -1,6 +1,8 @@
 CFLAGS += -std=gnu99 -g -fPIC -I../include
+# debugging version
+CFLAGS += -O0 -flto
 # experiment to see what's faster -- plain old -O4 -flto seems marginally faster than with -Os
-CFLAGS += -O4 -flto -DNDEBUG
+#CFLAGS += -O4 -flto #-DNDEBUG
 #CFLAGS += -Os -flto -DNDEBUG
 #CFLAGS += -O3 -DNDEBUG
 FINAL_LDFLAGS += -O4 -flto -Bsymbolic -Wl,-O2

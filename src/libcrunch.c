@@ -40,6 +40,17 @@ static unsigned lazy_heap_types_count;
 static const char **lazy_heap_typenames;
 static struct uniqtype **lazy_heap_types;
 
+static _Bool verbose;
+
+static const char **suppression_words;
+struct suppression
+{
+	const char *test_type_pat;
+	const char *testing_function_pat;
+	const char *alloc_type_pat;
+};
+struct suppression *suppressions;
+
 static int print_type_cb(struct uniqtype *t, void *ignored)
 {
 	fprintf(crunch_stream_err, "uniqtype addr %p, name %s, size %d bytes\n", 
@@ -109,6 +120,120 @@ static _Bool is_lazy_uniqtype(const void *u)
 	return 0;
 }
 
+static _Bool prefix_pattern_matches(const char *pat, const char *str)
+{
+	if (!str) return 0;
+	
+	char *star_pos = strchr(pat, '*');
+	
+	return 0 == strncmp(pat, str, star_pos ? star_pos - pat : strlen(pat));
+}
+
+/* FIXME: invalidate cache entries on dlclose(). */
+#ifndef DLADDR_CACHE_SIZE
+#define DLADDR_CACHE_SIZE 16
+#endif
+static 
+Dl_info dladdr_with_cache(const void *addr)
+{
+	struct cache_rec { const void *addr; Dl_info info; };
+	
+	static struct cache_rec cache[DLADDR_CACHE_SIZE];
+	static unsigned next_free;
+	
+	for (unsigned i = 0; i < DLADDR_CACHE_SIZE; ++i)
+	{
+		if (cache[i].addr)
+		{
+			if (cache[i].addr == addr)
+			{
+				return cache[i].info;
+			}
+		}
+	}
+	
+	Dl_info info;
+	int ret = dladdr(addr, &info);
+	assert(ret != 0);
+
+	/* always cache the dladdr result */
+	cache[next_free++] = (struct cache_rec) { addr, info };
+	if (next_free == DLADDR_CACHE_SIZE)
+	{
+		debug_printf(5, "dladdr cache wrapped around\n");
+		next_free = 0;
+	}
+	
+	return info;
+}
+
+static const char *format_symbolic_address(const void *addr)
+{
+	Dl_info info = dladdr_with_cache(addr);
+	
+	static __thread char buf[8192];
+	
+	snprintf(buf, sizeof buf, "%s`%s+%p", 
+		info.dli_fname ? basename(info.dli_fname) : "unknown", 
+		info.dli_sname ? info.dli_sname : "unknown", 
+		(info.dli_saddr && info.dli_fbase)
+			? (void*)((char*) info.dli_saddr - (char*) info.dli_fbase)
+			: NULL);
+		
+	buf[sizeof buf - 1] = '\0';
+	
+	return buf;
+}
+
+static _Bool test_site_matches(const char *pat /* will be saved! must not be freed */, 
+		const void *test_site)
+{
+	_Bool result;
+	Dl_info site_info = dladdr_with_cache(test_site);
+	if (site_info.dli_sname)
+	{
+		/* okay, we can test the pat */
+		result = prefix_pattern_matches(pat, site_info.dli_sname);
+	}
+	else
+	{
+		debug_printf(2, "dladdr() failed to find symbol for test site address %p\n", test_site);
+		result = prefix_pattern_matches(pat, "");
+	}
+	return result;
+}
+
+static _Bool suppression_matches(struct suppression *s, 
+		const char *test_typestr, const void *test_site, const char *alloc_typestr)
+{
+	/* dladdr is expensive, so 
+	 * 
+	 * - use it last;
+	 * - cache its results (in test_site_matches. 
+	 */
+		
+	return prefix_pattern_matches(s->test_type_pat, test_typestr)
+			&& prefix_pattern_matches(s->alloc_type_pat, alloc_typestr)
+			&& test_site_matches(s->testing_function_pat, test_site);
+}
+
+static _Bool is_suppressed(const char *test_typestr, const void *test_site, 
+		const char *alloc_typestr)
+{
+	if (!suppressions) return 0;
+	for (struct suppression *p = &suppressions[0];
+				p->test_type_pat != NULL;
+				++p)
+	{
+		if (suppression_matches(p, test_typestr, test_site, alloc_typestr))
+		{
+			++__libcrunch_failed_and_suppressed;
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static _Bool done_init;
 void __libcrunch_main_init(void) __attribute__((constructor(101)));
 // NOTE: runs *before* the constructor in preload.c
@@ -141,24 +266,45 @@ unsigned long __libcrunch_aborted_typestr;
 unsigned long __libcrunch_lazy_heap_type_assignment;
 unsigned long __libcrunch_failed;
 unsigned long __libcrunch_failed_in_alloc;
+unsigned long __libcrunch_failed_and_suppressed;
 unsigned long __libcrunch_succeeded;
 
-static unsigned long suppression_count;
-enum check
+static unsigned long repeat_suppression_count;
+// enum check
+// {
+// 	IS_A,
+// 	LIKE_A,
+// 	NAMED_A,
+// 	CHECK_ARGS,
+// 	IS_A_FUNCTION_REFINING
+// };
+//static enum check last_repeat_suppressed_check_kind;
+
+static const void *last_failed_site;
+static const struct uniqtype *last_failed_deepest_subobject_type;
+
+struct addrlist distinct_failure_sites;
+
+static _Bool should_report_failure_at(void *site)
 {
-	IS_A,
-	LIKE_A
-};
-static enum check last_suppressed_check_kind;
+	if (verbose) return 1;
+	_Bool is_unseen = !addrlist_contains(&distinct_failure_sites, site);
+	if (is_unseen)
+	{
+		addrlist_add(&distinct_failure_sites, site);
+		return 1;
+	}
+	else return 0;
+}
 
 static void print_exit_summary(void)
 {
 	if (__libcrunch_begun == 0) return;
 	
-	if (suppression_count > 0)
+	if (repeat_suppression_count > 0)
 	{
 		debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
-				suppression_count);
+				repeat_suppression_count);
 	}
 	
 	fprintf(crunch_stream_err, "====================================================\n");
@@ -183,8 +329,13 @@ static void print_exit_summary(void)
 	fprintf(crunch_stream_err, "----------------------------------------------------\n");
 	fprintf(crunch_stream_err, "checks failed inside allocation functions: % 9ld\n", __libcrunch_failed_in_alloc);
 	fprintf(crunch_stream_err, "checks failed otherwise:                   % 9ld\n", __libcrunch_failed);
+	fprintf(crunch_stream_err, "   of which user suppression list matched: % 9ld\n", __libcrunch_failed_and_suppressed);
 	fprintf(crunch_stream_err, "checks nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
 	fprintf(crunch_stream_err, "====================================================\n");
+	if (!verbose)
+	{
+		fprintf(crunch_stream_err, "re-run with LIBCRUNCH_VERBOSE=1 for repeat failures\n");
+	}
 
 	if (getenv("LIBCRUNCH_DUMP_SMAPS_AT_EXIT"))
 	{
@@ -200,6 +351,35 @@ static void print_exit_summary(void)
 		}
 		else fprintf(crunch_stream_err, "Couldn't read from smaps!\n");
 	}
+}
+
+static unsigned count_separated_words(const char *str, char sep)
+{
+	unsigned count = 1;
+	/* Count the lazy heap types */
+	const char *pos = str;
+	while ((pos = strchr(pos, sep)) != NULL) { ++count; ++pos; }
+	return count;
+}
+static void fill_separated_words(const char **out, const char *str, char sep, unsigned max)
+{
+	unsigned n_added = 0;
+	if (max == 0) return;
+
+	const char *pos = str;
+	const char *spacepos;
+	do 
+	{
+		spacepos = strchrnul(pos, sep);
+		if (spacepos - pos > 0) 
+		{
+			assert(n_added < max);
+			out[n_added++] = strndup(pos, spacepos - pos);
+		}
+
+		pos = spacepos;
+		while (*pos == sep) ++pos;
+	} while (*pos != '\0' && n_added < max);
 }
 
 /* This is *not* a constructor. We don't want to be called too early,
@@ -250,17 +430,21 @@ int __libcrunch_global_init(void)
 	
 	const char *debug_level_str = getenv("LIBCRUNCH_DEBUG_LEVEL");
 	if (debug_level_str) __libcrunch_debug_level = atoi(debug_level_str);
+	
+	verbose = __libcrunch_debug_level >= 1 || getenv("LIBCRUNCH_VERBOSE");
 
-	/* We always include "signed char" in the lazy heap types (FIXME: this is a 
-	 * C-specificity we'd rather not have here, but live with it for now.) 
-	 * We count the other ones. */
+	/* We always include "signed char" in the lazy heap types. (FIXME: this is a 
+	 * C-specificity we'd rather not have here, but live with it for now.
+	 * Perhaps the best way is to have "uninterpreted_sbyte" and make signed_char
+	 * an alias for it.) We count the other ones. */
 	const char *lazy_heap_types_str = getenv("LIBCRUNCH_LAZY_HEAP_TYPES");
+	lazy_heap_types_count = 1;
 	unsigned upper_bound = 2; // signed char plus one string with zero spaces
 	if (lazy_heap_types_str)
 	{
-		/* Count the lazy heap types */
-		const char *pos = lazy_heap_types_str;
-		while ((pos = strrchr(pos, ' ')) != NULL) { ++upper_bound; ++pos; }
+		unsigned count = count_separated_words(lazy_heap_types_str, ' ');
+		upper_bound += count;
+		lazy_heap_types_count += count;
 	}
 	/* Allocate and populate. */
 	lazy_heap_typenames = calloc(upper_bound, sizeof (const char *));
@@ -268,23 +452,10 @@ int __libcrunch_global_init(void)
 
 	// the first entry is always signed char
 	lazy_heap_typenames[0] = "signed char";
-	lazy_heap_types_count = 1;
 	if (lazy_heap_types_str)
 	{
-		const char *pos = lazy_heap_types_str;
-		const char *spacepos;
-		do 
-		{
-			spacepos = strchrnul(pos, ' ');
-			if (spacepos - pos > 0) 
-			{
-				assert(lazy_heap_types_count < upper_bound);
-				lazy_heap_typenames[lazy_heap_types_count++] = strndup(pos, spacepos - pos);
-			}
-
-			pos = spacepos;
-			while (*pos == ' ') ++pos;
-		} while (*pos != '\0');
+		fill_separated_words(&lazy_heap_typenames[1], lazy_heap_types_str, ' ',
+				upper_bound - 1);
 	}
 	
 	/* We have to scan for lazy heap types *in link order*, so that we see
@@ -306,6 +477,41 @@ int __libcrunch_global_init(void)
 	for (struct link_map *l = r_debug->r_map; l; l = l->l_next)
 	{
 		__libcrunch_scan_lazy_typenames(l);
+	}
+	
+	/* Load the suppression list from LIBCRUNCH_SUPPRESS. It's a space-separated
+	 * list of triples <test-type-pat, testing-function-pat, alloc-type-pat>
+	 * where patterns can end in "*" to indicate prefixing. */
+	unsigned suppressions_count = 0;
+	const char *suppressions_str = getenv("LIBCRUNCH_SUPPRESSIONS");
+	if (suppressions_str)
+	{
+		unsigned suppressions_count = count_separated_words(suppressions_str, ' ');
+		suppression_words = calloc(1 + suppressions_count, sizeof (char *));
+		assert(suppression_words);
+		suppressions = calloc(1 + suppressions_count, sizeof (struct suppression));
+		assert(suppressions);
+		
+		fill_separated_words(&suppression_words[0], suppressions_str, ' ', suppressions_count);
+		
+		for (const char **p_word = &suppression_words[0];
+				*p_word;
+				++p_word)
+		{
+			unsigned n_comma_sep = count_separated_words(*p_word, ',');
+			if (n_comma_sep != 3)
+			{
+				debug_printf(1, "invalid suppression: %s\n", *p_word);
+			}
+			else
+			{
+				fill_separated_words(
+					&suppressions[p_word - &suppression_words[0]].test_type_pat,
+					*p_word,
+					',',
+					3);
+			}
+		}
 	}
 
 	__libcrunch_is_initialized = 1;
@@ -425,44 +631,45 @@ int __is_a_internal(const void *obj, const void *arg)
 	{
 		++__libcrunch_failed;
 		
-		static const void *last_failed_site;
-		static const void *last_failed_alloc_start;
-		static const struct uniqtype *last_failed_test_type;
-		
-		if (last_failed_site == __builtin_return_address(0)
-				&& last_failed_alloc_start == alloc_start
-				&& last_failed_test_type == test_uniqtype
-				&& last_suppressed_check_kind == IS_A)
+		if (!is_suppressed(test_uniqtype->name, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
 		{
-			++suppression_count;
-		}
-		else
-		{
-			if (suppression_count > 0)
+			if (should_report_failure_at(__builtin_return_address(0)))
 			{
-				debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
-						suppression_count);
+				if (last_failed_site == __builtin_return_address(0)
+						&& last_failed_deepest_subobject_type == cur_obj_uniqtype)
+				{
+					++repeat_suppression_count;
+				}
+				else
+				{
+					if (repeat_suppression_count > 0)
+					{
+						debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
+								repeat_suppression_count);
+					}
+
+					debug_printf(0, "Failed check __is_a_internal(%p, %p a.k.a. \"%s\") at %p (%s); "
+							"obj is %ld bytes into an allocation of a %s%s%s "
+							"(deepest subobject: %s at offset %d) "
+							"originating at %p\n", 
+						obj, test_uniqtype, test_uniqtype->name,
+						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
+						(long)((char*) obj - (char*) alloc_start),
+						name_for_memory_kind(k), 
+						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+						alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+						(cur_obj_uniqtype ? 
+							((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : cur_obj_uniqtype->name) 
+							: "(none)"), 
+						cumulative_offset_searched, 
+						alloc_site);
+
+					last_failed_site = __builtin_return_address(0);
+					last_failed_deepest_subobject_type = cur_obj_uniqtype;
+
+					repeat_suppression_count = 0;
+				}
 			}
-			
-			debug_printf(0, "Failed check __is_a_internal(%p, %p a.k.a. \"%s\") at %p, "
-					"%ld bytes into an allocation of a %s%s%s "
-					"(deepest subobject: %s at offset %d) "
-					"originating at %p\n", 
-				obj, test_uniqtype, test_uniqtype->name,
-				__builtin_return_address(0),
-				(long)((char*) obj - (char*) alloc_start),
-				name_for_memory_kind(k), 
-				(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
-				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
-				(cur_obj_uniqtype ? 
-					((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : cur_obj_uniqtype->name) 
-					: "(none)"), 
-				cumulative_offset_searched, 
-				alloc_site);
-			last_failed_site = __builtin_return_address(0);
-			last_failed_alloc_start = alloc_start;
-			last_failed_test_type = test_uniqtype;
-			suppression_count = 0;
 		}
 	}
 	return 1; // HACK: so that the program will continue
@@ -614,13 +821,19 @@ like_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		debug_printf(0, "Failed check __like_a_internal(%p, %p a.k.a. \"%s\") at %p, allocation was a %s%s%s originating at %p\n", 
-			obj, test_uniqtype, test_uniqtype->name,
-			__builtin_return_address(0), // make sure our *caller*, if any, is inlined
-			name_for_memory_kind(k), 
-			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
-			alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
-			alloc_site);
+		if (!is_suppressed(test_uniqtype->name, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
+		{
+			if (should_report_failure_at(__builtin_return_address(0)))
+			{
+				debug_printf(0, "Failed check __like_a_internal(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
+					obj, test_uniqtype, test_uniqtype->name,
+					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
+					name_for_memory_kind(k), 
+					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+					alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+					alloc_site);
+			}
+		}
 	}
 	return 1; // HACK: so that the program will continue
 }
@@ -718,13 +931,19 @@ named_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		debug_printf(0, "Failed check __named_a_internal(%p, \"%s\") at %p, allocation was a %s%s%s originating at %p\n", 
-			obj, test_typestr,
-			__builtin_return_address(0), // make sure our *caller*, if any, is inlined
-			name_for_memory_kind(k), 
-			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
-			alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
-			alloc_site);
+		if (!is_suppressed(test_typestr, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
+		{
+			if (should_report_failure_at(__builtin_return_address(0)))
+			{
+				debug_printf(0, "Failed check __named_a_internal(%p, \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
+					obj, test_typestr,
+					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
+					name_for_memory_kind(k), 
+					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+					alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+					alloc_site);
+			}
+		}
 	}
 	return 1; // HACK: so that the program will continue
 }
@@ -799,6 +1018,10 @@ __check_args_internal(const void *obj, int nargs, ...)
 	}
 	
 	va_end(ap);
+	
+	/* NOTE that __check_args is not just one "test"; it's many. 
+	 * So we don't maintain separate counts here; our use of __is_aU above
+	 * will create many counts. */
 	
 	return success ? 0 : i; // 0 means success here
 }
@@ -912,39 +1135,37 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 	else
 	{
 		++__libcrunch_failed;
-		
-		static const void *last_failed_site;
-		static const void *last_failed_alloc_start;
-		static const struct uniqtype *last_failed_test_type;
-		
-		if (last_failed_site == __builtin_return_address(0)
-				&& last_failed_alloc_start == alloc_start
-				&& last_failed_test_type == test_uniqtype
-				&& last_suppressed_check_kind == IS_A)
+		if (!is_suppressed(test_uniqtype->name, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
 		{
-			++suppression_count;
-		}
-		else
-		{
-			if (suppression_count > 0)
+			if (should_report_failure_at(__builtin_return_address(0)))
 			{
-				debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
-						suppression_count);
+				if (last_failed_site == __builtin_return_address(0)
+						&& last_failed_deepest_subobject_type == alloc_uniqtype)
+				{
+					++repeat_suppression_count;
+				}
+				else
+				{
+					if (repeat_suppression_count > 0)
+					{
+						debug_printf(0, "Suppressed %ld further occurrences of the previous error\n", 
+								repeat_suppression_count);
+					}
+
+					debug_printf(0, "Failed check __is_a_function_refining_internal(%p, %p a.k.a. \"%s\") at %p (%s), "
+							"found an allocation of a %s%s%s "
+							"originating at %p\n", 
+						obj, test_uniqtype, test_uniqtype->name,
+						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
+						name_for_memory_kind(k), 
+						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+						alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+						alloc_site);
+					last_failed_site = __builtin_return_address(0);
+					last_failed_deepest_subobject_type = alloc_uniqtype;
+					repeat_suppression_count = 0;
+				}
 			}
-			
-			debug_printf(0, "Failed check __is_a_function_refining_internal(%p, %p a.k.a. \"%s\") at %p, "
-					"found an allocation of a %s%s%s "
-					"originating at %p\n", 
-				obj, test_uniqtype, test_uniqtype->name,
-				__builtin_return_address(0),
-				name_for_memory_kind(k), 
-				(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
-				alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
-				alloc_site);
-			last_failed_site = __builtin_return_address(0);
-			last_failed_alloc_start = alloc_start;
-			last_failed_test_type = test_uniqtype;
-			suppression_count = 0;
 		}
 	}
 	return 1; // HACK: so that the program will continue
