@@ -9,17 +9,33 @@ test -n "$objfile" || (echo "Please specify an object file"; false) || exit 1
 usedtypes_src=$( mktemp )
 usedtypes_obj=$( mktemp )
 
-objcopy_and_redefine_c_names () {
+# For C++, we have to do the template-to-C-style translation
+# and then the usual base types translation.
+
+translate_template_symnames () {
     our_objfile="$1"
     
     candidate_symnames="$( nm -fposix -u "$our_objfile" | \
 sed -r 's/[[:blank:]]*[Uw][[:blank:]]*$//' | grep __uniqtype__ )"
+    
+}
+
+objcopy_and_redefine_cxx_names () {
+    our_objfile="$1"
+    
+    candidate_symnames="$( nm -fposix -u "$our_objfile" | \
+sed -r 's/[[:blank:]]*[Uw][[:blank:]]*$//' | grep '^_ZN8uniqtype' )"
+
+    # What do we want to rewrite? 
+    # The template name gives us a C++-style typename which we have to turn into
+    # an allocs-style typestr. How do we encode namespace separation in allocs typestrs?
 
     echo "sed program is $sed_program" 1>&2
 
     # we need to push candidates into the filter and see what comes out;
     # if it changes, add a --redefine-sym option to the list 
     
+    # for translate_symnames
     . ${LIBALLOCS_BASE}/tools/lang/c/lib/symname-funcs.sh
     
     # if any substitutions took effect, issue a redefine-sym command
@@ -36,12 +52,12 @@ sed -r 's/[[:blank:]]*[Uw][[:blank:]]*$//' | grep __uniqtype__ )"
         echo "objcopy renamed symbols in $our_objfile according to $first_redefinition_args" 1>&2
         
     else
-        echo "No need to replace any C typenames" 1>&2
+        echo "No need to replace any C++ typenames" 1>&2
     fi
 }
 
 echo ${USEDTYPES} "$objfile" 1>&2 # for debugging
-(  objcopy_and_redefine_c_names "$objfile" && \
+(  objcopy_and_redefine_cxx_names "$objfile" && \
    echo "Successfully did objcopy_and_redefine_c_names" 1>&2 && \
    echo ${USEDTYPES} "$objfile" 1>&2 && \
    ${USEDTYPES} "$objfile" > "$usedtypes_src" && \
