@@ -23,7 +23,7 @@ class CrunchCxx(AllocsCxx):
     def fixupDotO(self, filename, errfile):
         with (self.makeErrFile(filename + ".fixuplog", "w+") if not errfile else errfile) as errfile:
             # also link the file with the uniqtypes it references
-            cmd = [os.path.dirname(sys.argv[0]) + "/../../c/bin/link-used-types", filename]
+            cmd = [os.path.dirname(sys.argv[0]) + "/../../c++/bin/link-used-types", filename]
             self.debugMsg("Calling " + " ".join(cmd) + "\n")
             ret = subprocess.call(cmd)
             if ret != 0:
@@ -36,6 +36,11 @@ class CrunchCxx(AllocsCxx):
      
     def getLinkPath(self):
         return os.path.dirname(__file__) + "/../../../lib"
+
+    def getUnderlyingCompilerCommand(self):
+        return AllocsCxx.getUnderlyingCompilerCommand(self) + ["-Wold-style-cast", \
+            "-std=c++11", "-include", \
+            os.path.realpath(os.path.dirname(__file__) + "/../include/checked_cast.hpp")]
 
 if __name__ == '__main__':
     wrapper = CrunchCxx()

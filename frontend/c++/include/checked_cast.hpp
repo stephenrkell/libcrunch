@@ -74,6 +74,20 @@ struct checked_static_cast_t<ToPointerTarget*>
 		return std::move(temp); 
 	}
 	
+	/* HMM -- looks like we have to define some more operators too,
+	 * because the conversion operator is not automatically applied
+	 * in contexts like 
+	        static_cast<T*>(p)->m 
+	 * . */
+	ToPointerTarget& operator*() const
+	{
+		return *(operator ToPointerTarget* ());
+	}
+	ToPointerTarget* operator->() const
+	{
+		return (operator ToPointerTarget* ());
+	}
+	
 	// from a temporary
 	template <class From>
 	checked_static_cast_t(const From& arg) : temp(static_cast<ToPointerTarget*>(arg)) {}
