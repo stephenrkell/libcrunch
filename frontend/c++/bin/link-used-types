@@ -58,7 +58,7 @@ sed -r 's/[[:blank:]]*[Uw][[:blank:]]*$//' | grep '^_ZN8uniqtype' )"
 
 echo ${USEDTYPES} "$objfile" 1>&2 # for debugging
 (  objcopy_and_redefine_cxx_names "$objfile" && \
-   echo "Successfully did objcopy_and_redefine_c_names" 1>&2 && \
+   echo "Successfully did objcopy_and_redefine_cxx_names" 1>&2 && \
    echo ${USEDTYPES} "$objfile" 1>&2 && \
    ${USEDTYPES} "$objfile" > "$usedtypes_src" && \
    echo "Successfully did usedtypes" 1>&2 && \

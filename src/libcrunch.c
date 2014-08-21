@@ -129,62 +129,6 @@ static _Bool prefix_pattern_matches(const char *pat, const char *str)
 	return 0 == strncmp(pat, str, star_pos ? star_pos - pat : strlen(pat));
 }
 
-/* FIXME: invalidate cache entries on dlclose(). */
-#ifndef DLADDR_CACHE_SIZE
-#define DLADDR_CACHE_SIZE 16
-#endif
-static 
-Dl_info dladdr_with_cache(const void *addr)
-{
-	struct cache_rec { const void *addr; Dl_info info; };
-	
-	static struct cache_rec cache[DLADDR_CACHE_SIZE];
-	static unsigned next_free;
-	
-	for (unsigned i = 0; i < DLADDR_CACHE_SIZE; ++i)
-	{
-		if (cache[i].addr)
-		{
-			if (cache[i].addr == addr)
-			{
-				return cache[i].info;
-			}
-		}
-	}
-	
-	Dl_info info;
-	int ret = dladdr(addr, &info);
-	assert(ret != 0);
-
-	/* always cache the dladdr result */
-	cache[next_free++] = (struct cache_rec) { addr, info };
-	if (next_free == DLADDR_CACHE_SIZE)
-	{
-		debug_printf(5, "dladdr cache wrapped around\n");
-		next_free = 0;
-	}
-	
-	return info;
-}
-
-static const char *format_symbolic_address(const void *addr)
-{
-	Dl_info info = dladdr_with_cache(addr);
-	
-	static __thread char buf[8192];
-	
-	snprintf(buf, sizeof buf, "%s`%s+%p", 
-		info.dli_fname ? basename(info.dli_fname) : "unknown", 
-		info.dli_sname ? info.dli_sname : "unknown", 
-		(info.dli_saddr && info.dli_fbase)
-			? (void*)((char*) info.dli_saddr - (char*) info.dli_fbase)
-			: NULL);
-		
-	buf[sizeof buf - 1] = '\0';
-	
-	return buf;
-}
-
 static _Bool test_site_matches(const char *pat /* will be saved! must not be freed */, 
 		const void *test_site)
 {
@@ -288,10 +232,10 @@ struct addrlist distinct_failure_sites;
 static _Bool should_report_failure_at(void *site)
 {
 	if (verbose) return 1;
-	_Bool is_unseen = !addrlist_contains(&distinct_failure_sites, site);
+	_Bool is_unseen = !__liballocs_addrlist_contains(&distinct_failure_sites, site);
 	if (is_unseen)
 	{
-		addrlist_add(&distinct_failure_sites, site);
+		__liballocs_addrlist_add(&distinct_failure_sites, site);
 		return 1;
 	}
 	else return 0;
