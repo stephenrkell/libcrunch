@@ -23,7 +23,7 @@ class CrunchCxx(AllocsCxx):
     def fixupDotO(self, filename, errfile):
         with (self.makeErrFile(filename + ".fixuplog", "w+") if not errfile else errfile) as errfile:
             # also link the file with the uniqtypes it references
-            cmd = [os.path.dirname(sys.argv[0]) + "/../../c++/bin/link-used-types", filename]
+            cmd = [self.getLibAllocsBaseDir() + "/tools/lang/c++/bin/link-used-types", filename]
             self.debugMsg("Calling " + " ".join(cmd) + "\n")
             ret = subprocess.call(cmd)
             if ret != 0:

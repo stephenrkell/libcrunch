@@ -13,7 +13,7 @@ class CrunchCC(AllocsCC):
  
     def fixupDotO(self, filename, errfile):
         # also link the file with the uniqtypes it references
-        cmd = [os.path.dirname(sys.argv[0]) + "/./link-used-types", filename]
+        cmd = [self.getLibAllocsBaseDir() + "/tools/lang/c/bin/link-used-types", filename]
         self.debugMsg("Calling " + " ".join(cmd) + "\n")
         
         errfilename = os.path.realpath(filename) + ".fixuplog"

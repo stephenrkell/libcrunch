@@ -51,7 +51,7 @@ libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,mall
 
 uniqtypes.o: uniqtypes.c
 	$(CC) -o "$@" $(filter-out -flto,$(CFLAGS)) -c "$<" && \
-	../frontend/c/bin/link-used-types "$@" || (rm -f "$@"; false)
+	$(LIBALLOCS)/tool/lang/c/bin/link-used-types "$@" || (rm -f "$@"; false)
 
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
