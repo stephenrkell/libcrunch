@@ -14,7 +14,7 @@
 #include <link.h>
 #include <sys/time.h>
 #include <sys/resource.h>
-#ifndef USE_FAKE_LIBUNWIND
+#ifdef USE_REAL_LIBUNWIND
 #include <libunwind.h>
 #endif
 #include "libcrunch.h"

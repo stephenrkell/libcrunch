@@ -22,14 +22,12 @@ endif
 
 default: libcrunch_preload.so libcrunch_preload.a libcrunch_noop.so libcrunch_noop.o
 
-# for addrmap.c and fake-libunwind.c (WHY do we need these in libcrunch)
-vpath %.c $(LIBALLOCS)/src
-
-ifneq ($(USE_FAKE_LIBUNWIND),)
-CFLAGS += -fno-omit-frame-pointer -DUSE_FAKE_LIBUNWIND
+ifeq ($(USE_REAL_LIBUNWIND),)
+CFLAGS += -fno-omit-frame-pointer
 LIBUNWIND_LDLIBS :=
 else
 LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
+CFLAGS += -DUSE_REAL_LIBUNWIND
 endif
 
 C_DEPS := $(patsubst %.c,.%.d,$(C_SRC))
