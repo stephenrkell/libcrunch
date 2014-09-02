@@ -37,8 +37,8 @@ class CrunchCxx(AllocsCxx):
     def getLinkPath(self):
         return os.path.dirname(__file__) + "/../../../lib"
 
-    def getUnderlyingCompilerCommand(self):
-        return AllocsCxx.getUnderlyingCompilerCommand(self) + ["-Wold-style-cast", \
+    def getUnderlyingCompilerCommand(self, sourceFiles):
+        return AllocsCxx.getUnderlyingCompilerCommand(self, sourceFiles) + ["-Wold-style-cast", \
             "-std=c++11", "-include", \
             os.path.realpath(os.path.dirname(__file__) + "/../include/checked_cast.hpp")]
 

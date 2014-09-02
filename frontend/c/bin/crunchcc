@@ -26,13 +26,30 @@ class CrunchCC(AllocsCC):
 
             return AllocsCC.fixupDotO(self, filename, errfile)
         
-    def getCillyArgs(self):
+    def getCillyArgs(self, sourceFiles):
+        # PROBLEM: we only want to -include if we're compiling a C file. 
+        # Note that normally cilly will figure out when we're compiling
+        # a .S file, say, and only pass options that are relevant. But
+        # it would be asking too much in this case. 
+        
+        allSourceFilesAreC = True
+        for sourceFile in sourceFiles:
+            if not sourceFile.endswith(".c"):
+                allSourceFilesAreC = False
+        
+        includeArgs = []
+        if allSourceFilesAreC:
+            includeArgs = ["-include", os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h"]
+        else:
+            pass
+        
         # do dumpallocs et al *and* trumptr
-        return AllocsCC.getCillyArgs(self) + \
+        return AllocsCC.getCillyArgs(self, sourceFiles) + \
             ["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
             "--dotrumptr", \
-            "--keepunused", "-include", os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
-            "-Wno-unused-variable", "-Wno-unused-label"]
+            "--keepunused"] \
+            + includeArgs + \
+            ["-Wno-unused-variable", "-Wno-unused-label"]
             # We need the above -Wno-unused-... because CIL creates
             # some unused stuff (unavoidably, I believe) which will
             # make compilation done with -Werror barf if we don't
