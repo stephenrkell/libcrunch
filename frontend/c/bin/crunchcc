@@ -34,20 +34,23 @@ class CrunchCC(AllocsCC):
         
         allSourceFilesAreC = True
         for sourceFile in sourceFiles:
-            if not sourceFile.endswith(".c"):
+            if sourceFile.lang != "c" and not sourceFile.endswith(".c"):
                 allSourceFilesAreC = False
         
         includeArgs = []
         if allSourceFilesAreC:
-            includeArgs = ["-include", os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h"]
+            # We can only do trumptr, and anything else that involves -include, 
+            # if we're compiling only C files.
+            includeArgs = ["-include", \
+                os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
+                "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
+            "--dotrumptr"]
         else:
             pass
         
         # do dumpallocs et al *and* trumptr
         return AllocsCC.getCillyArgs(self, sourceFiles) + \
-            ["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
-            "--dotrumptr", \
-            "--keepunused"] \
+            ["--keepunused"] \
             + includeArgs + \
             ["-Wno-unused-variable", "-Wno-unused-label"]
             # We need the above -Wno-unused-... because CIL creates
