@@ -1,3 +1,6 @@
+#ifndef LIBCRUNCH_CIL_INLINES_H_
+#define LIBCRUNCH_CIL_INLINES_H_
+
 /* the functions are *not* weak -- they're defined in the noop library. 
  * we would like the noop library not to be necessary. */
 int __libcrunch_global_init (void);
@@ -267,3 +270,5 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_ref
 	int ret = __is_a_function_refining_internal(obj, uniqtype);
 	return ret;
 }
+
+#endif
