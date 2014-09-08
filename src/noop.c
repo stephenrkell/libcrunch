@@ -1,4 +1,6 @@
 static const int __libcrunch_is_initialized = 1;
+unsigned long int __libcrunch_begun = 0;
+unsigned long int __libcrunch_aborted_typestr = 0;
 
 void __libcrunch_scan_lazy_typenames(void *blah) {}
 
