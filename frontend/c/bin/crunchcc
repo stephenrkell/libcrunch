@@ -38,7 +38,7 @@ class CrunchCC(AllocsCC):
                 allSourceFilesAreC = False
         
         includeArgs = []
-        if allSourceFilesAreC:
+        if len(sourceFiles) > 0 and allSourceFilesAreC:
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
             includeArgs = ["-include", \
@@ -46,7 +46,7 @@ class CrunchCC(AllocsCC):
                 "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
             "--dotrumptr"]
         else:
-            pass
+            self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
         
         # do dumpallocs et al *and* trumptr
         return AllocsCC.getCillyArgs(self, sourceFiles) + \
