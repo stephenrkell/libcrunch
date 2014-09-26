@@ -59,3 +59,12 @@ src/libdumpsmaps.so
 test/fail-funptr/fail-funptr
 frontend/c/cil-*
 test/hello-incomplete/hello-incomplete
+*.o.fixuplog
+*.allocstubs.c
+*.cmxs
+lib/libcrunch_preload.a
+*debuglog.txt
+src/libcrunch_preload.a
+*.ltrans.out
+*free.res
+*.ii
