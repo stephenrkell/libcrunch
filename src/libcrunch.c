@@ -1,7 +1,9 @@
 /* Libcrunch contains all the non-inline code that we need for doing run-time 
  * type checks on C code. */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 
 #include <string.h>
 #include <dlfcn.h>
@@ -592,7 +594,7 @@ int __is_a_internal(const void *obj, const void *arg)
 								repeat_suppression_count);
 					}
 
-					debug_printf(0, "Failed check __is_a_internal(%p, %p a.k.a. \"%s\") at %p (%s); "
+					debug_printf(0, "Failed check __is_a(%p, %p a.k.a. \"%s\") at %p (%s); "
 							"obj is %ld bytes into an allocation of a %s%s%s "
 							"(deepest subobject: %s at offset %d) "
 							"originating at %p\n", 
@@ -769,7 +771,7 @@ like_a_failed:
 		{
 			if (should_report_failure_at(__builtin_return_address(0)))
 			{
-				debug_printf(0, "Failed check __like_a_internal(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
+				debug_printf(0, "Failed check __like_a(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
 					obj, test_uniqtype, test_uniqtype->name,
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
 					name_for_memory_kind(k), 
@@ -879,7 +881,7 @@ named_a_failed:
 		{
 			if (should_report_failure_at(__builtin_return_address(0)))
 			{
-				debug_printf(0, "Failed check __named_a_internal(%p, \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
+				debug_printf(0, "Failed check __named_a(%p, \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
 					obj, test_typestr,
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
 					name_for_memory_kind(k), 
@@ -1096,7 +1098,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 								repeat_suppression_count);
 					}
 
-					debug_printf(0, "Failed check __is_a_function_refining_internal(%p, %p a.k.a. \"%s\") at %p (%s), "
+					debug_printf(0, "Failed check __is_a_function_refining(%p, %p a.k.a. \"%s\") at %p (%s), "
 							"found an allocation of a %s%s%s "
 							"originating at %p\n", 
 						obj, test_uniqtype, test_uniqtype->name,
@@ -1113,4 +1115,149 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 		}
 	}
 	return 1; // HACK: so that the program will continue
+}
+int __is_a_pointer_of_degree_internal(const void *obj, int d)
+{
+	/* We might not be initialized yet (recall that __libcrunch_global_init is 
+	 * not a constructor, because it's not safe to call super-early). */
+	__libcrunch_check_init();
+	
+	memory_kind k = UNKNOWN;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
+	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
+	const void *alloc_site;
+	
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
+		&k,
+		&alloc_start,
+		&alloc_size_bytes,
+		&alloc_uniqtype,
+		&alloc_site);
+	
+	if (__builtin_expect(err != NULL, 0))
+	{
+		return 1;
+	}
+	
+	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	/* If we're searching in a heap array, we need to take the offset modulo the 
+	 * element size. Otherwise just take the whole-block offset. */
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
+			&& alloc_uniqtype
+			&& alloc_uniqtype->pos_maxoff != 0 
+			&& alloc_uniqtype->neg_maxoff == 0)
+	{
+		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+	}
+	
+	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
+	struct uniqtype *cur_containing_uniqtype = NULL;
+	struct contained *cur_contained_pos = NULL;
+	
+	/* Descend the subobject hierarchy until we can't go any further (since pointers
+	 * are atomic. */
+	_Bool success = 1;
+	while (success)
+	{
+		success = __liballocs_first_subobject_spanning(
+			&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
+			&cur_contained_pos);
+	}
+	
+	if (target_offset_within_uniqtype == 0 && UNIQTYPE_IS_POINTER_TYPE(cur_obj_uniqtype))
+	{
+		while (d > 0)
+		{
+			if (!UNIQTYPE_IS_POINTER_TYPE(cur_obj_uniqtype) ) goto is_a_pointer_failed;
+			cur_obj_uniqtype = cur_obj_uniqtype->contained[0].ptr;
+			--d;
+		}
+		++__libcrunch_succeeded;
+		return 1;
+	}
+	
+is_a_pointer_failed:
+	++__libcrunch_failed;
+	debug_printf(0, "Failed check __is_a_pointer_of_degree(%p, %d) at %p (%s), "
+			"found an allocation of a %s%s%s "
+			"originating at %p\n", 
+		obj, d,
+		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
+		name_for_memory_kind(k), 
+		(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+		alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+		alloc_site);
+	return 1; // so that program will continue
+}
+
+int __can_hold_pointer_internal(const void *obj, const void *value)
+{
+	/* We might not be initialized yet (recall that __libcrunch_global_init is 
+	 * not a constructor, because it's not safe to call super-early). */
+	__libcrunch_check_init();
+
+	memory_kind k = UNKNOWN;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
+	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
+	const void *alloc_site;
+	
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
+		&k,
+		&alloc_start,
+		&alloc_size_bytes,
+		&alloc_uniqtype,
+		&alloc_site);
+	
+	if (__builtin_expect(err != NULL, 0))
+	{
+		return 1;
+	}
+	
+	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	/* If we're searching in a heap array, we need to take the offset modulo the 
+	 * element size. Otherwise just take the whole-block offset. */
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
+			&& alloc_uniqtype
+			&& alloc_uniqtype->pos_maxoff != 0 
+			&& alloc_uniqtype->neg_maxoff == 0)
+	{
+		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+	}
+	
+	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
+	struct uniqtype *cur_containing_uniqtype = NULL;
+	struct contained *cur_contained_pos = NULL;
+	
+	/* Descend the subobject hierarchy until we can't go any further (since pointers
+	 * are atomic. */
+	_Bool success = 1;
+	while (success)
+	{
+		success = __liballocs_first_subobject_spanning(
+			&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
+			&cur_contained_pos);
+	}
+	
+	/* What's the pointee type of this pointer storage? */
+	if (target_offset_within_uniqtype == 0 && UNIQTYPE_IS_POINTER_TYPE(cur_obj_uniqtype))
+	{
+		struct uniqtype *pointee_type = cur_obj_uniqtype->contained[0].ptr;
+		return __is_a_internal(value, pointee_type);
+	} 
+
+can_hold_pointer_failed:
+	++__libcrunch_failed;
+	debug_printf(0, "Failed check __can_hold_pointer(%p, %p) at %p (%s), "
+			"found an allocation of a %s%s%s "
+			"originating at %p\n", 
+		obj, value,
+		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
+		name_for_memory_kind(k), 
+		(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+		alloc_uniqtype ? (alloc_uniqtype->name ?: "(unnamed type)") : "(unknown type)", 
+		alloc_site);
+	return 1; // fail, but program continues
+	
 }

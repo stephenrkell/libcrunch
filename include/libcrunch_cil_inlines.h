@@ -8,6 +8,8 @@ int __is_a_internal(const void *obj, const void *u);
 int __like_a_internal(const void *obj, const void *u);
 int __named_a_internal(const void *obj, const void *u);
 int __is_a_function_refining_internal(const void *obj, const void *u);
+int __is_a_pointer_of_degree_internal(const void *obj, int d);
+int __can_hold_pointer_internal(const void *obj, const void *value);
 /* This function is weak, but FIXME: that might be broken. */
 const void *__libcrunch_typestr_to_uniqtype (const char *) __attribute__((weak));
 /* This is not weak. */
@@ -268,6 +270,46 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_ref
 	// now we're really started
 	__libcrunch_begun += 1;
 	int ret = __is_a_function_refining_internal(obj, uniqtype);
+	return ret;
+}
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_pointer_of_degree)(const void *obj, int d);
+extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_pointer_of_degree)(const void *obj, int d)
+{
+	if (!obj)
+	{
+		return 1;
+	}
+	if (obj == (void*) -1)
+	{
+		return 1;
+	}
+	if (d == 0) return 1;
+	
+	__libcrunch_begun += 1;
+	int ret = __is_a_pointer_of_degree_internal(obj, d);
+	return ret;
+}
+extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)(const void *target, const void *value);
+extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)(const void *target, const void *value)
+{
+	if (!target)
+	{
+		return 1;
+	}
+	if (target == (void*) -1)
+	{
+		return 1;
+	}
+	if (!value)
+	{
+		return 1;
+	}
+	if (value == (void*) -1)
+	{
+		return 1;
+	}
+	__libcrunch_begun += 1;
+	int ret = __can_hold_pointer_internal(target, value);
 	return ret;
 }
 

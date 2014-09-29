@@ -68,3 +68,8 @@ src/libcrunch_preload.a
 *.ltrans.out
 *free.res
 *.ii
+test/fail-voidptrptr-invalid/fail-voidptrptr-invalid
+test/fail-voidptrptr-strict/fail-voidptrptr-strict
+test/function-refines/function-refines
+test/pointer-degree/pointer-degree
+test/voidptrptr/voidptrptr
