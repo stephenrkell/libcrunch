@@ -179,7 +179,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
   end with Not_found -> false
 
   val strictVoidpps = try begin
-    let envstr = (Sys.getenv "LIBCRUNCH_STRICT_VOID_POINTER_POINTERS")
+    let envstr = (Sys.getenv "LIBCRUNCH_STRICT_GENERIC_POINTERS")
     in (String.length envstr) > 0
   end with Not_found -> false
   
@@ -321,7 +321,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
       (* FIXME: for checkArgs, also force a cast if the typesig of the function ptr is a ptr. 
        * Can we do this by pretending that a pointer-returning function returns void*? 
        * NO, do it with canHoldPointerInternalFunDec! *)
-      if not strictVoidpps && doingWrite then
+      if (not strictVoidpps) && doingWrite then
         let writtenValueTempVar = match maybeWrittenValueTempVar with Some(v) -> v
         | None -> failwith "logic error"
         in
@@ -443,7 +443,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
           (* To any void** or higher-degree void ptr is okay if we're not being strict. 
            * BUT we also have to check that the target degree is not greater than the 
            * source degree, or else do a check. *)
-          if (not strictVoidpps && (tsIsMultiplyIndirectedVoid targetTs))
+          if ((not strictVoidpps) && (tsIsMultiplyIndirectedVoid targetTs))
           then
             if indirectionLevel subexTs >= indirectionLevel targetTs then DoChildren
             else
