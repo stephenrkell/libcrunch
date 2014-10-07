@@ -1,28 +1,20 @@
-Correctness / usability to-do:
+To do:
 
-fix the incomplete types bug (requires CIL fix)
+proper unions checking: trumunion
 
-use the uniqtype cache word to actually do some caching
+proper varargs push/pop checking: trumva
 
-relaxations for higher-order checks
-- function pointer wrappers? hmm...
-- mprotect() for write-through-void** and similar cases?
-- check-on-use instrumentation
+void** handling: fix unsoundness by actually checking that a specialised 
+object is so-far unused (steal a header bit from liballocs)
 
-multithreaded programs: walking other threads' stacks
+signed/unsigned sloppiness
 
-multithreaded programs: lock-free memtable algs
+C++: file/chase the likely-bug in user-defined conversions
 
-namespace-aware typestrs
-*** issue with struct/union/enum tags: 
-    same decl in C++ and C will get different names; bad? YES
-    HMM does/could extern "C" help us? -- so 
-        C checking casts of allocations made by C++: 
-            no extern C involved, so no
-            SO: create aliases where sensible?
-            E.g. alias a C++ typedesc name by its C equiv where unambiguous
-        C++ checking casts of allocations made by C: 
-            could propagate extern-Cness of certain type definitions
-            then generate C-style names for them
-            though DWARF doesn't record extern-Cness
+C++: finish wrapper toolchain (incl. in liballocs)
 
+C++: namespace-aware typestrs
+
+Fortran: define wrappers for checking TRANSFERs
+
+C++: solve problems relating to struct/enum/union tag aliasing
