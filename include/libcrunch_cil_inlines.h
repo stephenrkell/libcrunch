@@ -144,13 +144,13 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 	 * linked with enough uniqtypes data. */ 
 	if (__builtin_expect( !uniqtype, 0)) 
 	{ 
-	   __libcrunch_begun += 1; 
-	   __libcrunch_aborted_typestr += 1; 
+	   __libcrunch_begun++; 
+	   __libcrunch_aborted_typestr++; 
 		 return 1; 
 	} 
 	/* No need for the char check in the CIL version */ 
 	// now we're really started 
-	__libcrunch_begun += 1; 
+	__libcrunch_begun++; 
 	int ret = __is_a_internal(obj, uniqtype); 
 	return ret;
 }
@@ -200,13 +200,13 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const v
 	 * linked with enough uniqtypes data. */ 
 	if (__builtin_expect( !uniqtype, 0)) 
 	{ 
-	   __libcrunch_begun += 1; 
-	   __libcrunch_aborted_typestr += 1; 
+	   __libcrunch_begun++; 
+	   __libcrunch_aborted_typestr++; 
 		 return 1; 
 	} 
 	/* No need for the char check in the CIL version */ 
 	// now we're really started 
-	__libcrunch_begun += 1; 
+	__libcrunch_begun++; 
 	int ret = __like_a_internal(obj, uniqtype); 
 	return ret;
 }
@@ -232,13 +232,13 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const 
 	 * linked with enough uniqtypes data. */
 	if (/*__builtin_expect(*/ !s/*, 0)*/)
 	{
-		__libcrunch_begun += 1;
-		__libcrunch_aborted_typestr += 1;
+		__libcrunch_begun++;
+		__libcrunch_aborted_typestr++;
 		return 1;
 	}
 	/* No need for the char check in the CIL version */ 
 	// now we're really started 
-	__libcrunch_begun += 1;
+	__libcrunch_begun++;
 	int ret = __named_a_internal(obj, s);
 	return ret;
 }
@@ -263,12 +263,12 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_ref
 	 * linked with enough uniqtypes data. */
 	if (__builtin_expect( !uniqtype, 0))
 	{
-		__libcrunch_begun += 1;
-		__libcrunch_aborted_typestr += 1;
+		__libcrunch_begun++;
+		__libcrunch_aborted_typestr++;
 		return 1;
 	}
 	// now we're really started
-	__libcrunch_begun += 1;
+	__libcrunch_begun++;
 	int ret = __is_a_function_refining_internal(obj, uniqtype);
 	return ret;
 }
@@ -285,7 +285,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_pointer_of_d
 	}
 	if (d == 0) return 1;
 	
-	__libcrunch_begun += 1;
+	__libcrunch_begun++;
 	int ret = __is_a_pointer_of_degree_internal(obj, d);
 	return ret;
 }
@@ -308,7 +308,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)
 	{
 		return 1;
 	}
-	__libcrunch_begun += 1;
+	__libcrunch_begun++;
 	int ret = __can_hold_pointer_internal(target, value);
 	return ret;
 }
