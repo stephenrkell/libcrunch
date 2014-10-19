@@ -1254,19 +1254,23 @@ is_a_pointer_failed:
  * If we're writing into a generic pointer, we're more relaxed, but 
  * if target has degree 3, "value" must be the address of a degree2 pointer.
  */
+struct match_cb_args
+{
+	struct uniqtype *type_of_pointer_being_stored_to;
+	signed target_offset;
+};
 static int match_pointer_subobj_strict_cb(struct uniqtype *spans, signed span_start_offset, 
 		unsigned depth, struct uniqtype *containing, struct contained *contained_pos, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
 	struct uniqtype *t = spans;
-	struct uniqtype *type_of_pointer_being_stored_to = (struct uniqtype *) arg;
-	struct uniqtype *type_of_pointer_we_can_store = UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to);
+	struct match_cb_args *args = (struct match_cb_args *) arg;
+	struct uniqtype *type_we_can_store = UNIQTYPE_POINTEE_TYPE(args->type_of_pointer_being_stored_to);
 	
-	if (span_start_offset == 0 && type_of_pointer_we_can_store == t)
+	if (span_start_offset == args->target_offset && type_we_can_store == t)
 	{
 		return 1;
 	}
-
 	return 0;
 }
 static int match_pointer_subobj_generic_cb(struct uniqtype *spans, signed span_start_offset, 
@@ -1274,9 +1278,9 @@ static int match_pointer_subobj_generic_cb(struct uniqtype *spans, signed span_s
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
 	struct uniqtype *t = spans;
-	struct uniqtype *type_of_pointer_being_stored_to = (struct uniqtype *) arg;
+	struct match_cb_args *args = (struct match_cb_args *) arg;
 	
-	int degree_of_pointer_stored_to = pointer_degree(type_of_pointer_being_stored_to);
+	int degree_of_pointer_stored_to = pointer_degree(args->type_of_pointer_being_stored_to);
 
 	if (span_start_offset == 0 && pointer_has_degree(t, degree_of_pointer_stored_to - 1))
 	{
@@ -1405,12 +1409,16 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		}
 
 		/* See if the top-level object matches */
+		struct match_cb_args args = {
+			.type_of_pointer_being_stored_to = type_of_pointer_being_stored_to,
+			.target_offset = value_target_offset_within_uniqtype
+		};
 		int ret = (is_generic ? match_pointer_subobj_generic_cb : match_pointer_subobj_strict_cb)(
 			value_alloc_uniqtype,
 			0,
 			0,
 			NULL, NULL,
-			type_of_pointer_being_stored_to
+			&args
 		);
 		/* Here we walk the subobject hierarchy until we hit 
 		 * one that is at the right offset and equals test_uniqtype.
@@ -1420,11 +1428,10 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		 ) ... with a cb that tests equality with test_uniqtype and returns 
 		 
 		 */
-		
 		if (!ret) ret = __liballocs_walk_subobjects_spanning(value_target_offset_within_uniqtype, 
 			value_alloc_uniqtype, 
 			is_generic ? match_pointer_subobj_generic_cb : match_pointer_subobj_strict_cb, 
-			type_of_pointer_being_stored_to);
+			&args);
 		
 		if (ret)
 		{
