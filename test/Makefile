@@ -96,6 +96,8 @@ checkrun-hello-qualified-char:
 	$(MAKE) cleanrun-hello-qualified-char >/dev/null 2>&1
 checkrun-random:
 	$(MAKE) cleanrun-random >/dev/null 2>&1
+checkrun-pointer-degree:
+	$(MAKE) cleanrun-pointer-degree >/dev/null 2>&1
 
 # Some cases are special and have their own matching criteria
 checkrun-lazy-typing:
