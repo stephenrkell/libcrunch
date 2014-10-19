@@ -9,6 +9,7 @@ struct uniqtype
 
 extern "C"
 {
+	extern unsigned long __libcrunch_begun;
 	extern int __is_a_internal(const void *obj, const void *uniqtype);
 }
 
@@ -148,8 +149,12 @@ struct checked_static_cast_t<ToPointerTarget*>
 	ToPointerTarget *temp; 
 	operator ToPointerTarget*() const 
 	{ 
-		// FIXME: assert
-		__is_a_internal(temp, &uniqtype<ToPointerTarget>::obj);
+		if (temp && (unsigned long) temp != -1)
+		{
+			++__libcrunch_begun;
+			// FIXME: assert
+			__is_a_internal(temp, &uniqtype<ToPointerTarget>::obj);
+		}
 		return std::move(temp); 
 	}
 	
@@ -443,8 +448,12 @@ struct checked_reinterpret_cast_t<ToPointerTarget*>
 	ToPointerTarget *temp; 
 	operator ToPointerTarget*() const 
 	{ 
-		// FIXME: assert
-		__is_a_internal(temp, &uniqtype<ToPointerTarget>::obj);
+		if (temp && (unsigned long) temp != -1)
+		{
+			++__libcrunch_begun;
+			// FIXME: assert
+			__is_a_internal(temp, &uniqtype<ToPointerTarget>::obj);
+		}
 		return std::move(temp); 
 	}
 	
