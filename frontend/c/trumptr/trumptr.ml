@@ -156,15 +156,14 @@ let mkCheckInstrs
 
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
-                           fun isAInternalFunDec ->
                            fun checkArgsInternalFunDec -> 
-                           fun canHoldPointerInternalFunDec ->
                            fun isASInlineFun ->
                            fun isAUInlineFun ->
                            fun likeAUInlineFun ->
                            fun namedAUInlineFun ->
                            fun isAFunctionRefiningUInlineFun ->
                            fun isAPointerOfDegreeInlineFun ->
+                           fun canHoldPointerInlineFun ->
                            fun inlineAssertFun -> 
                                object(self)
   inherit nopCilVisitor
@@ -320,7 +319,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
     let postcondCheckInstrs = 
       (* FIXME: for checkArgs, also force a cast if the typesig of the function ptr is a ptr. 
        * Can we do this by pretending that a pointer-returning function returns void*? 
-       * NO, do it with canHoldPointerInternalFunDec! *)
+       * NO, do it with canHoldPointerInlineFun! *)
       if (not strictVoidpps) && doingWrite then
         let writtenValueTempVar = match maybeWrittenValueTempVar with Some(v) -> v
         | None -> failwith "logic error"
@@ -338,7 +337,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
           [
             (* enqueue the checkargs call *)
             Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
-                  (Lval(Var(canHoldPointerInternalFunDec),NoOffset)),  (* lvalue of function to call *)
+                  (Lval(Var(canHoldPointerInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
                   [ 
                     (* first arg is the destination pointer *)
                     Cil.mkAddrOf writtenLv; 
@@ -615,41 +614,11 @@ class trumPtrFunVisitor = fun fl -> object
                              Some [("typestr", charConstPtrType, [])],
                             false, [Attr("weak", [])]))
   
-  val isAInternalFunDec = findOrCreateExternalFunctionInFile fl "__is_a_internal" (TFun(intType, 
-                             Some [ ("obj", voidConstPtrType, []);
-                                   ("t", voidConstPtrType, []) ],
-                            false, [(*Attr("weak", [])*)]))
-  
-  val likeAInternalFunDec = findOrCreateExternalFunctionInFile fl "__like_a_internal" (TFun(intType, 
-                             Some [ ("obj", voidConstPtrType, []);
-                                   ("t", voidConstPtrType, []) ],
-                            false, [(*Attr("weak", [])*)]))
-  
-  val namedAInternalFunDec = findOrCreateExternalFunctionInFile fl "__named_a_internal" (TFun(intType, 
-                             Some [ ("obj", voidConstPtrType, []);
-                                   ("typestr", voidConstPtrType, []) ],
-                            false, [(*Attr("weak", [])*)]))
-
-  val isAFunctionRefiningInternalFunDec = findOrCreateExternalFunctionInFile fl "__is_a_function_refining_internal" (TFun(intType, 
-                             Some [ ("obj", voidConstPtrType, []);
-                                   ("t", voidConstPtrType, []) ],
-                            false, [(*Attr("weak", [])*)]))
-
-  val isAPointerOfDegreeInternalFunDec = findOrCreateExternalFunctionInFile fl "__is_a_pointer_of_degree_internal" (TFun(intType, 
-                             Some [ ("obj", voidConstPtrType, []);
-                                   ("d", intType, []) ],
-                            false, [(*Attr("weak", [])*)]))
-
   val checkArgsInternalFunDec = findOrCreateExternalFunctionInFile fl "__check_args_internal" (TFun(intType, 
                              Some [ ("obj", voidConstPtrType, []);
                                    ("nargs", intType, []) ],
                             true, [(*Attr("weak", [])*)]))
                             
-  val canHoldPointerInternalFunDec = findOrCreateExternalFunctionInFile fl "__can_hold_pointer_internal" (TFun(intType, 
-                             Some [ ("dest", voidConstPtrType, []);
-                                   ("ptr", voidConstPtrType, []) ],
-                            false, [(*Attr("weak", [])*)]))
-  
   val assertFailFunDec = findOrCreateExternalFunctionInFile fl "__assert_fail" (TFun(voidType, 
                             Some [ 
                             ("assertion", charConstPtrType, []);
@@ -668,6 +637,7 @@ class trumPtrFunVisitor = fun fl -> object
   val mutable namedAUInlineFun = emptyFunction "__named_aU"
   val mutable isAFunctionRefiningUInlineFun = emptyFunction "__is_a_function_refiningU"
   val mutable isAPointerOfDegreeInlineFun = emptyFunction "__is_a_pointer_of_degree"
+  val mutable canHoldPointerInlineFun = emptyFunction "__can_hold_pointer"
   
 
   initializer
@@ -732,6 +702,13 @@ class trumPtrFunVisitor = fun fl -> object
                                  ], 
                             false, [])) 
     ;
+     canHoldPointerInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
+                            fl (* IsAPointerOfDegreeInlineFun *) "__can_hold_pointer" (TFun(intType, 
+                            Some [ ("obj", voidConstPtrType, []);
+                                   ("value", voidConstPtrType, [])
+                                 ], 
+                            false, [])) 
+    ;
    
     fl.globals <- newGlobalsList fl.globals [
          GVarDecl(libcrunchIsInitialized, {line = -1; file = "BLAH FIXME"; byte = 0});
@@ -761,7 +738,7 @@ class trumPtrFunVisitor = fun fl -> object
       if startswith f.svar.vname "__liballocs_" then
           SkipChildren
       else
-          let tpExprVisitor = new trumPtrExprVisitor fl f isAInternalFunDec checkArgsInternalFunDec.svar canHoldPointerInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun isAPointerOfDegreeInlineFun inlineAssertFun
+          let tpExprVisitor = new trumPtrExprVisitor fl f checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun isAPointerOfDegreeInlineFun canHoldPointerInlineFun inlineAssertFun
           in
           ChangeTo(visitCilFunction tpExprVisitor f)
 end
