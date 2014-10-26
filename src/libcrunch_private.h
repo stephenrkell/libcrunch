@@ -36,9 +36,19 @@ extern unsigned long __libcrunch_trivially_succeeded_null;
 #endif
 extern unsigned long __libcrunch_aborted_typestr;
 extern unsigned long __libcrunch_lazy_heap_type_assignment;
-extern unsigned long __libcrunch_failed;
 extern unsigned long __libcrunch_failed_and_suppressed;
 extern unsigned long __libcrunch_failed_in_alloc;
 extern unsigned long __libcrunch_succeeded;
+extern unsigned long __libcrunch_is_a_hit_cache;
 
+unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
+#ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE
+#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 4
+#endif
+extern const unsigned short __libcrunch_is_a_cache_size;
+extern unsigned short __libcrunch_is_a_cache_next_victim;
+extern struct __libcrunch_is_a_cache_s /* __thread */
+ __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
+void __libcrunch_uncache_is_a(const void *allocptr, size_t size);
+void __libcrunch_uncache_all(const void *allocptr, size_t size);
 #endif

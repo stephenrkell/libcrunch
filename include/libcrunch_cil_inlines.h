@@ -13,11 +13,30 @@ int __can_hold_pointer_internal(const void *obj, const void *value);
 /* This function is weak, but FIXME: that might be broken. */
 const void *__libcrunch_typestr_to_uniqtype (const char *) __attribute__((weak));
 /* This is not weak. */
-void __assert_fail();
+void __assert_fail(const char *__assertion, const char *__file,
+    unsigned int __line, const char *__function);
 
 extern _Bool __libcrunch_is_initialized __attribute__((weak));
 extern unsigned long __libcrunch_begun __attribute__((weak));
 extern unsigned long __libcrunch_aborted_typestr __attribute__((weak));
+extern unsigned long __libcrunch_succeeded __attribute__((weak));
+extern unsigned long __libcrunch_failed __attribute__((weak));
+extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
+
+extern unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
+extern const unsigned short __libcrunch_is_a_cache_size;
+extern unsigned short __libcrunch_is_a_cache_next_victim;
+#ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE
+#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 4
+#endif
+struct __libcrunch_is_a_cache_s
+{
+	const void *obj;
+	unsigned long long uniqtype:((8 * sizeof(void*))-1);
+	unsigned result:1;
+	/* add alloc base and uniqtype, to do inline uniqtype cache word check? */
+};
+struct __libcrunch_is_a_cache_s /* __thread */ __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE] __attribute__((weak)); /* some length */
 
 extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
 	int cond, const char *assertion, const char *file, unsigned int line, const char *func
@@ -151,7 +170,41 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 	/* No need for the char check in the CIL version */ 
 	// now we're really started 
 	__libcrunch_begun++; 
+
+	for (unsigned i = 0; i < __libcrunch_is_a_cache_size; ++i)
+	{
+		if (__libcrunch_is_a_cache_validity & (1<<i))
+		{
+			if (__libcrunch_is_a_cache[i].obj == obj
+					&& (void*) (unsigned long long) __libcrunch_is_a_cache[i].uniqtype == uniqtype)
+			{
+				// hit!
+				// - make sure we're not the next victim
+				if (__builtin_expect(__libcrunch_is_a_cache_next_victim == i, 0))
+				{
+					if (__libcrunch_is_a_cache_size > 0)
+					{
+						__libcrunch_is_a_cache_next_victim
+						 = (__libcrunch_is_a_cache_next_victim + 1) % __libcrunch_is_a_cache_size;
+					}
+				}
+				// return the result
+				++__libcrunch_is_a_hit_cache;
+				if (__libcrunch_is_a_cache[i].result) 
+				{
+					++__libcrunch_succeeded;
+				}
+				else
+				{
+					++__libcrunch_failed;
+				}
+				return 1; //__libcrunch_is_a_cache[i].result;
+			}
+		}
+	}
+	// miss: __is_a_internal will cache if it's cacheable
 	int ret = __is_a_internal(obj, uniqtype); 
+	
 	return ret;
 }
 

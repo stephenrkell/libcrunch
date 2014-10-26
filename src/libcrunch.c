@@ -217,6 +217,11 @@ unsigned long __libcrunch_failed_in_alloc;
 unsigned long __libcrunch_failed_and_suppressed;
 unsigned long __libcrunch_succeeded;
 
+struct __libcrunch_is_a_cache_s /* __thread */ __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
+unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
+unsigned short __libcrunch_is_a_cache_next_victim;
+const unsigned short __libcrunch_is_a_cache_size = LIBCRUNCH_MAX_IS_A_CACHE_SIZE;
+
 static unsigned long repeat_suppression_count;
 // enum check
 // {
@@ -279,6 +284,9 @@ static void print_exit_summary(void)
 	fprintf(crunch_stream_err, "checks failed otherwise:                   % 9ld\n", __libcrunch_failed);
 	fprintf(crunch_stream_err, "   of which user suppression list matched: % 9ld\n", __libcrunch_failed_and_suppressed);
 	fprintf(crunch_stream_err, "checks nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
+	fprintf(crunch_stream_err, "----------------------------------------------------\n");
+	fprintf(crunch_stream_err, "   of which hit __is_a cache:              % 9ld\n", __libcrunch_is_a_hit_cache);
+	fprintf(crunch_stream_err, "----------------------------------------------------\n");
 	fprintf(crunch_stream_err, "====================================================\n");
 	if (!verbose)
 	{
@@ -496,6 +504,40 @@ static void clear_alloc_site_metadata(const void *alloc_start)
 	}
 }
 
+static void cache_is_a(const void *obj, const struct uniqtype *t, _Bool result)
+{
+	unsigned pos = __libcrunch_is_a_cache_next_victim;
+	__libcrunch_is_a_cache[pos] = (struct __libcrunch_is_a_cache_s) {
+		.obj = obj,
+		.uniqtype = (unsigned long long) t,
+		.result = result
+	};
+	__libcrunch_is_a_cache_validity |= 1u<<pos;
+	// make sure this entry is not the next victim
+	__libcrunch_is_a_cache_next_victim = (pos + 1) % __libcrunch_is_a_cache_size;
+}
+
+void __libcrunch_uncache_all(const void *allocptr, size_t size)
+{
+	__libcrunch_uncache_is_a(allocptr, size);
+}
+void __libcrunch_uncache_is_a(const void *allocptr, size_t size)
+{
+	for (unsigned i = 0; i < __libcrunch_is_a_cache_size; ++i)
+	{
+		if (__libcrunch_is_a_cache_validity & (1u << i))
+		{
+			if ((char*) __libcrunch_is_a_cache[i].obj >= (char*) allocptr
+					 && (char*) __libcrunch_is_a_cache[i].obj < (char*) allocptr + size)
+			{
+				// unset validity and make this the next victim
+				__libcrunch_is_a_cache_validity &= ~(1u<<i);
+				__libcrunch_is_a_cache_next_victim = i;
+			}
+		}
+	}
+}
+
 /* Optimised version, for when you already know the uniqtype address. */
 int __is_a_internal(const void *obj, const void *arg)
 {
@@ -504,8 +546,6 @@ int __is_a_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
-	const char *reason = NULL; // if we abort, set this to a string lit
-	const void *reason_ptr = NULL; // if we abort, set this to a useful address
 	memory_kind k = UNKNOWN;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
@@ -518,7 +558,6 @@ int __is_a_internal(const void *obj, const void *arg)
 		&alloc_size_bytes,
 		&alloc_uniqtype,
 		&alloc_site);
-	
 	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
 	{
 		clear_alloc_site_metadata(alloc_start);
@@ -536,6 +575,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	{
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
+	_Bool is_cacheable = ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site);
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
@@ -548,6 +588,9 @@ int __is_a_internal(const void *obj, const void *arg)
 	
 	if (__builtin_expect(success, 1))
 	{
+		/* populate cache */
+		if (is_cacheable) cache_is_a(obj, test_uniqtype, 1);
+
 		++__libcrunch_succeeded;
 		return 1;
 	}
@@ -565,11 +608,13 @@ int __is_a_internal(const void *obj, const void *arg)
 		assert(ins);
 		ins->alloc_site_flag = 1;
 		ins->alloc_site = (uintptr_t) test_uniqtype;
+		if (is_cacheable) cache_is_a(obj, test_uniqtype, 1);
 		
 		return 1;
 	}
 	
 	// if we got here, the check failed
+	if (is_cacheable) cache_is_a(obj, test_uniqtype, 0);
 	if (__currently_allocating || __currently_freeing)
 	{
 		++__libcrunch_failed_in_alloc;

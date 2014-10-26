@@ -11,6 +11,9 @@ extern unsigned long __libcrunch_trivially_succeeded __attribute__((weak));
 #endif
 extern unsigned long __libcrunch_begun __attribute__((weak));
 extern unsigned long __libcrunch_aborted_typestr __attribute__((weak));
+extern unsigned long __libcrunch_failed __attribute__((weak));
+extern unsigned long __libcrunch_succeeded __attribute__((weak));
+extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
 
 /* Uniqtypes for signed_char and unsigned_char.
  * 

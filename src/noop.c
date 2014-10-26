@@ -1,7 +1,14 @@
 static const int __libcrunch_is_initialized = 1;
+
+unsigned int __libcrunch_is_a_cache_validity; // all zeroes
+unsigned short __libcrunch_is_a_cache_next_victim;
+const unsigned short __libcrunch_is_a_cache_size; // zero
 unsigned long int __libcrunch_begun = 0;
 unsigned long int __libcrunch_failed = 0;
+unsigned long int __libcrunch_succeeded = 0;
 unsigned long int __libcrunch_aborted_typestr = 0;
+unsigned long int __libcrunch_is_a_hit_cache = 0;
+
 
 void __libcrunch_scan_lazy_typenames(void *blah) {}
 
