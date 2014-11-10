@@ -34,6 +34,9 @@ struct __libcrunch_is_a_cache_s
 	const void *obj;
 	unsigned long long uniqtype:((8 * sizeof(void*))-1);
 	unsigned result:1;
+	unsigned short period;
+	unsigned short n_pos;
+	unsigned short n_neg;
 	/* add alloc base and uniqtype, to do inline uniqtype cache word check? */
 };
 struct __libcrunch_is_a_cache_s /* __thread */ __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE] __attribute__((weak)); /* some length */
@@ -175,8 +178,22 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 	{
 		if (__libcrunch_is_a_cache_validity & (1<<i))
 		{
-			if (__libcrunch_is_a_cache[i].obj == obj
-					&& (void*) (unsigned long long) __libcrunch_is_a_cache[i].uniqtype == uniqtype)
+			unsigned long long cache_uniqtype = __libcrunch_is_a_cache[i].uniqtype;
+			/* We test whether the difference is divisible by the period and within the bounds n_pos and n_neg */
+			signed long long diff = (char*) __libcrunch_is_a_cache[i].obj - (char*) obj;
+			if (
+				(diff == 0
+					|| (diff < 0 /* cache obj starts after obj */
+						&& __libcrunch_is_a_cache[i].period != 0
+						&& diff % __libcrunch_is_a_cache[i].period == 0
+						&& -diff / __libcrunch_is_a_cache[i].period <= __libcrunch_is_a_cache[i].n_neg)
+					|| (diff > 0
+						&& __libcrunch_is_a_cache[i].period != 0
+						&& diff % __libcrunch_is_a_cache[i].period == 0
+						&& diff / __libcrunch_is_a_cache[i].period >= __libcrunch_is_a_cache[i].n_pos)
+				)
+				&& (void*) cache_uniqtype == uniqtype
+			)
 			{
 				// hit!
 				// - make sure we're not the next victim
@@ -193,10 +210,13 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 				if (__libcrunch_is_a_cache[i].result) 
 				{
 					++__libcrunch_succeeded;
+					return 1;
 				}
 				else
 				{
-					++__libcrunch_failed;
+					// to make sure the error message and suppression handling happen,
+					// we have to call the slow-path code.
+					return __is_a_internal(obj, uniqtype); 
 				}
 				return 1; //__libcrunch_is_a_cache[i].result;
 			}

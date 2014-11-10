@@ -43,7 +43,7 @@ extern unsigned long __libcrunch_is_a_hit_cache;
 
 unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
 #ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE
-#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 4
+#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 2
 #endif
 extern const unsigned short __libcrunch_is_a_cache_size;
 extern unsigned short __libcrunch_is_a_cache_next_victim;

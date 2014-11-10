@@ -23,6 +23,7 @@
 #include "libcrunch_private.h"
 
 #define NAME_FOR_UNIQTYPE(u) ((u) ? ((u)->name ?: "(unnamed type)") : "(unknown type)")
+#define STORAGE_CONTRACT_IS_LOOSE(ins) (!(ins)->alloc_site_flag || ((ins)->alloc_site & 0x1ul))
 
 int __libcrunch_debug_level;
 _Bool __libcrunch_is_initialized;
@@ -504,13 +505,17 @@ static void clear_alloc_site_metadata(const void *alloc_start)
 	}
 }
 
-static void cache_is_a(const void *obj, const struct uniqtype *t, _Bool result)
+static void cache_is_a(const void *obj, const struct uniqtype *t, _Bool result,
+	unsigned short period, unsigned short n_pos, unsigned short n_neg)
 {
 	unsigned pos = __libcrunch_is_a_cache_next_victim;
 	__libcrunch_is_a_cache[pos] = (struct __libcrunch_is_a_cache_s) {
 		.obj = obj,
 		.uniqtype = (unsigned long long) t,
-		.result = result
+		.result = result,
+		.period = period,
+		.n_pos = n_pos,
+		.n_neg = n_neg
 	};
 	__libcrunch_is_a_cache_validity |= 1u<<pos;
 	// make sure this entry is not the next victim
@@ -566,6 +571,9 @@ int __is_a_internal(const void *obj, const void *arg)
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
 
 	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	unsigned short period = (alloc_uniqtype->pos_maxoff > 0) ? alloc_uniqtype->pos_maxoff : 0;
+	unsigned short n_pos;
+	unsigned short n_neg;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
@@ -573,7 +581,15 @@ int __is_a_internal(const void *obj, const void *arg)
 			&& alloc_uniqtype->pos_maxoff != 0 
 			&& alloc_uniqtype->neg_maxoff == 0)
 	{
+		// HACK: for now, assume that the repetition continues to the end
+		n_pos = ((alloc_size_bytes - target_offset_within_uniqtype) / alloc_uniqtype->pos_maxoff) - 1;
+		n_neg = target_offset_within_uniqtype / alloc_uniqtype->pos_maxoff;
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+	}
+	else
+	{
+		n_neg = 0;
+		n_pos = 0;
 	}
 	_Bool is_cacheable = ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site);
 	
@@ -589,7 +605,8 @@ int __is_a_internal(const void *obj, const void *arg)
 	if (__builtin_expect(success, 1))
 	{
 		/* populate cache */
-		if (is_cacheable) cache_is_a(obj, test_uniqtype, 1);
+		if (is_cacheable) cache_is_a(obj, test_uniqtype, 1,
+			period, n_pos, n_neg);
 
 		++__libcrunch_succeeded;
 		return 1;
@@ -597,24 +614,26 @@ int __is_a_internal(const void *obj, const void *arg)
 	
 	// if we got here, we might still need to apply lazy heap typing
 	if (__builtin_expect(k == HEAP
-			&& alloc_site != NULL // i.e. we haven't yet written a uniqtype ptr into the heap chunk
 			&& is_lazy_uniqtype(alloc_uniqtype)
 			&& !__currently_allocating, 0))
 	{
-		++__libcrunch_lazy_heap_type_assignment;
-		
-		// update the heap chunk's info to say that its type is our test_uniqtype
 		struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
 		assert(ins);
-		ins->alloc_site_flag = 1;
-		ins->alloc_site = (uintptr_t) test_uniqtype;
-		if (is_cacheable) cache_is_a(obj, test_uniqtype, 1);
+		if (STORAGE_CONTRACT_IS_LOOSE(ins))
+		{
+			++__libcrunch_lazy_heap_type_assignment;
+			
+			// update the heap chunk's info to say that its type is (strictly) our test_uniqtype
+			ins->alloc_site_flag = 1;
+			ins->alloc_site = (uintptr_t) test_uniqtype;
+			if (is_cacheable) cache_is_a(obj, test_uniqtype, 1, period, n_pos, n_neg);
 		
-		return 1;
+			return 1;
+		}
 	}
 	
 	// if we got here, the check failed
-	if (is_cacheable) cache_is_a(obj, test_uniqtype, 0);
+	if (is_cacheable) cache_is_a(obj, test_uniqtype, 0, period, n_pos, n_neg);
 	if (__currently_allocating || __currently_freeing)
 	{
 		++__libcrunch_failed_in_alloc;
@@ -1252,6 +1271,21 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 	{
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
+	/* Unlike other checks, we want to preserve looseness of the target block's 
+	 * type, if it's a pointer type. So set the loose flag if necessary. */
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) 
+			&& alloc_site != NULL
+			&& UNIQTYPE_IS_POINTER_TYPE(alloc_uniqtype))
+	{
+		struct insert *ins = __liballocs_insert_for_chunk_and_usable_size(
+			alloc_start, malloc_usable_size(alloc_start)
+		);
+		if (ins->alloc_site_flag)
+		{
+			assert(0 == ins->alloc_site & 0x1ul);
+			ins->alloc_site |= 0x1ul;
+		}
+	}
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
@@ -1452,6 +1486,20 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		{
 			value_target_offset_within_uniqtype %= value_alloc_uniqtype->pos_maxoff;
 		}
+		/* Preserve looseness of value. */
+		if (ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site) 
+				&& value_alloc_site != NULL
+				&& UNIQTYPE_IS_POINTER_TYPE(value_alloc_uniqtype))
+		{
+			struct insert *ins = __liballocs_insert_for_chunk_and_usable_size(
+				value_alloc_start, malloc_usable_size(value_alloc_start)
+			);
+			if (ins->alloc_site_flag)
+			{
+				assert(0 == ins->alloc_site & 0x1ul);
+				ins->alloc_site |= 0x1ul;
+			}
+		}
 
 		/* See if the top-level object matches */
 		struct match_cb_args args = {
@@ -1514,8 +1562,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	struct insert *value_object_info = lookup_object_info(value, NULL, NULL, NULL);
 	/* HACK: until we have a "loose" bit */
 	struct uniqtype *pointee = UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to);
-	// FIXME FIXME FIXME FIXME FIXME FIXME FIXME
-#define STORAGE_CONTRACT_IS_LOOSE(v) (1)
+
 	if (!pointer_is_generic(type_of_pointer_being_stored_to)
 		&& value_alloc_uniqtype
 		&& UNIQTYPE_IS_POINTER_TYPE(value_alloc_uniqtype)
@@ -1524,13 +1571,12 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		&& STORAGE_CONTRACT_IS_LOOSE(value_object_info))
 	{
 		value_object_info->alloc_site_flag = 1;
-		value_object_info->alloc_site = (uintptr_t) pointee;
+		value_object_info->alloc_site = (uintptr_t) pointee; // i.e. *not* loose!
 		debug_printf(0, "libcrunch: specialised allocation at %p from %s to %s\n", 
 			value, NAME_FOR_UNIQTYPE(value_alloc_uniqtype), NAME_FOR_UNIQTYPE(pointee));
 		++__libcrunch_lazy_heap_type_assignment;
 		return 1;
 	}
-#undef STORAGE_CONTRACT_IS_LOOSE
 
 can_hold_pointer_failed:
 	++__libcrunch_failed;
