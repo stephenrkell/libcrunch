@@ -80,9 +80,19 @@ module H = Hashtbl
        --- i.e. replace a cast expression with a reference to a temporary...
        ... and insert the definition + assertion *before* the containing instr.
    *)
+   
+let tsIsPointer testTs = match testTs with 
+   TSPtr(_, _) -> true
+ | _ -> false
+      
+let tsIsFunction ts = 
+    match ts with
+        TSFun(_, _, _, _) -> true
+      | _ -> false
+
 let tsIsFunctionPointer ts = 
     match ts with
-        TSPtr(TSFun(_, _, _, _), _) -> true
+        TSPtr(nestedTs, _) when tsIsFunction nestedTs -> true
       | _ -> false
 
 let rec indirectionLevel someTs = match someTs with
@@ -114,9 +124,21 @@ let uniqtypeCheckArgs concreteType symname enclosingFile (uniqtypeGlobals: Cil.g
   in
   (v, s)
 
+let likeATypeNames = try begin
+    Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
+end with Not_found -> []
+
+let likeAStr =  try begin
+    (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
+end with Not_found -> ""
+
+let rec findLikeA barename l = match l with 
+   [] -> None
+| x::xs -> if (userTypeNameToBareName x) = barename then Some(barename) else findLikeA barename xs
+
 let mkCheckInstrs 
   (e : exp) (enclosingFunction: fundec) (testFunVar: varinfo) (inlineAssertFun: fundec)
-  (loc : location) (checkExtraArgs : Cil.exp list) (checkArgString : string)
+  (loc : location) (checkExtraArgs : Cil.exp list) (checkArgString : string) uniqtypeGlobals currentInst
 = 
   let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) 
   in
@@ -153,6 +175,46 @@ let mkCheckInstrs
     )
   ]
   in (exprTmpVar, instrs)
+
+let mkCheckInstrsForTargetType 
+  (e : exp) (enclosingFunction: fundec) (enclosingFile: Cil.file) (concretePtdts: Cil.typsig) (inlineAssertFun: fundec)
+  (loc : location) uniqtypeGlobals currentInst
+  = begin
+      let canonicalName = barenameFromSig concretePtdts
+      in
+      let findGlobal globalName = foldGlobals enclosingFile (fun result -> fun g -> 
+        match result with 
+            Some(r) -> result 
+          | None -> begin match g with 
+                  GFun(fundec, loc) when (fundec.svar.vname = globalName) -> Some(g) 
+              | _ ->  None
+            end
+          ) None
+      in   
+      let  testFunName = begin
+          if (tsIsUndefinedType concretePtdts enclosingFile) then"__named_aU"
+          else if (tsIsFunction concretePtdts) then "__is_a_function_refiningU"
+          else match (findLikeA canonicalName likeATypeNames) with
+            None ->
+                debug_print 1 ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                "__is_aU"
+          | Some(_) -> 
+                debug_print 1 ("using __like_a! because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
+                "__like_aU"
+      end
+      in 
+      let testFunVar = match findGlobal testFunName with Some(GFun(fundec, loc)) -> fundec.svar | _ -> failwith "impossible"
+      in
+      let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concretePtdts (symnameFromSig concretePtdts) enclosingFile uniqtypeGlobals
+      in 
+      (* do we really need this CastE? *)
+      let ourCheckArgs = [if testFunName = "__named_aU"
+        then Cil.mkString(uniqtypeS)
+        else Cil.mkAddrOf(Var(uniqtypeV), NoOffset)
+      ]
+      in
+      mkCheckInstrs e enclosingFunction testFunVar inlineAssertFun (instrLoc !currentInst) ourCheckArgs uniqtypeS uniqtypeGlobals currentInst
+ end
 
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
@@ -217,24 +279,28 @@ class trumPtrExprVisitor = fun enclosingFile ->
      * Actually we can just do what we want after both have happened.
      * Note that we *can* ChangeTo multiple instructions.
      *)
+    let getFunctionPointerTypeSig fexp : Cil.typsig option = 
+       match fexp with 
+         Lval(Var(v), NoOffset) -> None (* not a function pointer *)
+     |   _ -> Some(typeSig (typeOf fexp))
+    in
+    let callIsIndirect fexp = match getFunctionPointerTypeSig fexp with
+        Some(_) -> true
+      | None -> false
+    in
     let lvalueIsThroughVoidpp lv = match lv with 
         (Mem(e), _) -> (ultimatePointeeTs (getConcreteType(Cil.typeSig(Cil.typeOf e))) = Cil.typeSig(voidType))
       | _ -> false
     in
-    let (maybeWrittenLv, doingWrite, writtenType) = match i with 
-      Set(lv, e, l) -> (Some(lv), true, Cil.typeOf (Lval(lv)))
-    | Call(Some lv, f, _, _) -> (Some(lv), true, Cil.typeOf (Lval(lv)))
-    | _ -> (None, false, TVoid([]))
+    let (maybeWrittenLv, doingWrite, writtenType, doingIndirectCall) = match i with 
+      Set(lv, e, l) -> (Some(lv), true, Cil.typeOf (Lval(lv)), false)
+    | Call(Some lv, f, _, _) -> (Some(lv), true, Cil.typeOf (Lval(lv)), callIsIndirect f)
+    | _ -> (None, false, TVoid([]), false)
     in
     let precondCheckInstrs = 
       if sloppyFps then
         match i with 
           Call(_, funExpr, args, location) -> 
-            let getFunctionPointerTypeSig fexp : Cil.typsig option = 
-               match fexp with 
-                 Lval(Var(v), NoOffset) -> None (* not a function pointer *)
-             |   _ -> Some(typeSig (typeOf fexp))
-            in
             let maybeFpts = getFunctionPointerTypeSig funExpr
             in
             begin
@@ -289,7 +355,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
              | None -> [] (* match maybeFpts *)
             end (* end match maybeFpts *)
         | _ -> []
-        else []
+        else (* not sloppyFps *) []
     in
     let maybeWrittenValueTempVar = 
       if doingWrite 
@@ -320,7 +386,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
       (* FIXME: for checkArgs, also force a cast if the typesig of the function ptr is a ptr. 
        * Can we do this by pretending that a pointer-returning function returns void*? 
        * NO, do it with canHoldPointerInlineFun! *)
-      if (not strictVoidpps) && doingWrite then
+      (if (not strictVoidpps) && doingWrite then
         let writtenValueTempVar = match maybeWrittenValueTempVar with Some(v) -> v
         | None -> failwith "logic error"
         in
@@ -361,9 +427,9 @@ class trumPtrExprVisitor = fun enclosingFile ->
             )
           ]
         end
-      else []
+      else [])
       @ 
-      if sloppyFps && doingWrite then
+      (if sloppyFps && doingIndirectCall && doingWrite then
         let lv = match maybeWrittenLv with
            Some(anLv) -> anLv
          | None -> failwith "logic error"
@@ -390,15 +456,133 @@ class trumPtrExprVisitor = fun enclosingFile ->
           in 
           let ourCheckArgs = [Cil.mkAddrOf(Var(uniqtypeV), NoOffset)]
           in
-          let resultTmp, instrs = mkCheckInstrs (Lval(lv)) enclosingFunction isAUInlineFun.svar inlineAssertFun (instrLoc !currentInst) ourCheckArgs uniqtypeS
+          let resultTmp, instrs = mkCheckInstrs (Lval(lv)) enclosingFunction isAUInlineFun.svar inlineAssertFun (instrLoc !currentInst) ourCheckArgs uniqtypeS uniqtypeGlobals currentInst
           in 
           instrs
         end
-      else [] (* no need for sloppy-fp pointer-write check *)
+      else []) (* no need for sloppy-fp pointer-write check *)
+      @
+      (
+      (* debug_print 1 ("hello from va_arg check instrs clause\n"); *)
+      (* Pretty.fprint stderr 80 (Cil.printInstr Cil.plainCilPrinter () i); *)
+      match i with 
+          (* CIL rewrites __builtin_va_arg into a three-argument form which is not documented. 
+             GAH. *)
+        | Call(_, Lval(Var(v), NoOffset), [arg1; arg2; arg3], l) ->
+            (* debug_print 1 ("hello from va_arg call general case, vname " ^ v.vname ^ "\n"); *)
+            flush Pervasives.stderr;
+            let getsVaArg = (v.vname = "__builtin_va_arg" || v.vname = "va_arg")
+            in
+            let writtenVar = 
+                (* is the arg3 an AddrOf a pointer? *)
+                (* Pretty.fprint stderr 80 (Cil.printExp Cil.plainCilPrinter () arg3); *)
+                let exprIsPointer e = match Cil.typeOf(Lval(e)) with TPtr(_, _) -> true | _ -> false
+                in
+                match arg3 with 
+                  AddrOf(e) when exprIsPointer e -> Some e
+                | CastE(TPtr(TVoid(_), _), AddrOf(e)) when exprIsPointer e -> Some e
+                | _ -> None
+            in
+            (* debug_print 1 ("hello from va_arg call general case, vname " ^ v.vname ^ ", " 
+                ^ ", getsVaArg is " ^ (if getsVaArg then "true" else "false") ^ ", " 
+                ^ ", writtenVar is " ^ (match writtenVar with Some(_)-> "nonempty" | _ -> "empty") ^ "\n"); *)
+            flush Pervasives.stderr;
+            if getsVaArg && writtenVar != None then 
+            ( (* debug_print 1 "hello from va_arg call special case\n"; *)
+            let writtenExp = match writtenVar with Some(e) -> e | None -> failwith "impossible"
+            in
+            (* let tempV = Cil.makeTempVar enclosingFunction (Cil.typeOf (Lval(writtenExp)))
+            in (* Just make an instr which casts the lval and assigns  to a dummy var; 
+                  can ignore the dummy var's value after that. 
+                  Problem is that we ignore redundant casts when inserting checks. 
+                  So cast through void*.
+                  *)
+                debug_print 1 "hello from va_arg case\n";
+                [ Set( (Var(tempV), NoOffset), 
+                         CastE( Cil.typeOf(Lval(writtenExp)), 
+                             CastE( TPtr(TVoid([]), []), Lval(writtenExp) )), l) ]
+             ) else []
+             *) 
+            let concreteType = Cil.typeSig (match (Cil.typeOf (Lval(writtenExp))) with 
+                TPtr(t, _) -> t 
+              | _ -> failwith "impossible"
+            )
+            in
+            let resultTmp, instrs
+             = mkCheckInstrsForTargetType (Lval(writtenExp)) enclosingFunction enclosingFile 
+                 concreteType inlineAssertFun (instrLoc !currentInst) 
+                 uniqtypeGlobals currentInst
+            in 
+            instrs
+            ) else []
+        | _ -> []
+        )
     in
-    let idFunc (is : instr list) = is
+    let newList = precondCheckInstrs @ actionInstrs @ postcondCheckInstrs
     in
-    ChangeDoChildrenPost (precondCheckInstrs @ actionInstrs @ postcondCheckInstrs, fun is -> is)
+    (* We want to recursively visit all instructions except the current action instruction. *)
+    (* ChangeTo (
+      (List.flatten (List.map (fun someI -> visitCilInstr (self :> Cil.cilVisitor) someI) precondCheckInstrs))
+    @ actionInstrs
+    @ (List.flatten (List.map (fun someI -> visitCilInstr (self :> Cil.cilVisitor) someI) postcondCheckInstrs))
+    )
+    *)
+    let instrListLen = List.length (actionInstrs @ postcondCheckInstrs)
+    in
+    ChangeDoChildrenPost (newList, fun is -> is)
+    (*
+            debug_print 1 ("hello from resolution function with " ^ (string_of_int (List.length is)) 
+                ^ " instructions  (was " ^ (string_of_int instrListLen) ^ ")\n");
+            flush stderr;
+            if List.length is = instrListLen then is 
+            else
+            (*  This breaks the case of va_arg checking.
+                What we give the cast instrumentation is the following.
+ 
+                actionInstrs                               tmp = __builtin_va_arg(va, int * );
+                postcondCheckInstr -- use cast result      __cil_tmp14 = (int * )((void * )tmp);
+                
+                What we get back is the following.
+                
+                queuedInstr -- cast result       __cil_tmp17 = (int * )((void * )tmp);
+                queuedInstr -- cast check        __cil_tmp18 = (int )__is_aU(__cil_tmp17, & __uniqtype__int);
+                queuedInstr -- cast assertion     __inline_assert(__cil_tmp18, "__is_aU(__cil_tmp17, int)", "fail-va_arg.c", 17U,
+                                                       "my_interp");
+                                              
+                actionInstrs                               tmp = __builtin_va_arg(va, int * );
+                postcondCheckInstr -- use cast result      __cil_tmp14 = (int * )__cil_tmp17;
+                
+                i.e. self#queueInstr has enqueued its stuff before everything else.
+                It should have gone *after* the action instruction,
+                but before the postcondCheckInstr.
+                
+                The main problem is that "tmp" is used before it's written to.
+                Why does queueInstr break this?
+                It seems to be a broken interaction between ChangeDoChildrenPost and queueInstr
+                
+                How can we fix this?
+                Notice that the actionInstr is unmodified and is a known offset from the end of the list.
+                Splice the lists.
+                HACK HACK HACK HACK HACK.
+            *)
+            
+            let rec buildTail l accumHead = 
+                match l with
+                    [] -> failwith "bizarre"
+                 |  someI :: rest -> if List.length l = instrListLen
+                                     then (accumHead, l)
+                                     else buildTail rest (accumHead @ [someI])
+            in
+            let myHead, myTail = buildTail is []
+            in 
+            (* tail is our action and postcondCheckInstr. Put them first! *)
+            debug_print 1 "printing first instruction of tail\n";
+            Pretty.fprint stderr 80 (Cil.printInstr Cil.plainCilPrinter () (List.hd myTail));
+            debug_print 1 "printing first instruction of actionInstrs\n";
+            Pretty.fprint stderr 80 (Cil.printInstr Cil.plainCilPrinter () (List.hd actionInstrs));
+            myTail @ myHead
+        ) 
+        *)   
   end
 
   method vglob (g: global) : global list visitAction =
@@ -418,7 +602,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
           | Asm(attrs, instrs, locs, u, v, l) -> l
       end
     in
-    match e with 
+    match e with
       (* Check casts, unless 
          - they only affect qualifiers we don't care about
          - they are casts to void* etc. _from another pointer type_? NO, we allow these
@@ -426,10 +610,6 @@ class trumPtrExprVisitor = fun enclosingFile ->
              which is a memory-safety issue
        *)
       CastE(t, subex) -> 
-          let tsIsPointer testTs = match testTs with 
-              TSPtr(_, _) -> true
-            | _ -> false
-          in
           let subexTs = getConcreteType(Cil.typeSig(Cil.typeOf(subex)))
           in 
           let targetTs = getConcreteType(Cil.typeSig(t))
@@ -484,7 +664,8 @@ class trumPtrExprVisitor = fun enclosingFile ->
               end
           else begin
           match targetTs with 
-            TSPtr(TSBase(TVoid([])), []) (* when tsIsPointer subexTs *) -> DoChildren
+            TSPtr(TSFun(_, _, _, _), _) when sloppyFps -> failwith "impossible sloppyFps failure"   
+          | TSPtr(TSBase(TVoid([])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(TSBase(TInt(IChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(TSBase(TInt(ISChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
           | TSPtr(TSBase(TInt(IUChar, [])), []) (* when tsIsPointer subexTs *) -> DoChildren
@@ -494,17 +675,8 @@ class trumPtrExprVisitor = fun enclosingFile ->
           | TSPtr(ptdts, attrs) (* when not isStaticallyNullPtr subex *) -> begin
               debug_print 1 ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
               (* enqueue the tmp var decl, assignment and assertion *)
-              let exprTmpVar = Cil.makeTempVar enclosingFunction (typeOf e) in
-              let checkTmpVar = Cil.makeTempVar enclosingFunction intType in 
-              let concreteType = getConcreteType ptdts in
-              let symname = symnameFromSig concreteType in
+              let concretePtdts = (getConcreteType ptdts)  in
               (* FIXME: use List API! *)
-              let rec findLikeA barename l = match l with 
-                   [] -> None
-              | x::xs -> if (userTypeNameToBareName x) = barename then Some(barename) else findLikeA barename xs
-              in
-              let concretePtdts = (getConcreteType ptdts) 
-              in 
                     (* If the target type is a singly indirect function pointer, 
                        we apply a more liberal test than __is_a, 
                        namely __is_a_function_refining.
@@ -535,32 +707,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                              
                              We need to take the super-strict approach as usual here.
                      *)
-
-              let canonicalName = barenameFromSig concretePtdts
-              in
-              let testFunVar, testFunName = begin
-                  if (tsIsUndefinedType concretePtdts enclosingFile) then
-                      (namedAUInlineFun.svar, "__named_aU")
-                  else if (tsIsFunctionPointer targetTs) then
-                      (isAFunctionRefiningUInlineFun.svar, "__is_a_function_refiningU")
-                  else match (findLikeA canonicalName likeATypeNames) with
-                    None ->
-                        debug_print 1 ("not using __like_a because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is not in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
-                        (isAUInlineFun.svar, "__is_aU")
-                  | Some(_) -> 
-                        debug_print 1 ("using __like_a! because " ^ (Pretty.sprint 80 (d_typsig () (concretePtdts))) ^ "(" ^ canonicalName ^ ") is in \"" ^ likeAStr ^ "\"\n"); flush Pervasives.stderr;
-                        (likeAUInlineFun.svar, "__like_aU")
-              end
-              in
-              let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concreteType symname enclosingFile uniqtypeGlobals
-              in 
-              (* do we really need this CastE? *)
-              let ourCheckArgs = [if testFunVar == namedAUInlineFun.svar 
-                then Cil.mkString(uniqtypeS)
-                else Cil.mkAddrOf(Var(uniqtypeV), NoOffset)
-              ]
-              in
-              let resultTmp, instrs = mkCheckInstrs e enclosingFunction testFunVar inlineAssertFun (instrLoc !currentInst) ourCheckArgs uniqtypeS 
+              let resultTmp, instrs = mkCheckInstrsForTargetType e enclosingFunction enclosingFile concretePtdts inlineAssertFun (instrLoc !currentInst) uniqtypeGlobals currentInst
               in 
               self#queueInstr instrs; 
               (* change to a reference to the decl'd tmp var *)
