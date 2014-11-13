@@ -4,9 +4,9 @@ CFLAGS += -std=gnu99 -g -fPIC -I../include
 # experiment to see what's faster -- plain old -O4 -flto seems marginally faster than with -Os
 #CFLAGS += -O4 -flto -DNDEBUG
 #CFLAGS += -Os -flto -DNDEBUG
-CFLAGS += -O3 -flto -DNDEBUG
+#CFLAGS += -O3 -flto #-DNDEBUG
 FINAL_LDFLAGS += -O4 -flto -Bsymbolic -Wl,-O2
-#CFLAGS += -O0 
+CFLAGS += -O0 
 #FINAL_LDFLAGS += -Bsymbolic
 
 CXXFLAGS := $(filter-out -std=%,$(CFLAGS)) -std=c++11

@@ -578,7 +578,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
-			&& alloc_uniqtype->pos_maxoff != 0 
+			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK test for -1 */
 			&& alloc_uniqtype->neg_maxoff == 0)
 	{
 		// HACK: for now, assume that the repetition continues to the end
@@ -1193,6 +1193,7 @@ static _Bool pointer_has_degree(struct uniqtype *t, int d)
 	{
 		if (!UNIQTYPE_IS_POINTER_TYPE(t)) return 0;
 		t = UNIQTYPE_POINTEE_TYPE(t);
+		assert(t);
 		--d;
 	}
 	return 1;
