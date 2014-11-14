@@ -1,13 +1,53 @@
 To do:
 
-proper unions checking: trumunion
+proper union tracking (in liballocs): monunion
+ -- union shadow needs on-demand design: use a per-mapping spine
+ -- just a piecewise-allocated (and effectively unbounded) deep index?
+ -- assume e.g. one byte per union, one union per word at the first level
+ + statically forbid (perhaps just warn) address-taken members of non-simultaneous unions
+
+(in liballocs) separate -frametypes.so from -types.so, to cut link time
+ -- helpful message when stack query arrives and no -frametypes.so loaded
+
+(in liballocs) helpful messages when -types.so et al. can't be found (for user objects only)
+
+(in liballocs) -frametypes.so: merge same-offset frame members (should be type-identical)
+
+(in liballocs) -frametypes.so: omit non-address-taken locals (i.e. spills)? 
+ -- requires source-level analysis (do in dumpallocs)
+
+proper union checking (trumunion): checks *reads* from non-simultaneous unions
+ + deal with "short" union allocations (the gcc tree_node case) by checking these *writes*?
+
+proper varargs tracking (in liballocs): monva
+ -- shadow stack
 
 proper varargs push/pop checking: trumva
 
-void** handling: fix unsoundness by actually checking that a specialised 
-object is so-far unused (steal a header bit from liballocs)
+support variadic function pointer casts
+ -- requires trap values for functions
 
-signed/unsigned sloppiness
+generalise void** handling to structures
+
+caching done right: figure out what works best
+
+spatial checks: local bounds transformation for all indexed pointer locals
+ -- means pulling out all pointer arith and indexing into a toplevel expression (tmpvar = expr;)
+ -- pull in bounds via cache, noting that cache entry need only cover, not exact-match, the ptr
+ -- actual checking when we produce the new pointer
+ -- trap values for arrays -- nontrivial?
+
+check for well-linkedness (probably in allocscc)
+
+tighter handling of char* 
+ -- rewrite arithmetic-only use of char* to use a size-1 structure)
+ -- cast-to-char* always okay
+ -- read through char* always okay
+ -- write-through-char* only valid for untyped memory
+
+memcpy handled properly
+
+in-place realloc to different type should yield warning?
 
 C++: file/chase the likely-bug in user-defined conversions
 
@@ -18,3 +58,15 @@ C++: namespace-aware typestrs
 Fortran: define wrappers for checking TRANSFERs
 
 C++: solve problems relating to struct/enum/union tag aliasing
+
+OCaml front-end + DWARF-scraping
+
+temporal checking: use barely-conservative GC + free()-as-hint
+ -- force initialization of pointers (in heap alloc, in locals)
+ -- reduce stack address re-use frequency using mapping trick + instrumentation
+ -- fast mprotect() kernel hack? would allow mprotecting non-currect mappings
+ -- sloppier force GC sweep on crash or cast failure (to find any bad heap-to-stack pointer responsible)
+ -- or check pointer uses that point to the stack? seems expensive
+ -- statically detect [most] up-the-stack pointer escapes?
+
+temporal checking: what to do about custom allocators?
