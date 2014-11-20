@@ -1279,7 +1279,7 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 			&& UNIQTYPE_IS_POINTER_TYPE(alloc_uniqtype))
 	{
 		struct insert *ins = __liballocs_insert_for_chunk_and_usable_size(
-			alloc_start, malloc_usable_size(alloc_start)
+			(void*) alloc_start, malloc_usable_size((void*) alloc_start)
 		);
 		if (ins->alloc_site_flag)
 		{
@@ -1493,7 +1493,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 				&& UNIQTYPE_IS_POINTER_TYPE(value_alloc_uniqtype))
 		{
 			struct insert *ins = __liballocs_insert_for_chunk_and_usable_size(
-				value_alloc_start, malloc_usable_size(value_alloc_start)
+				(void*) value_alloc_start, malloc_usable_size((void*) value_alloc_start)
 			);
 			if (ins->alloc_site_flag)
 			{
