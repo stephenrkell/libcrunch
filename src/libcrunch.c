@@ -23,7 +23,17 @@
 #include "libcrunch_private.h"
 
 #define NAME_FOR_UNIQTYPE(u) ((u) ? ((u)->name ?: "(unnamed type)") : "(unknown type)")
-#define STORAGE_CONTRACT_IS_LOOSE(ins) (!(ins)->alloc_site_flag || ((ins)->alloc_site & 0x1ul))
+
+/* Heap storage sized using a "loose" data type, like void*,
+ * is marked as loose, and becomes non-loose when a cast to a non-loose type.
+ * Annoyingly, liballocs eagerly replaces alloc site info with uniqtype
+ * info. So making queries on an object will erase its looseness.
+ * FIXME: separate this out, so that non-libcrunch clients don't have to
+ * explicitly preserve looseness. */
+#define STORAGE_CONTRACT_IS_LOOSE(ins, site) \
+(((site) != NULL) /* i.e. liballocs only just erased the alloc site */ || \
+!(ins)->alloc_site_flag /* or it still hasn't */ || \
+((ins)->alloc_site & 0x1ul) /* or it's marked as loose explicitly */)
 
 int __libcrunch_debug_level;
 _Bool __libcrunch_is_initialized;
@@ -619,7 +629,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	{
 		struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
 		assert(ins);
-		if (STORAGE_CONTRACT_IS_LOOSE(ins))
+		if (STORAGE_CONTRACT_IS_LOOSE(ins, alloc_site))
 		{
 			++__libcrunch_lazy_heap_type_assignment;
 			
@@ -1569,7 +1579,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		&& UNIQTYPE_IS_POINTER_TYPE(value_alloc_uniqtype)
 		&& pointer_is_generic(value_alloc_uniqtype)
 		&& value_object_info
-		&& STORAGE_CONTRACT_IS_LOOSE(value_object_info))
+		&& STORAGE_CONTRACT_IS_LOOSE(value_object_info, value_alloc_site))
 	{
 		value_object_info->alloc_site_flag = 1;
 		value_object_info->alloc_site = (uintptr_t) pointee; // i.e. *not* loose!
