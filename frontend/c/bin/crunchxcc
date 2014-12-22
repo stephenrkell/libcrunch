@@ -1,0 +1,52 @@
+#!/usr/bin/env python
+# ... or for debugging, use something like
+#!/home/stephen/bin/gdbrun python
+
+# Compiler wrapper for libcrunch.
+import os, sys, re, subprocess, tempfile
+
+# HACK
+sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../../../../liballocs.hg/tools/lang/c/lib"))
+from allocscc import AllocsCC
+
+class CrunchXCC(CrunchCC):
+        
+    def getCillyArgs(self, sourceFiles):
+        # PROBLEM: we only want to -include if we're compiling a C file. 
+        # Note that normally cilly will figure out when we're compiling
+        # a .S file, say, and only pass options that are relevant. But
+        # it would be asking too much in this case. 
+        
+        allSourceFilesAreC = True
+        for sourceFile in sourceFiles:
+            if sourceFile.lang != "c" and not sourceFile.endswith(".c"):
+                allSourceFilesAreC = False
+        
+        includeArgs = []
+        if len(sourceFiles) > 0 and allSourceFilesAreC:
+            # We can only do trumptr, and anything else that involves -include, 
+            # if we're compiling only C files.
+            includeArgs = ["-include", \
+                os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
+            "--dosimpleMem" \
+            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound" \
+            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr" \
+                ]
+        else:
+            self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
+        
+        # do dumpallocs et al *and* trumptr
+        return AllocsCC.getCillyArgs(self, sourceFiles) + \
+            ["--keepunused"] \
+            + includeArgs + \
+            ["-Wno-unused-variable", "-Wno-unused-label"]
+            # We need the above -Wno-unused-... because CIL creates
+            # some unused stuff (unavoidably, I believe) which will
+            # make compilation done with -Werror barf if we don't
+            # silence them.
+
+if __name__ == '__main__':
+    wrapper = CrunchXCC()
+    ret = wrapper.main()
+    exit(ret)
+

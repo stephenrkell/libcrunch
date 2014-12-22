@@ -4,7 +4,7 @@ LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
 
 OCAMLFIND ?= ocamlfind
 CILLY ?= cilly
-CIL_TOOLS := trumptr
+CIL_TOOLS := trumptr crunchbound
 OCAMLFLAGS +=  -package findlib -package cil
 OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/lib #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
 

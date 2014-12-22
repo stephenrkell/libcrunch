@@ -13,8 +13,12 @@ LIBALLOCS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../liballocs.hg)
 export UNIQTYPES_BASE
 export ALLOCSITES_BASE
 
-export CC := $(realpath $(dir $(THIS_MAKEFILE))/../frontend/c/bin/crunchcc)
-export CXX := $(realpath $(dir $(THIS_MAKEFILE))/../frontend/c++/bin/crunchc++)
+export LIBCRUNCH_BASE := $(realpath $(dir $(THIS_MAKEFILE))/..)
+
+CRUNCHCC := $(LIBCRUNCH_BASE)/frontend/c/bin/crunchcc
+CRUNCHCXX := $(LIBCRUNCH_BASE)/frontend/c++/bin/crunchc++
+export CC := $(CRUNCHCC)
+export CXX := $(CRUNCHCXX)
 export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include -I$(LIBALLOCS)/include
 export LDFLAGS += -L$(LIBALLOCS)/lib
 
@@ -98,6 +102,8 @@ checkrun-random:
 	$(MAKE) cleanrun-random >/dev/null 2>&1
 checkrun-pointer-degree:
 	$(MAKE) cleanrun-pointer-degree >/dev/null 2>&1
+checkrun-bounds-simple:
+	$(MAKE) cleanrun-bounds-simple >/dev/null 2>&1
 
 # Some cases are special and have their own matching criteria
 checkrun-lazy-typing:
