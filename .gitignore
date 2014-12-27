@@ -1,0 +1,13 @@
+*.a
+*.allocstubs.c
+*.cil.c
+*.cil.s
+*.cmi
+*.cmxs
+*.d
+*.i
+*.i.allocs
+*.o
+*.o.fixuplog
+*.so
+*.swp
