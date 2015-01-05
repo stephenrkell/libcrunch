@@ -145,7 +145,24 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
 
 */
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
+#ifdef LIBCRUNCH_TRACE_WIDEN_INT_TO_POINTER
+void warnx(const char *fmt, ...);
+static void * (__attribute__((noinline)) get_pc)(void);
+static void * (__attribute__((noinline)) get_pc)(void)
+{
+	return __builtin_return_address(0);
+}
+#endif
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val, unsigned long from_size);
+extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val, unsigned long from_size)
+{
+#ifdef LIBCRUNCH_TRACE_WIDEN_INT_TO_POINTER
+	/* To get a return address, use a noinline nested function. */
+	if (from_size < sizeof (void*)) warnx("Unsafe integer-to-pointer cast of value %llx %at %p\n", val, get_pc());
+#endif
+}
+
 extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype)
 {
 	if (!obj) 
@@ -174,7 +191,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 	// now we're really started 
 	__libcrunch_begun++; 
 
-	for (unsigned i = 0; i < __libcrunch_is_a_cache_size; ++i)
+	unsigned i;
+	for (i = 0; i < __libcrunch_is_a_cache_size; ++i)
 	{
 		if (__libcrunch_is_a_cache_validity & (1<<i))
 		{

@@ -226,6 +226,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                            fun isAFunctionRefiningUInlineFun ->
                            fun isAPointerOfDegreeInlineFun ->
                            fun canHoldPointerInlineFun ->
+                           fun traceWidenIntToPointerInlineFun -> 
                            fun inlineAssertFun -> 
                                object(self)
   inherit nopCilVisitor
@@ -614,7 +615,21 @@ class trumPtrExprVisitor = fun enclosingFile ->
           in 
           let targetTs = getConcreteType(Cil.typeSig(t))
           in
-          if targetTs = subexTs then DoChildren else 
+          if targetTs = subexTs then DoChildren else begin
+          (
+            if (tsIsPointer targetTs) && (not (tsIsPointer subexTs)) 
+            then self#queueInstr [
+                Call( None, (* return value dest *)
+                     (Lval(Var(traceWidenIntToPointerInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
+                        [ 
+                            CastE( (TInt(IULongLong, [])), subex);
+                            sizeOf (typeOf subex)
+                        ],
+                        instrLoc !currentInst
+                  )
+                ]
+            else ()
+          );
           (* from any pointer (or int) to any function pointer is okay IFF we're being sloppy. 
            * We check on use if so. But not by default: there is a significant performance penalty
            * for check-on-use in some codebases (e.g. gcc). *)
@@ -662,7 +677,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 (* change to a reference to the decl'd tmp var *)
                 ChangeTo ( CastE(t, subex) )
               end
-          else begin
+          else (* not multiply-indirected void *) begin
           match targetTs with 
             TSPtr(TSFun(_, _, _, _), _) when sloppyFps -> failwith "impossible sloppyFps failure"   
           | TSPtr(TSBase(TVoid([])), []) (* when tsIsPointer subexTs *) -> DoChildren
@@ -714,6 +729,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
               ChangeTo ( CastE(t, Lval(Var(resultTmp), NoOffset)) )
             end (* end TSPtr other cases *)
           | _ -> DoChildren
+        end (* end target-ptr case *)
         end  (* end CastE case *)
     | _ -> DoChildren
 end (* end match e *)
@@ -785,6 +801,7 @@ class trumPtrFunVisitor = fun fl -> object
   val mutable isAFunctionRefiningUInlineFun = emptyFunction "__is_a_function_refiningU"
   val mutable isAPointerOfDegreeInlineFun = emptyFunction "__is_a_pointer_of_degree"
   val mutable canHoldPointerInlineFun = emptyFunction "__can_hold_pointer"
+  val mutable traceWidenIntToPointerInlineFun = emptyFunction "__libcrunch_trace_widen_int_to_pointer"
   
 
   initializer
@@ -856,7 +873,12 @@ class trumPtrFunVisitor = fun fl -> object
                                  ], 
                             false, [])) 
     ;
-   
+      traceWidenIntToPointerInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile
+                            fl (* IsAPointerOfDegreeInlineFun *) "__libcrunch_trace_widen_int_to_pointer" (TFun(intType, 
+                            Some [ ("val", (TInt(IULongLong, [])), []) ], 
+                            false, [])) 
+    ;
+  
     fl.globals <- newGlobalsList fl.globals [
          GVarDecl(libcrunchIsInitialized, {line = -1; file = "BLAH FIXME"; byte = 0});
          GVarDecl(libcrunchBegun, {line = -1; file = "BLAH FIXME"; byte = 0});
@@ -885,7 +907,7 @@ class trumPtrFunVisitor = fun fl -> object
       if startswith f.svar.vname "__liballocs_" then
           SkipChildren
       else
-          let tpExprVisitor = new trumPtrExprVisitor fl f checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun isAPointerOfDegreeInlineFun canHoldPointerInlineFun inlineAssertFun
+          let tpExprVisitor = new trumPtrExprVisitor fl f checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun isAPointerOfDegreeInlineFun canHoldPointerInlineFun traceWidenIntToPointerInlineFun inlineAssertFun
           in
           ChangeTo(visitCilFunction tpExprVisitor f)
 end
