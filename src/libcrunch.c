@@ -21,6 +21,7 @@
 #endif
 #include "libcrunch.h"
 #include "libcrunch_private.h"
+#include "libcrunch_cil_inlines.h"
 
 #define NAME_FOR_UNIQTYPE(u) ((u) ? ((u)->name ?: "(unnamed type)") : "(unknown type)")
 
@@ -1610,4 +1611,12 @@ can_hold_pointer_failed:
 		);
 	return 1; // fail, but program continues
 	
+}
+
+/* Provide a non-inlined version of __is_aU(). This means the Clang sanitiser
+ * doesn't have to recreate the entire function (including caching) in
+ * hand-written LLVM IR. */
+int __is_aU_not_inlined(const void *obj, const void *uniqtype)
+{
+	__is_aU(obj, uniqtype);
 }
