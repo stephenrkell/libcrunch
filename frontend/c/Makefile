@@ -8,7 +8,7 @@ CIL_TOOLS := trumptr
 OCAMLFLAGS +=  -package findlib -package cil
 OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/lib #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
 
-default: src lib cil sanity-tests
+default: src lib cil
 
 .PHONY: cil
 cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs)
