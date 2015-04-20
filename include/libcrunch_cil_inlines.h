@@ -78,7 +78,7 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d);
 int __can_hold_pointer_internal(const void *obj, const void *value);
 
 /* Bounds checking */
-int __fetch_bounds_internal(const void *ptr, const struct uniqtype *u, void /*__libcrunch_bounds_t */ *out);
+__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, struct uniqtype *u);
 // NOTE that __check_derive_ptr is entirely inline, in terms of __fetch_bounds
 
 /* Utilities */
@@ -111,12 +111,11 @@ extern unsigned short __libcrunch_is_a_cache_next_victim;
 
 struct __libcrunch_is_a_cache_s
 {
-	const void *obj;
+	const void *obj_base;
+	const void *obj_limit;
 	unsigned long long uniqtype:((8 * sizeof(void*))-1);
 	unsigned result:1;
 	unsigned short period;
-	unsigned short n_pos;
-	unsigned short n_neg;
 	/* add alloc base and uniqtype, to do inline uniqtype cache word check? */
 };
 extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
@@ -254,21 +253,15 @@ extern inline struct __libcrunch_is_a_cache_s *(__attribute__((always_inline,gnu
 		if (__libcrunch_is_a_cache_validity & (1<<i))
 		{
 			unsigned long long cache_uniqtype = __libcrunch_is_a_cache[i].uniqtype;
-			/* We test whether the difference is divisible by the period and within the bounds n_pos and n_neg */
-			signed long long diff = (char*) __libcrunch_is_a_cache[i].obj - (char*) obj;
-			if (
-				(diff == 0
-					|| (diff < 0 /* cache obj starts after obj */
-						&& __libcrunch_is_a_cache[i].period != 0
-						&& diff % __libcrunch_is_a_cache[i].period == 0
-						&& -diff / __libcrunch_is_a_cache[i].period <= __libcrunch_is_a_cache[i].n_neg)
-					|| (diff > 0
-						&& __libcrunch_is_a_cache[i].period != 0
-						&& diff % __libcrunch_is_a_cache[i].period == 0
-						&& diff / __libcrunch_is_a_cache[i].period >= __libcrunch_is_a_cache[i].n_pos)
-				)
-				&& (void*) cache_uniqtype == t
-			)
+			/* We test whether the difference is divisible by the period and within the bounds */
+			signed long long diff = (char*) obj - (char*) __libcrunch_is_a_cache[i].obj_base;
+			if ((void*) cache_uniqtype == t
+					&& (char*) obj >= (char*)__libcrunch_is_a_cache[i].obj_base
+					&& (char*) obj < (char*)__libcrunch_is_a_cache[i].obj_limit
+					&& 
+					((diff == 0)
+						|| (__libcrunch_is_a_cache[i].period != 0
+							&& diff % __libcrunch_is_a_cache[i].period == 0)))
 			{
 				// hit -- make sure we're not the next victim
 				if (__builtin_expect(__libcrunch_is_a_cache_next_victim == i, 0))
@@ -496,14 +489,14 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)
 	int ret = __can_hold_pointer_internal(target, value);
 	return ret;
 }
-extern inline const void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)(const void *ptr, unsigned short tag);
-extern inline const void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)(const void *ptr, unsigned short tag)
+extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)(const void *ptr, unsigned short tag);
+extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)(const void *ptr, unsigned short tag)
 {
 	/* use XOR to allow kernel-mode pointers too (even though we generally don't support these) */
-	return (const void *)(((unsigned long long) ptr) ^ (((unsigned long long) tag) << LIBCRUNCH_TRAP_TAG_SHIFT));
+	return (void *)(((unsigned long long) ptr) ^ (((unsigned long long) tag) << LIBCRUNCH_TRAP_TAG_SHIFT));
 }
-extern inline const void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag);
-extern inline const void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag)
+extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag);
+extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag)
 {
 	/* XOR is handy like this */
 	return __libcrunch_trap(trapptr, tag);
@@ -526,8 +519,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_
 	return in->base == (void*) -1;
 }
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, struct uniqtype *t, __libcrunch_bounds_t *out);
-extern inline int (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, struct uniqtype *t, __libcrunch_bounds_t *out)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, struct uniqtype *t);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, struct uniqtype *t)
 {
 	/* We understand trap ptrs */
 	const void *testptr;
@@ -544,16 +537,14 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(con
 		 * NO, we handle that in caller. */
 		if (__builtin_expect(!hit->result, 0))
 		{
-			loop: goto loop; /* internal error! this shouldn't happen! etc. */
+			// loop: goto loop; /* internal error! this shouldn't happen! etc. */
+			__asm__ volatile ("ud2");
 		}
-		/* Does "obj" include "derivedfrom"? NOTE that n_pos and n_neg are
-		 * inclusive, so the limit is one-past. */
-		out->base = (char*) hit->obj - (hit->period * hit->n_neg);
-		out->limit = (char*) hit->obj + (hit->period * (hit->n_pos + 1));
-		return 1;
+		/* Does "obj" include "derivedfrom"? */
+		return (__libcrunch_bounds_t) { (void*) hit->obj_base, (void*) hit->obj_limit };
 	}
 	/* Else if libcrunch is linked in, we can delegate to it. */
-	return __fetch_bounds_internal(ptr, t, out);
+	return __fetch_bounds_internal(ptr, t);
 }
 extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t);
 extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t)
@@ -585,15 +576,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	}
 	else
 	{
-		int success = __fetch_bounds(derivedfrom, t, &bounds);
-		if (!success)
-		{
-			/* If they're still invalid, it's because libcrunch is not linked in 
-			 * or because we don't have metadata for that allocation. If the latter,
-			 * libcrunch has already warned the user in __fetch_bounds. Either way,
-			 * we just return. */
-			goto out;
-		}
+		bounds = __fetch_bounds(derivedfrom, t);
 	}
 	
 	if (__builtin_expect(__libcrunch_is_trap_ptr(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST), 0))
@@ -603,11 +586,11 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	}
 	
 	// too low?
-	if ((char*) *p_derived < (char*) bounds.base) { goto out; }
+	if ((char*) *p_derived < (char*) bounds.base) { goto out_fail; }
 	// NOTE: support for one-prev pointers as trap values goes here
 
 	// too high?
-	if ((char*) *p_derived > (char*) bounds.limit) { goto out; }
+	if ((char*) *p_derived > (char*) bounds.limit) { goto out_fail; }
 
 	// "one past"?
 	if ((char*) *p_derived == (char*) bounds.limit)
@@ -617,6 +600,9 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	
 	/* That's it! */
 out:
+	return 1;
+out_fail:
+	__assert_fail("bounds", __FILE__, __LINE__, __func__);
 	return 1;
 }
 

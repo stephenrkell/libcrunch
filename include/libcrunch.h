@@ -51,6 +51,7 @@ int __can_hold_pointer_internal(const void *target, const void *value) __attribu
 #ifndef CIL
 #include "libcrunch_cil_inlines.h"
 #endif
+__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, struct uniqtype *u);
 
 /* our own private assert */
 static inline void 

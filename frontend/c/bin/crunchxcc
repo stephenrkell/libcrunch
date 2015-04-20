@@ -26,6 +26,7 @@ class CrunchXCC(CrunchCC):
         
         includeArgs = []
 #            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
+#            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimpleaddr/vsimpleaddr.cmxs"), "--dovsimpleAddr", \
 
         if len(sourceFiles) > 0 and allSourceFilesAreC:
             # We can only do trumptr, and anything else that involves -include, 
@@ -34,7 +35,6 @@ class CrunchXCC(CrunchCC):
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
-            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimpleaddr/vsimpleaddr.cmxs"), "--dovsimpleAddr", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr" \
                 ]

@@ -515,17 +515,16 @@ static void clear_alloc_site_metadata(const void *alloc_start)
 	}
 }
 
-static void cache_is_a(const void *obj, const struct uniqtype *t, _Bool result,
-	unsigned short period, unsigned short n_pos, unsigned short n_neg)
+static void cache_is_a(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
+	_Bool result, unsigned short period)
 {
 	unsigned pos = __libcrunch_is_a_cache_next_victim;
 	__libcrunch_is_a_cache[pos] = (struct __libcrunch_is_a_cache_s) {
-		.obj = obj,
+		.obj_base = obj_base,
+		.obj_limit = obj_limit,
 		.uniqtype = (unsigned long long) t,
 		.result = result,
-		.period = period,
-		.n_pos = n_pos,
-		.n_neg = n_neg
+		.period = period
 	};
 	__libcrunch_is_a_cache_validity |= 1u<<pos;
 	// make sure this entry is not the next victim
@@ -542,8 +541,9 @@ void __libcrunch_uncache_is_a(const void *allocptr, size_t size)
 	{
 		if (__libcrunch_is_a_cache_validity & (1u << i))
 		{
-			if ((char*) __libcrunch_is_a_cache[i].obj >= (char*) allocptr
-					 && (char*) __libcrunch_is_a_cache[i].obj < (char*) allocptr + size)
+			/* Uncache any object beginning anywhere within the passed-in range. */
+			if ((char*) __libcrunch_is_a_cache[i].obj_base >= (char*) allocptr
+					 && (char*) __libcrunch_is_a_cache[i].obj_base < (char*) allocptr + size)
 			{
 				// unset validity and make this the next victim
 				__libcrunch_is_a_cache_validity &= ~(1u<<i);
@@ -581,9 +581,9 @@ int __is_a_internal(const void *obj, const void *arg)
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
 
 	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	void *range_base;
+	void *range_limit;
 	unsigned short period = (alloc_uniqtype->pos_maxoff > 0) ? alloc_uniqtype->pos_maxoff : 0;
-	unsigned short n_pos;
-	unsigned short n_neg;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
@@ -592,14 +592,14 @@ int __is_a_internal(const void *obj, const void *arg)
 			&& alloc_uniqtype->neg_maxoff == 0)
 	{
 		// HACK: for now, assume that the repetition continues to the end
-		n_pos = ((alloc_size_bytes - target_offset_within_uniqtype) / alloc_uniqtype->pos_maxoff) - 1;
-		n_neg = target_offset_within_uniqtype / alloc_uniqtype->pos_maxoff;
+		range_limit = (char*) alloc_start + alloc_size_bytes;
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+		range_base = (char*) alloc_start + target_offset_within_uniqtype; // FIXME: please check
 	}
 	else
 	{
-		n_neg = 0;
-		n_pos = 0;
+		range_limit = (char*) obj + 1;
+		range_base = (char*) obj;
 	}
 	_Bool is_cacheable = ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site);
 	
@@ -615,8 +615,8 @@ int __is_a_internal(const void *obj, const void *arg)
 	if (__builtin_expect(success, 1))
 	{
 		/* populate cache */
-		if (is_cacheable) cache_is_a(obj, test_uniqtype, 1,
-			period, n_pos, n_neg);
+		if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 1,
+			period);
 
 		++__libcrunch_succeeded;
 		return 1;
@@ -636,14 +636,14 @@ int __is_a_internal(const void *obj, const void *arg)
 			// update the heap chunk's info to say that its type is (strictly) our test_uniqtype
 			ins->alloc_site_flag = 1;
 			ins->alloc_site = (uintptr_t) test_uniqtype;
-			if (is_cacheable) cache_is_a(obj, test_uniqtype, 1, period, n_pos, n_neg);
+			if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 1, period);
 		
 			return 1;
 		}
 	}
 	
 	// if we got here, the check failed
-	if (is_cacheable) cache_is_a(obj, test_uniqtype, 0, period, n_pos, n_neg);
+	if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 0, period);
 	if (__currently_allocating || __currently_freeing)
 	{
 		++__libcrunch_failed_in_alloc;
@@ -1610,4 +1610,194 @@ can_hold_pointer_failed:
 		);
 	return 1; // fail, but program continues
 	
+}
+
+struct bounds_cb_arg
+{
+	struct uniqtype *passed_in_t;
+	signed target_offset;
+	_Bool success;
+	struct uniqtype *matched_t;
+	struct uniqtype *containing_array_t;
+	signed last_array_type_span_start_offset;
+};
+
+static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned depth,
+	struct uniqtype *containing, struct contained *contained_pos, void *arg_void)
+{
+	struct bounds_cb_arg *arg = (struct bounds_cb_arg *) arg_void;
+
+	if (UNIQTYPE_IS_ARRAY(containing))
+	{
+		arg->last_array_type_span_start_offset = span_start_offset;
+	}
+	
+	if (span_start_offset < arg->target_offset)
+	{
+		return 0; // keep going
+	}
+	
+	// now we have span_start_offset <= target_offset
+	if (span_start_offset > arg->target_offset)
+	{
+		/* We've overshot; this shouldn't happen */
+		return 1;
+	}
+	
+	if (span_start_offset == arg->target_offset)
+	{
+		// keep going until we hit something of the right size
+		if (spans->pos_maxoff < arg->passed_in_t->pos_maxoff)
+		{
+			// usually shouldn't happen, but might with __like_a prefixing
+			arg->success = 1;
+			return 1;
+		}
+		if (spans->pos_maxoff > arg->passed_in_t->pos_maxoff)
+		{
+			// keep going
+			return 0;
+		}
+		
+		assert(spans->pos_maxoff == arg->passed_in_t->pos_maxoff);
+		/* What are the array bounds? We don't have enough context,
+		 * so the caller has to figure it out. */
+		arg->success = 1;
+		arg->matched_t = spans;
+		// now look at the containing context: is it an array?
+		if (UNIQTYPE_IS_ARRAY(containing))
+		{
+			arg->containing_array_t = containing;
+		}
+		return 1;
+	}
+	
+	assert(0);
+}
+
+__libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t)
+{
+	/* We might not be initialized yet (recall that __libcrunch_global_init is 
+	 * not a constructor, because it's not safe to call super-early). */
+	__libcrunch_check_init();
+	
+	struct uniqtype *test_uniqtype = t;
+	memory_kind k = UNKNOWN;
+	const void *alloc_start;
+	unsigned long alloc_size_bytes;
+	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
+	const void *alloc_site;
+	
+	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
+		&k,
+		&alloc_start,
+		&alloc_size_bytes,
+		&alloc_uniqtype,
+		&alloc_site);
+	
+	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
+	{
+		clear_alloc_site_metadata(alloc_start);
+	}
+	
+	/* Because we're fetch_bounds, not a check per se, we must *always* succeed! */
+	if (__builtin_expect(err != NULL, 0)) goto abort_returning_max_bounds; // liballocs has already counted this abort
+	
+	/* We can assume that the memory at obj is validly a t, for some "valid"
+	 * (maybe __is_a, maybe __like_a, etc.).
+	 * The question is how far that extends either side of obj. 
+	 * Unfortunately we still have to do an __is_a-like search
+	 * to establish our context. 
+	 * AND we have to tolerate the various relationships -- is-a, like-a, etc.
+	 * So, suppose we're doing arithmetic on an allocation of sockaddr, 
+	 * but we actually get passed t as sockaddr_in, because that's what the caller
+	 * is using. We won't even find sockaddr_in if we search in the alloc uniqtype.
+	 * BUT WAIT. 
+	 * What we're really asking about is the regularity of the memory around obj,
+	 * when considered in strides of t->pos_maxoff. 
+	 * It doesn't actually matter what t is.
+	 * So:
+	 * 
+	 * - find the outermost uniqtype at offset obj - alloc_start
+	 * - descend (offset zero) until we find something of *the same size or smaller than* 
+	          t->pos_maxoff
+	 * - if we find smaller, that means we used __like_a prefixing; bounds are only the pointee;
+	 * - if we find equi-sized, use the bounds of the containing array if there is one.
+	 * 
+	 * If there's a nest of equi-sized objects, say struct { struct { } };, it doesn't matter.
+	 * 
+	 * Does this handle nested arrays of (arrays of) structs?
+	 * 
+	 */
+	if (__builtin_expect( t->pos_maxoff == 65536 /* HACK test for -1 */ , 0))
+	{
+		goto return_min_bounds;
+	}
+	
+	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	char *alloc_instance_start_pos = (char*) obj;
+	unsigned short alloc_period = (alloc_uniqtype->pos_maxoff > 0) ? alloc_uniqtype->pos_maxoff : 0;
+	/* If we're searching in a heap array, we need to take the offset modulo the 
+	 * element size. Otherwise just take the whole-block offset. */
+	_Bool is_cacheable = ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site);
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
+			&& alloc_uniqtype
+			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK test for -1 */
+			&& alloc_uniqtype->neg_maxoff == 0)
+	{
+		/* Test for regularity in the heap block itself. */
+		alloc_instance_start_pos += alloc_uniqtype->pos_maxoff * 
+			(target_offset_within_uniqtype / alloc_uniqtype->pos_maxoff);
+		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+		if (target_offset_within_uniqtype == 0)
+		{
+			// return the bounds of the heap block
+			// FIXME: cache
+			return (__libcrunch_bounds_t) { (void*) alloc_start, (char*) alloc_start + alloc_size_bytes };
+		}
+		// else keep going
+	}
+	struct bounds_cb_arg arg = {
+		.passed_in_t = t,
+		.target_offset = target_offset_within_uniqtype
+	};
+	int ret = __liballocs_walk_subobjects_spanning(
+		target_offset_within_uniqtype,
+		alloc_uniqtype, 
+		bounds_cb, 
+		&arg
+	);
+	if (arg.success)
+	{
+		if (arg.containing_array_t)
+		{
+			// bounds are the whole array
+			// FIXME: cache
+			return (__libcrunch_bounds_t) {
+				alloc_instance_start_pos + arg.last_array_type_span_start_offset, 
+				(arg.containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
+					(char*) alloc_start + alloc_size_bytes
+					: alloc_instance_start_pos 
+						+ (arg.containing_array_t->array_len * t->pos_maxoff)
+			};
+		}
+		// bounds are just this object
+		// FIXME: cache
+		return (__libcrunch_bounds_t) { (void*) obj, (char*) obj + t->pos_maxoff };
+	}
+	else
+	{
+		goto return_min_bounds;
+	}
+
+	//if (is_cacheable) cache_bounds(obj, test_uniqtype, 1,
+	//		alloc_period, n_pos, n_neg);
+
+return_min_bounds:
+	// FIXME: cache?
+	return (__libcrunch_bounds_t) { (void*) obj, (char*) obj + 1 };
+
+abort_returning_max_bounds: 
+	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p\n", obj);
+	return (__libcrunch_bounds_t) { (void*) 0, (void*) -1 };
 }
