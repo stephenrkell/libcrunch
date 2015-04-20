@@ -1,0 +1,90 @@
+#!/usr/bin/env python
+# ... or for debugging, use something like
+#!/home/stephen/bin/gdbrun python
+
+# "Null" compiler wrapper for libcrunch.
+# We use cilly with vsimplemem and vsimpleaddr passes.
+# This wrapper exists so that we can test for slowdown introduced
+# by those passes, independent of the other stuff we do.
+import os, sys, re, subprocess, tempfile
+
+# HACK
+sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../../../../liballocs.hg/tools/"))
+from compilerwrapper import CompilerWrapper
+
+class CrunchACC(CompilerWrapper):
+        
+    def getCillyArgs(self, sourceFiles):
+        # PROBLEM: we only want to -include if we're compiling a C file. 
+        # Note that normally cilly will figure out when we're compiling
+        # a .S file, say, and only pass options that are relevant. But
+        # it would be asking too much in this case. 
+        
+        allSourceFilesAreC = True
+        for sourceFile in sourceFiles:
+            if sourceFile.lang != "c" and not sourceFile.endswith(".c"):
+                allSourceFilesAreC = False
+#            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
+        
+        if len(sourceFiles) > 0 and allSourceFilesAreC:
+            # We can only do trumptr, and anything else that involves -include, 
+            # if we're compiling only C files.
+            includeArgs = [ \
+            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../../../../liballocs.hg/tools/lang/c/cilallocs/cilallocs.cmxs"), \
+            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimpleaddr/vsimpleaddr.cmxs") \
+                , "--dovsimpleAddr" ]
+#            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
+        else:
+            self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
+        
+        return ["--save-temps", "--keepunused", "-Wno-unused-variable", "-Wno-unused-label"] + includeArgs
+            # We need the above -Wno-unused-... because CIL creates
+            # some unused stuff (unavoidably, I believe) which will
+            # make compilation done with -Werror barf if we don't
+            # silence them.
+    
+    def makeObjectFileName(self, sourceFile):
+            nameStem, nameExtension = os.path.splitext(sourceFile)
+            if (nameExtension == ".c"):
+                outputFilename = nameStem + ".o"
+                self.debugMsg("Making a secret output file (from .c source) " + outputFilename + "\n")
+            else:
+                outputFilename = sourceFile + ".o"
+                self.debugMsg("Making a secret output file (from unknown source) " + outputFilename + "\n")
+            return outputFilename
+
+    def getUnderlyingCompilerCommand(self, sourceFiles):
+        return ["cilly"] + self.getCillyArgs(sourceFiles)
+
+    def main(self):
+        # un-export CC from the env if it's set to allocscc, because 
+        # we don't want to recursively crunchcc the -uniqtypes.c files
+        # that this make invocation will be compiling for us.
+        # NOTE that we really do mean CC and not CXX here, because
+        # all the stuff we build ourselves is built from C.
+        #if "CC" in os.environ and os.environ["CC"].endswith(os.path.basename(sys.argv[0])):
+        if "CC" in os.environ:# and os.environ["CC"].endswith(os.path.basename(sys.argv[0])):
+           del os.environ["CC"]
+        self.debugMsg(sys.argv[0] + " called with args  " + " ".join(sys.argv) + "\n")
+
+        sourceInputFiles, objectInputFiles, outputFile = self.parseInputAndOutputFiles(sys.argv)
+            
+        passedThroughArgs = sys.argv[1:]
+
+        if "DEBUG_CC" in os.environ:
+            verboseArgs = ["--verbose"]
+        else:
+            verboseArgs = []
+
+        argsToExec = verboseArgs \
+        + passedThroughArgs
+        self.debugMsg("about to run cilly with args: " + " ".join(argsToExec) + "\n")
+        self.debugMsg("passedThroughArgs is: " + " ".join(passedThroughArgs) + "\n")
+
+        ret1 = self.runUnderlyingCompiler(sourceInputFiles, argsToExec)
+
+if __name__ == '__main__':
+    wrapper = CrunchACC()
+    ret = wrapper.main()
+    exit(ret)
+

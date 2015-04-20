@@ -41,9 +41,11 @@ class CrunchCC(AllocsCC):
         if len(sourceFiles) > 0 and allSourceFilesAreC:
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
-            includeArgs = ["-include", \
+            includeArgs = ["-I" + self.getLibAllocsBaseDir() + "/include", \
+                "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
+                 "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
-                "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
+               "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
             "--dotrumptr"]
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))

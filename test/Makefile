@@ -15,10 +15,18 @@ export ALLOCSITES_BASE
 
 export LIBCRUNCH_BASE := $(realpath $(dir $(THIS_MAKEFILE))/..)
 
-CRUNCHCC := $(LIBCRUNCH_BASE)/frontend/c/bin/crunchcc
-CRUNCHCXX := $(LIBCRUNCH_BASE)/frontend/c++/bin/crunchc++
-export CC := $(CRUNCHCC)
-export CXX := $(CRUNCHCXX)
+CRUNCHCC ?= $(LIBCRUNCH_BASE)/frontend/c/bin/crunchcc
+$(warning in Makefile, CRUNCHCC is $(CRUNCHCC))
+CRUNCHCXX ?= $(LIBCRUNCH_BASE)/frontend/c++/bin/crunchc++
+# use lazy expansion for these, so that changes to crunchcc get reflected
+CC = $(CRUNCHCC)
+$(warning in Makefile, CC is $(CC))
+CXX = $(CRUNCHCXX)
+export CRUNCHCC
+export CRUNCHCXX
+export CC
+export CXX
+
 export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include -I$(LIBALLOCS)/include
 export LDFLAGS += -L$(LIBALLOCS)/lib
 
@@ -124,7 +132,7 @@ _onlygdbrun-%:
 	gdb --eval-command "set environment LD_PRELOAD=$(PRELOAD)" --args ./$* ./$*
 
 build-%:
-	$(MAKE) -C "$*" $(INCLUDE_MK_INC) "$*" 
+	$(MAKE) -C "$*" $(INCLUDE_MK_INC) -f ../Makefile "$*" 
 
 run-%:
 	$(MAKE) build-$* && ( $(MAKE) -C "$*" $(INCLUDE_MK_INC) -f ../Makefile _onlyrun-$* )

@@ -54,3 +54,8 @@ int __can_hold_pointer_internal(const void *obj, const void *target)
 {
         return 1;
 }
+
+int __fetch_bounds_internal(const void *ptr, const void *t, void *out)
+{
+        return 0; /* failure */
+}

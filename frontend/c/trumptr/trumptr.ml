@@ -111,14 +111,8 @@ let instrLoc (maybeInst : Cil.instr option) =
 let tsIsMultiplyIndirectedVoid ts = 
     ((ultimatePointeeTs ts) = Cil.typeSig(voidType)) && (indirectionLevel ts) > 1
 
-let uniqtypeCheckArgs concreteType symname enclosingFile (uniqtypeGlobals: Cil.global UniqtypeMap.t ref) = 
-  let v = 
-      let (updatedMap, uniqtypeGlobalVar, updatedGlobals) = getOrCreateUniqtypeGlobal 
-        !uniqtypeGlobals symname concreteType enclosingFile.globals
-      in 
-      enclosingFile.globals <- updatedGlobals; 
-      uniqtypeGlobals := updatedMap;
-      uniqtypeGlobalVar
+let uniqtypeCheckArgs concreteType enclosingFile (uniqtypeGlobals: Cil.global UniqtypeMap.t ref) = 
+  let v = ensureUniqtypeGlobal concreteType enclosingFile uniqtypeGlobals
   in
   let s = barenameFromSig concreteType
   in
@@ -205,7 +199,7 @@ let mkCheckInstrsForTargetType
       in 
       let testFunVar = match findGlobal testFunName with Some(GFun(fundec, loc)) -> fundec.svar | _ -> failwith "impossible"
       in
-      let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concretePtdts (symnameFromSig concretePtdts) enclosingFile uniqtypeGlobals
+      let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concretePtdts enclosingFile uniqtypeGlobals
       in 
       (* do we really need this CastE? *)
       let ourCheckArgs = [if testFunName = "__named_aU"
@@ -453,7 +447,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
           in
           let concreteType = getConcreteType tsTarget
           in
-          let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concreteType (symnameFromSig concreteType) enclosingFile uniqtypeGlobals
+          let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concreteType enclosingFile uniqtypeGlobals
           in 
           let ourCheckArgs = [Cil.mkAddrOf(Var(uniqtypeV), NoOffset)]
           in
@@ -617,7 +611,8 @@ class trumPtrExprVisitor = fun enclosingFile ->
           in
           if targetTs = subexTs then DoChildren else begin
           (
-            if (tsIsPointer targetTs) && (not (tsIsPointer subexTs)) 
+            if (tsIsPointer targetTs) && (not (tsIsPointer subexTs))
+                && (not (isStaticallyZero subex)) 
             then self#queueInstr [
                 Call( None, (* return value dest *)
                      (Lval(Var(traceWidenIntToPointerInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
@@ -898,14 +893,13 @@ class trumPtrFunVisitor = fun fl -> object
          isFunction
 
   method vfunc (f: fundec) : fundec visitAction = 
-      (* Don't instrument liballocs functions that get -include'd .
-         This is actually mostly harmless, but causes warnings because
-         we end up using __inline_assert before we define it. *)
+      (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
       let startswith s pref = 
           if (String.length s) >= (String.length pref) then (String.sub s 0 (String.length pref)) = pref else false
       in 
-      if startswith f.svar.vname "__liballocs_" then
-          SkipChildren
+      if startswith f.svar.vname "__liballocs_" 
+          || stringEndsWith f.svar.vdecl.file "libcrunch_cil_inlines.h"
+          then SkipChildren
       else
           let tpExprVisitor = new trumPtrExprVisitor fl f checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun isAPointerOfDegreeInlineFun canHoldPointerInlineFun traceWidenIntToPointerInlineFun inlineAssertFun
           in
