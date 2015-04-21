@@ -1735,8 +1735,10 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 	}
 	
 	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
-	char *alloc_instance_start_pos = (char*) obj;
-	unsigned short alloc_period = (alloc_uniqtype->pos_maxoff > 0) ? alloc_uniqtype->pos_maxoff : 0;
+	char *alloc_instance_start_pos = (char*) alloc_start;
+	unsigned short alloc_period = (alloc_uniqtype->neg_maxoff == 0 
+			&& alloc_uniqtype->pos_maxoff > 0
+			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK */) ? alloc_uniqtype->pos_maxoff : 0;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
 	_Bool is_cacheable = ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site);
@@ -1777,7 +1779,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 				alloc_instance_start_pos + arg.last_array_type_span_start_offset, 
 				(arg.containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
 					(char*) alloc_start + alloc_size_bytes
-					: alloc_instance_start_pos 
+					: alloc_instance_start_pos + arg.last_array_type_span_start_offset
 						+ (arg.containing_array_t->array_len * t->pos_maxoff)
 			};
 		}
