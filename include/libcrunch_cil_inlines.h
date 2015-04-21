@@ -108,6 +108,7 @@ extern unsigned short __libcrunch_is_a_cache_next_victim;
 
 #define LIBCRUNCH_TRAP_ONE_PAST 1
 #define LIBCRUNCH_TRAP_ONE_BEFORE 2
+#define LIBCRUNCH_TRAP_INVALID 15
 
 struct __libcrunch_is_a_cache_s
 {
@@ -226,14 +227,12 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
 
 */
 
-#ifdef LIBCRUNCH_TRACE_WIDEN_INT_TO_POINTER
-void warnx(const char *fmt, ...);
 static void * (__attribute__((noinline)) get_pc)(void);
 static void * (__attribute__((noinline)) get_pc)(void)
 {
 	return __builtin_return_address(0);
 }
-#endif
+void warnx(const char *fmt, ...);
 
 extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val, unsigned long from_size);
 extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val, unsigned long from_size)
@@ -602,7 +601,10 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 out:
 	return 1;
 out_fail:
-	__assert_fail("bounds", __FILE__, __LINE__, __func__);
+	/* Don't fail here; print a warning and return a trapped pointer */
+	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld)",
+		get_pc(), *p_derived, derivedfrom, (char*) *p_derived - (char*) derivedfrom);
+	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
 	return 1;
 }
 
