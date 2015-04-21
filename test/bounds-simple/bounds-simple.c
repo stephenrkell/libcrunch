@@ -12,19 +12,19 @@ int main(void)
 	} cs[2] = { { 101, "a" }, { 102, "b" } };
 	
 	char *a = &as[43];
-	printf("Got %p\n", a);
+	printf("Got a: %p\n", a);
 
 	char *b = &as[-1];
-	printf("Got %p\n", b);
+	printf("Got b: %p\n", b);
 
-	char *c = &as[a - b];
-	printf("Got %p\n", c);
+	char *c = &as[a - b]; // difference 44
+	printf("Got c: %p\n", c);
 
 	char *d = &as[as[10]];
-	printf("Got %p\n", d);
+	printf("Got d: %p\n", d);
 	
 	char **e = &cs[0].plugh;
-	printf("Got %p\n", e);
+	printf("Got e: %p\n", e);
 
 	return 0;
 }
