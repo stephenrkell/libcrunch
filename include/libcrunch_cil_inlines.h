@@ -69,16 +69,22 @@ typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
 
 int __libcrunch_global_init (void);
 
+#if !defined(NO_PURE) && !defined(PURE)
+#define PURE __attribute__((pure))
+#elif !defined(PURE)
+#define PURE
+#endif
+
 /* Type checking */
-int __is_a_internal(const void *obj, const void *u);
-int __like_a_internal(const void *obj, const void *u);
-int __named_a_internal(const void *obj, const void *u);
-int __is_a_function_refining_internal(const void *obj, const void *u);
-int __is_a_pointer_of_degree_internal(const void *obj, int d);
-int __can_hold_pointer_internal(const void *obj, const void *value);
+int __is_a_internal(const void *obj, const void *u) PURE;
+int __like_a_internal(const void *obj, const void *u) PURE;
+int __named_a_internal(const void *obj, const void *u) PURE;
+int __is_a_function_refining_internal(const void *obj, const void *u) PURE;
+int __is_a_pointer_of_degree_internal(const void *obj, int d) PURE;
+int __can_hold_pointer_internal(const void *obj, const void *value) PURE;
 
 /* Bounds checking */
-__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, struct uniqtype *u);
+__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, struct uniqtype *u) PURE;
 // NOTE that __check_derive_ptr is entirely inline, in terms of __fetch_bounds
 
 /* Utilities */
@@ -108,7 +114,8 @@ extern unsigned short __libcrunch_is_a_cache_next_victim;
 
 #define LIBCRUNCH_TRAP_ONE_PAST 1
 #define LIBCRUNCH_TRAP_ONE_BEFORE 2
-#define LIBCRUNCH_TRAP_INVALID 15
+#define LIBCRUNCH_TRAP_INVALID 15     
+#define LIBCRUNCH_TRAP_MASK (((unsigned long)(LIBCRUNCH_TRAP_INVALID)) << LIBCRUNCH_TRAP_TAG_SHIFT)
 
 struct __libcrunch_is_a_cache_s
 {
@@ -500,6 +507,23 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untra
 	/* XOR is handy like this */
 	return __libcrunch_trap(trapptr, tag);
 }
+/* We only use this one in pointer differencing. We return an unsigned long
+ * to avoid creating a pointless cast *back* to the pointer type. Instead, 
+ * crunchbound takes on the task of the scaling the difference 
+ * by the pointer target type size. */
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr)
+{
+	/* Recall that traps work by XORing with the non-canonical bits of the pointer,
+	 * which may be 0 or 1. So to de-trap, we can't just unconditionally "clear" 
+	 * or "set" those bits; it depends on whether the pointer is positive or negative.
+	 * First clear them, then OR in all the bits again if it's negative. */
+	unsigned long val = (unsigned long) any_ptr;
+	return 
+			(val & ~LIBCRUNCH_TRAP_MASK)
+			| (((signed long) any_ptr) < 0 ? LIBCRUNCH_TRAP_MASK : 0);
+}
+
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap_ptr)(const void *maybe_trap, unsigned short tag);
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap_ptr)(const void *maybe_trap, unsigned short tag)
 {

@@ -51,7 +51,7 @@ let instrLoc (maybeInst : Cil.instr option) =
    Some(i) -> Cil.get_instrLoc i
  | None -> locUnknown
 
-let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp ptrBoundsExp lvalToBoundsFun currentInst = 
+let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp ptrBoundsExp lvalToBoundsFun currentInst = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
      * then copy from the temporary to the actual target. *)
@@ -268,6 +268,7 @@ class crunchBoundVisitor = fun enclosingFile ->
   val mutable inlineAssertFun = emptyFunction "__inline_assert"
   val mutable fetchBoundsInlineFun = emptyFunction "__fetch_bounds"
   val mutable checkDerivePtrInlineFun = emptyFunction "__check_derive_ptr"
+  val mutable detrapInlineFun = emptyFunction "__libcrunch_detrap"
   
   initializer
     (* according to the docs for pushGlobal, non-types go at the end of globals --
@@ -291,7 +292,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                    ("line", uintType, []);
                                    ("function", charConstPtrType, [])
                             ], false, [])) 
-                            ;
+    ;
 
     fetchBoundsInlineFun <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__fetch_bounds" (TFun(boundsType, 
@@ -309,6 +310,11 @@ class crunchBoundVisitor = fun enclosingFile ->
                                    ("opt_derivedfrom_bounds", boundsPtrType, []); 
                                    ("t", uniqtypePtrType, []); 
                                  ], 
+                            false, [])) 
+    ;
+    detrapInlineFun <- findOrCreateExternalFunctionInFile
+                            enclosingFile "__libcrunch_detrap" (TFun(ulongType, 
+                            Some [ ("ptr", voidPtrType, []) ], 
                             false, [])) 
 
   val currentInst : instr option ref = ref None
@@ -517,7 +523,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  * with current lvalue *(temp).rest *)
                                 let (tempVar, checkInstrs) = hoistAndCheckAdjustment 
                                     enclosingFile theFunc
-                                    checkDerivePtrInlineFun inlineAssertFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
                                     (* ptrExp *) (Cil.mkAddrOrStartOf (lhost, offsetFromList offsetsOkayWithoutCheck))
                                     (* intExp *) intExp
                                     (* ptrBoundsExp *) nullPtr
@@ -543,10 +549,53 @@ class crunchBoundVisitor = fun enclosingFile ->
         ChangeDoChildrenPost(outerE, fun e -> 
           (* When we get here, indexing in lvalues has been rewritten. 
            * Also, we've run on any expressions nested within those lvalues.
-           * So we just need to handle pointer arithmetic. 
+           * First, de-trap pointers that are differenced. *)
+          if match e with
+                BinOp(MinusPP, _, _, t) -> true
+              | _ -> false
+          then
+            (* When differencing pointers of distinct type, what type denominates? *)
+            let unifyPointerTargetTypes pt1 pt2 = 
+                match (pt1, pt2) with
+                    (TPtr(t1, _), TPtr(t2, _)) when t1 = t2 -> t1
+                  | (TPtr(TVoid(_), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
+                  | (TPtr(TVoid(_), _), TPtr(TInt(IUChar, _), _)) -> TInt(IUChar, [])
+                  | (TPtr(TVoid(_), _), TPtr(TInt(ISChar, _), _)) -> TInt(ISChar, [])
+                  | (TPtr(TInt(IChar, _), _),  TPtr(TVoid(_), _)) -> TInt(IChar, [])
+                  | (TPtr(TInt(IUChar, _), _), TPtr(TVoid(_), _)) -> TInt(IUChar, [])
+                  | (TPtr(TInt(ISChar, _), _), TPtr(TVoid(_), _)) -> TInt(ISChar, [])
+                  | (TPtr(TInt(IChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
+                  | (TPtr(TInt(IChar, _), _),  TPtr(TInt(IUChar, _), _)) -> TInt(IChar, [])
+                  | (TPtr(TInt(ISChar, _), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
+                  | (TPtr(TInt(ISChar, _), _),  TPtr(TInt(IUChar, _), _)) -> TInt(IChar, [])
+                  | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
+                  | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
+                  | (_, _) -> failwith "impossible: differencing non-unifiable pointer types"
+            in
+            (* De-trap both pointer expressions. *)
+            match e with BinOp(MinusPP, ptrExpLeft, ptrExpRight, t) -> 
+                    let tmpVarL = Cil.makeTempVar f ulongType in
+                    let tmpVarR = Cil.makeTempVar f ulongType in
+                    self#queueInstr [
+                        Call( Some(Var(tmpVarL), NoOffset), 
+                              Lval(Var(detrapInlineFun.svar), NoOffset), 
+                              [ ptrExpLeft ],
+                              instrLoc !currentInst
+                        );
+                        Call( Some(Var(tmpVarR), NoOffset), 
+                              Lval(Var(detrapInlineFun.svar), NoOffset),
+                              [ ptrExpRight ],
+                              instrLoc !currentInst
+                        );
+                    ];
+                    BinOp(Div, BinOp(MinusA, Lval(Var(tmpVarL), NoOffset), Lval(Var(tmpVarR), NoOffset), ulongType), 
+                        SizeOf (unifyPointerTargetTypes (Cil.typeOf ptrExpLeft) (Cil.typeOf ptrExpRight)),
+                        (* ptrdiff_t *) longType)
+            | _ -> failwith "impossible"
+          (* Now we just need to handle pointer arithmetic. 
            * We let it stand if we're at top level; otherwise we hoist it
            * to another temporary. *)
-          let maybeAdjustment = begin match e with
+          else let maybeAdjustment = begin match e with
               |  BinOp(PlusPI, ptrExp, intExp, t) -> Some(ptrExp, intExp)
               |  BinOp(IndexPI, ptrExp, intExp, t) -> Some(ptrExp, intExp)
               |  BinOp(MinusPI, ptrExp, intExp, t) -> Some(ptrExp, UnOp(Neg, intExp, Cil.typeOf intExp))
@@ -565,7 +614,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     output_string stderr ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
                     let tempVar, checkInstrs = hoistAndCheckAdjustment enclosingFile f
-                                    checkDerivePtrInlineFun inlineAssertFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
                                     (* ptrBoundsExp *) nullPtr
