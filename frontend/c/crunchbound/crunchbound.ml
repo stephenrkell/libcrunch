@@ -592,6 +592,33 @@ class crunchBoundVisitor = fun enclosingFile ->
                         SizeOf (unifyPointerTargetTypes (Cil.typeOf ptrExpLeft) (Cil.typeOf ptrExpRight)),
                         (* ptrdiff_t *) longType)
             | _ -> failwith "impossible"
+          else if match e with
+                   CastE(t, subex) -> true
+                 | _ -> false
+                then match e with 
+                CastE(t, subex) ->
+                  let subexTs = getConcreteType(Cil.typeSig(Cil.typeOf(subex)))
+                  in 
+                  let targetTs = getConcreteType(Cil.typeSig(t))
+                  in
+                  if (tsIsPointer subexTs) && (not (tsIsPointer targetTs))
+                    (* Making an integer from a pointer: need to de-trap.
+                     * Go via a helper -- also handy for tracing this?
+                     * ACTUALLY will make life more difficult for tracing
+                     * escape of pointerness, but do it anyway. *)
+                    then 
+                        let tmpVar = Cil.makeTempVar f ulongType in
+                        self#queueInstr [
+                            Call( Some(Var(tmpVar), NoOffset), 
+                                  Lval(Var(detrapInlineFun.svar), NoOffset), 
+                                  [ subex ],
+                                  instrLoc !currentInst
+                            )
+                        ]
+                        ;
+                        CastE(t, Lval(Var(tmpVar), NoOffset))
+                    else e
+              | _ -> failwith "impossible 2"
           (* Now we just need to handle pointer arithmetic. 
            * We let it stand if we're at top level; otherwise we hoist it
            * to another temporary. *)

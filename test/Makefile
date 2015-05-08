@@ -81,6 +81,13 @@ checkrun-fail-%:
 		. ./checks.sh && tail -n26 "$$err" | \
 		    match "checks failed otherwise" '[1-9][0-9]*' >/dev/null || \
 		(tail -n26 $$err; false)
+		
+# Some cases are expected to abort
+checkrun-abort-%:
+	@echo "expected-fail case is fail-$*" && \
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	if $(MAKE) cleanrun-abort-$* 1>$$out 2>$$err; then false; else true; fi
 
 # Most test cases should output a libcrunch summary in which 
 # -- zero or more checks passed (trivially or by lazy typing)
