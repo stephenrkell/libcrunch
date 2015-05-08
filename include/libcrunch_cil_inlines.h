@@ -507,10 +507,10 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untra
 	/* XOR is handy like this */
 	return __libcrunch_trap(trapptr, tag);
 }
-/* We only use this one in pointer differencing. We return an unsigned long
- * to avoid creating a pointless cast *back* to the pointer type. Instead, 
- * crunchbound takes on the task of the scaling the difference 
- * by the pointer target type size. */
+/* We only use this one in pointer differencing and cast-to-integer. 
+ * We return an unsigned long to avoid creating a pointless cast *back* to pointer. 
+ * Instead, when doing pointer differencing, crunchbound takes on the task 
+ * of the scaling the difference by the pointer target type size. */
 extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr);
 extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr)
 {
@@ -626,8 +626,8 @@ out:
 	return 1;
 out_fail:
 	/* Don't fail here; print a warning and return a trapped pointer */
-	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld)",
-		get_pc(), *p_derived, derivedfrom, (char*) *p_derived - (char*) derivedfrom);
+	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld; lb %p; ub %p)",
+		get_pc(), *p_derived, derivedfrom, (char*) *p_derived - (char*) derivedfrom, bounds.base, bounds.limit);
 	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
 	return 1;
 }
