@@ -1703,6 +1703,12 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 	/* Because we're fetch_bounds, not a check per se, we must *always* succeed! */
 	if (__builtin_expect(err != NULL, 0)) goto abort_returning_max_bounds; // liballocs has already counted this abort
 	
+	if (t == &__uniqtype__signed_char
+			|| t == &__uniqtype__unsigned_char)
+	{
+		goto return_alloc_bounds;
+	}
+	
 	/* We can assume that the memory at obj is validly a t, for some "valid"
 	 * (maybe __is_a, maybe __like_a, etc.).
 	 * The question is how far that extends either side of obj. 
@@ -1754,8 +1760,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 		if (target_offset_within_uniqtype == 0)
 		{
 			// return the bounds of the heap block
-			// FIXME: cache
-			return (__libcrunch_bounds_t) { (void*) alloc_start, (char*) alloc_start + alloc_size_bytes };
+			goto return_alloc_bounds;
 		}
 		// else keep going
 	}
@@ -1798,6 +1803,13 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 return_min_bounds:
 	// FIXME: cache?
 	return (__libcrunch_bounds_t) { (void*) obj, (char*) obj + 1 };
+
+return_alloc_bounds:
+	// FIXME: cache
+	return (__libcrunch_bounds_t) { 
+		(char*) alloc_start - alloc_uniqtype->neg_maxoff,
+		(char*) alloc_start + alloc_size_bytes
+	};
 
 abort_returning_max_bounds: 
 	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p\n", obj);
