@@ -16,11 +16,11 @@ export ALLOCSITES_BASE
 export LIBCRUNCH_BASE := $(realpath $(dir $(THIS_MAKEFILE))/..)
 
 CRUNCHCC ?= $(LIBCRUNCH_BASE)/frontend/c/bin/crunchcc
-$(warning in Makefile, CRUNCHCC is $(CRUNCHCC))
+#$(warning in Makefile, CRUNCHCC is $(CRUNCHCC))
 CRUNCHCXX ?= $(LIBCRUNCH_BASE)/frontend/c++/bin/crunchc++
 # use lazy expansion for these, so that changes to crunchcc get reflected
 CC = $(CRUNCHCC)
-$(warning in Makefile, CC is $(CC))
+#$(warning in Makefile, CC is $(CC))
 CXX = $(CRUNCHCXX)
 export CRUNCHCC
 export CRUNCHCXX
