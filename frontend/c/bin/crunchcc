@@ -6,7 +6,9 @@
 import os, sys, re, subprocess, tempfile
 
 # HACK
-sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../../../../liballocs.hg/tools/lang/c/lib"))
+liballocs_base = os.path.realpath(os.path.dirname(__file__) + "/../../../../liballocs.hg")
+sys.path.append(liballocs_base + "/tools")
+sys.path.append(liballocs_base + "/tools/lang/c/lib")
 from allocscc import AllocsCC
 
 class CrunchCC(AllocsCC):

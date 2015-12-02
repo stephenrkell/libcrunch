@@ -3,9 +3,10 @@ THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
 
 OCAMLFIND ?= ocamlfind
-CILLY ?= cilly
+CIL_INSTALL ?= $(LIBALLOCS_BASE)/tools/lang/c/cil
+CILLY ?= $(CIL_INSTALL)/bin/cilly
 CIL_TOOLS := trumptr vsimplemem vsimpleaddr crunchbound
-OCAMLFLAGS +=  -package findlib -package cil
+OCAMLFLAGS +=  -package findlib -I $(CIL_INSTALL)/lib/cil
 OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/cilallocs #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
 
 default: src lib cil sanity-tests
@@ -13,7 +14,6 @@ default: src lib cil sanity-tests
 .PHONY: cil
 cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs $(t)/$(t).cma)
 
-# until cilly can --load multiple plugins, we have to do this
 %.cmxs: %.cmx 
 	$(OCAMLFIND) ocamlopt -shared -o "$@" $(OCAMLOPTFLAGS) $(OCAMLFLAGS) $+
 %.cmx %.cmi: %.ml
