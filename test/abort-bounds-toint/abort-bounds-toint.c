@@ -25,9 +25,23 @@ int main(void)
 	/* HMM. What should happen here? We get a cast failing, but we continue;
 	 * Then doing arithmetic on the wrong-type pointer confuses __fetch_bounds. 
 	 * Perhaps we should issue a trapped pointer (LIBCRUNCH_TRAP_WRONG_TYPE) 
-	 * on a bad cast? That would reduce our ability to continue running code that 
+	 * on a bad cast?
+	 * 
+	 * That would reduce our ability to continue running code that 
 	 * does bad casts, UNLESS we also catch SEGV and emulate those accesses. 
-	 * That is probably the right thing to do. 
+	 * That is probably the right thing to do.
+	 * For the moment, we don't have many false positives, so we should I think
+	 * suck it up and maybe even not bother with the SEGV handler.
+	 * 
+	 * Casting a pointer should de-trap it first -- even (especially for)
+	 * casts whose target type means they need no check?
+	 * HMM. "Same type" means leave trappedness.
+	 *      "New type, checked" means clear trappedness.
+	 *      "New type, void* or integer" means clear trappedness
+	 *      "New type, char*" means... what? Okay to leave, I think (we ignore
+	 *          trappedness when comparing pointers for <= < == != >= >).
+	 *      "New type, GPP" means... what? again, we clear its trappedness.
+	 * 
 	 * Should we emulate all such uses of trapped pointers? YES, probably. 
 	 * For now, doing arithmetic on a bad-cast pointer aborts the program. */
 	
