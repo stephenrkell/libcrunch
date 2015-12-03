@@ -349,6 +349,11 @@ static void fill_separated_words(const char **out, const char *str, char sep, un
 	} while (*pos != '\0' && n_added < max);
 }
 
+static install_segv_handler(void)
+{
+	
+}
+
 /* This is *not* a constructor. We don't want to be called too early,
  * because it might not be safe to open the -uniqtypes.so handle yet.
  * So, initialize on demand. */
@@ -481,6 +486,9 @@ int __libcrunch_global_init(void)
 		}
 	}
 
+	// we need a segv handler to handle uses of trapped pointers
+	install_segv_handler();
+	
 	__libcrunch_is_initialized = 1;
 
 	debug_printf(1, "libcrunch successfully initialized\n");
@@ -1618,8 +1626,8 @@ struct bounds_cb_arg
 	signed target_offset;
 	_Bool success;
 	struct uniqtype *matched_t;
-	struct uniqtype *containing_array_t;
-	signed last_array_type_span_start_offset;
+	struct uniqtype *innermost_containing_array_t;
+	signed innermost_containing_array_type_span_start_offset;
 };
 
 static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned depth,
@@ -1627,9 +1635,16 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 {
 	struct bounds_cb_arg *arg = (struct bounds_cb_arg *) arg_void;
 
+	/* If we've just descended through an object of array type, 
+	 * remember this fact. This is so that we can calculate the
+	 * whole-array bounds, if we're doing arithmetic on a 
+	 * pointer to some element of an array of this type.
+	 * FIXME: for arrays of arrays, say int[][], 
+	 * we actually want to range over the outermost bounds.
+	 * This is not the case of arrays of structs of arrays. */
 	if (UNIQTYPE_IS_ARRAY(containing))
 	{
-		arg->last_array_type_span_start_offset = span_start_offset;
+		arg->innermost_containing_array_type_span_start_offset = span_start_offset;
 	}
 	
 	if (span_start_offset < arg->target_offset)
@@ -1640,13 +1655,20 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 	// now we have span_start_offset <= target_offset
 	if (span_start_offset > arg->target_offset)
 	{
-		/* We've overshot; this shouldn't happen */
+		/* We've overshot. If this happens, it means the target offset
+		 * is not a subobject start offset. This shouldn't happen,
+		 * unless the caller makes a wild pointer. */
 		return 1;
 	}
 	
 	if (span_start_offset == arg->target_offset)
 	{
-		// keep going until we hit something of the right size
+		/* We've hit a subobject that starts at the right place.
+		 * It might still be an enclosing object, not the object we're
+		 * looking for. We differentiate using the size of the passed-in
+		 * type -- this is the size of object that the pointer
+		 * arithmetic is being done on. Keep going til we hit something
+		 * of that size. */
 		if (spans->pos_maxoff < arg->passed_in_t->pos_maxoff)
 		{
 			// usually shouldn't happen, but might with __like_a prefixing
@@ -1667,7 +1689,7 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 		// now look at the containing context: is it an array?
 		if (UNIQTYPE_IS_ARRAY(containing))
 		{
-			arg->containing_array_t = containing;
+			arg->innermost_containing_array_t = containing;
 		}
 		return 1;
 	}
@@ -1776,16 +1798,16 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 	);
 	if (arg.success)
 	{
-		if (arg.containing_array_t)
+		if (arg.innermost_containing_array_t)
 		{
 			// bounds are the whole array
 			// FIXME: cache
 			return (__libcrunch_bounds_t) {
-				alloc_instance_start_pos + arg.last_array_type_span_start_offset, 
-				(arg.containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
+				alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset, 
+				(arg.innermost_containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
 					(char*) alloc_start + alloc_size_bytes
-					: alloc_instance_start_pos + arg.last_array_type_span_start_offset
-						+ (arg.containing_array_t->array_len * t->pos_maxoff)
+					: alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset
+						+ (arg.innermost_containing_array_t->array_len * t->pos_maxoff)
 			};
 		}
 		// bounds are just this object
