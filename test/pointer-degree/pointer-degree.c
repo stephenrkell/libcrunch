@@ -13,10 +13,12 @@ int main(void)
 	/* HACK: because our assertions always evaluate true
      * at the moment, we can't write them as we'd like to.
 	 * Instead, assert the failure count. */
-
-	assert((/*!*/__is_a_pointer_of_degree_internal(&i, 0), __libcrunch_failed == 1));
-	assert((/*!*/__is_a_pointer_of_degree_internal(&i, 1), __libcrunch_failed == 2));
-	assert((/*!*/__is_a_pointer_of_degree_internal(&i, 2), __libcrunch_failed == 3));
+	_Bool b0 = __is_a_pointer_of_degree_internal(&i, 0);
+	assert(__libcrunch_failed == 1);
+	_Bool b1 = __is_a_pointer_of_degree_internal(&i, 1);
+	assert(__libcrunch_failed == 2);
+	_Bool b2 = __is_a_pointer_of_degree_internal(&i, 2);
+	assert(__libcrunch_failed == 3);
 
 	assert(__is_a_pointer_of_degree_internal(&blah1, 1));
 
@@ -32,13 +34,14 @@ int main(void)
 	assert(__is_a_pointer_of_degree_internal(&blah4, 3));
 	assert(__is_a_pointer_of_degree_internal(&blah4, 4));
 
-	assert((/*!*/__is_a_pointer_of_degree_internal(&blah1, 2), __libcrunch_failed == 4));
-
-	assert((/*!*/__is_a_pointer_of_degree_internal(&blah2, 3), __libcrunch_failed == 5));
-
-	assert((/*!*/__is_a_pointer_of_degree_internal(&blah3, 4), __libcrunch_failed == 6));
-
-	assert((/*!*/__is_a_pointer_of_degree_internal(&blah4, 5), __libcrunch_failed == 7));
+	_Bool p2 = __is_a_pointer_of_degree_internal(&blah1, 2);
+	assert(__libcrunch_failed == 4);
+	_Bool p3 = __is_a_pointer_of_degree_internal(&blah2, 3);
+	assert(__libcrunch_failed == 5);
+	_Bool p4 = __is_a_pointer_of_degree_internal(&blah3, 4);
+	assert(__libcrunch_failed == 6);
+	_Bool p5 = __is_a_pointer_of_degree_internal(&blah4, 5);
+	assert(__libcrunch_failed == 7);
 
 	return 0;
 
