@@ -3,6 +3,12 @@
 
 #include "liballocs.h"
 
+#if !defined(NO_PURE) && !defined(PURE)
+#define PURE __attribute__((pure))
+#elif !defined(PURE)
+#define PURE
+#endif
+
 extern int __libcrunch_debug_level;
 extern _Bool __libcrunch_is_initialized __attribute__((weak));
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
@@ -35,13 +41,13 @@ int __libcrunch_global_init(void) __attribute__((weak));
 // declare as const void *-returning, to simplify trumptr
 const void *__libcrunch_typestr_to_uniqtype(const char *typestr) __attribute__((weak));
 void *__libcrunch_my_typeobj(void) __attribute__((weak));
-int __is_a_internal(const void *obj, const void *uniqtype) __attribute__((weak)) __attribute__((hot));
-int __like_a_internal(const void *obj, const void *uniqtype) __attribute__((weak)) __attribute__((hot));;
-int __named_a_internal(const void *obj, const void *typestr) __attribute__((weak)) __attribute__((hot));;
-int __check_args_internal(const void *obj, int nargs, ...) __attribute__((weak)) __attribute__((hot));;
-int __is_a_function_refining_internal(const void *obj, const void *uniqtype) __attribute__((weak)) __attribute__((hot));
-int __is_a_function_pointer_of_degree_internal(const void *obj, int d) __attribute__((weak)) __attribute__((hot));
-int __can_hold_pointer_internal(const void *target, const void *value) __attribute__((weak)) __attribute__((hot));
+int __is_a_internal(const void *obj, const void *uniqtype) __attribute__((weak)) PURE __attribute__((hot));
+int __like_a_internal(const void *obj, const void *uniqtype) __attribute__((weak)) PURE __attribute__((hot));;
+int __named_a_internal(const void *obj, const void *typestr) __attribute__((weak)) PURE __attribute__((hot));;
+int __check_args_internal(const void *obj, int nargs, ...) __attribute__((weak)) PURE __attribute__((hot));;
+int __is_a_function_refining_internal(const void *obj, const void *uniqtype) __attribute__((weak)) PURE __attribute__((hot));
+int __is_a_function_pointer_of_degree_internal(const void *obj, int d) __attribute__((weak)) PURE __attribute__((hot));
+int __can_hold_pointer_internal(const void *target, const void *value) __attribute__((weak)) PURE __attribute__((hot));
 
 /* The main public API to libcrunch is through several small functions 
  * which are *always* inlined. NOTE: repeat these in trumptr.ml so that
