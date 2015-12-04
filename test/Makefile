@@ -119,6 +119,8 @@ checkrun-pointer-degree:
 	$(MAKE) cleanrun-pointer-degree >/dev/null 2>&1
 checkrun-bounds-simple:
 	$(MAKE) cleanrun-bounds-simple >/dev/null 2>&1
+checkrun-bounds-diff:
+	$(MAKE) cleanrun-bounds-diff >/dev/null 2>&1
 
 # Some cases are special and have their own matching criteria
 checkrun-lazy-typing:
