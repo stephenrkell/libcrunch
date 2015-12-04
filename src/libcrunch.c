@@ -249,6 +249,8 @@ static const struct uniqtype *last_failed_deepest_subobject_type;
 
 struct addrlist distinct_failure_sites;
 
+/* This filter is used to avoid repeated warnings, unless 
+ * the user has requested them (verbose mode). */
 static _Bool should_report_failure_at(void *site)
 {
 	if (verbose) return 1;
@@ -349,7 +351,7 @@ static void fill_separated_words(const char **out, const char *str, char sep, un
 	} while (*pos != '\0' && n_added < max);
 }
 
-static install_segv_handler(void)
+static void install_segv_handler(void)
 {
 	
 }
@@ -606,10 +608,15 @@ int __is_a_internal(const void *obj, const void *arg)
 	}
 	else
 	{
+		/* HMM. Is this right? What about regularity *not* at top-level? */
 		range_limit = (char*) obj + 1;
 		range_base = (char*) obj;
 	}
-	_Bool is_cacheable = ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site);
+	
+	/* FIXME: static allocations are cacheable *only* so long as we 
+	 * purge the cache on dynamic unloading (which we currently don't).
+	 * FIXME: we need to distinguish alloca'd from stack'd allocations, somehow. */
+	_Bool is_cacheable = (k != STACK) /*|| ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
@@ -1628,6 +1635,9 @@ struct bounds_cb_arg
 	struct uniqtype *matched_t;
 	struct uniqtype *innermost_containing_array_t;
 	signed innermost_containing_array_type_span_start_offset;
+	struct uniqtype *outermost_containing_array_t;
+	signed outermost_containing_array_type_span_start_offset;
+	size_t accum_array_bounds;
 };
 
 static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned depth,
@@ -1639,12 +1649,32 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 	 * remember this fact. This is so that we can calculate the
 	 * whole-array bounds, if we're doing arithmetic on a 
 	 * pointer to some element of an array of this type.
-	 * FIXME: for arrays of arrays, say int[][], 
+	 * 
+	 * Also, for arrays of arrays, say int[][], 
 	 * we actually want to range over the outermost bounds.
-	 * This is not the case of arrays of structs of arrays. */
+	 * This is not the case of arrays of structs of arrays.
+	 * So we want to clear the state once we descend through a non-array. */
 	if (UNIQTYPE_IS_ARRAY(containing))
 	{
 		arg->innermost_containing_array_type_span_start_offset = span_start_offset;
+		arg->innermost_containing_array_t = containing;
+		
+		if (!arg->outermost_containing_array_t)
+		{
+			arg->outermost_containing_array_type_span_start_offset = span_start_offset;
+			arg->outermost_containing_array_t = containing;
+			arg->accum_array_bounds = UNIQTYPE_ARRAY_LEN(containing);
+			if (arg->accum_array_bounds < 1) arg->accum_array_bounds = 0;
+		}
+		else arg->accum_array_bounds *= UNIQTYPE_ARRAY_LEN(containing);
+	}
+	else
+	{
+		arg->outermost_containing_array_type_span_start_offset = 0;
+		arg->outermost_containing_array_t = NULL;
+		arg->innermost_containing_array_type_span_start_offset = 0;
+		arg->innermost_containing_array_t = NULL;
+		arg->accum_array_bounds = 0;
 	}
 	
 	if (span_start_offset < arg->target_offset)
@@ -1686,11 +1716,7 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 		 * so the caller has to figure it out. */
 		arg->success = 1;
 		arg->matched_t = spans;
-		// now look at the containing context: is it an array?
-		if (UNIQTYPE_IS_ARRAY(containing))
-		{
-			arg->innermost_containing_array_t = containing;
-		}
+
 		return 1;
 	}
 	
@@ -1769,7 +1795,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK */) ? alloc_uniqtype->pos_maxoff : 0;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
-	_Bool is_cacheable = ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site);
+	_Bool is_cacheable = (k != STACK)/* || ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
 			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK test for -1 */
