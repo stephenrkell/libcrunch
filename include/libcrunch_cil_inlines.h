@@ -234,10 +234,16 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
 
 */
 
-static void * (__attribute__((noinline)) get_pc)(void);
-static void * (__attribute__((noinline)) get_pc)(void)
+/* To implement a get_pc() function, we'd like to use __builtin_return_address
+ * which means the function really needs to be noinline -- but also static,
+ * to avoid multiple-definition link errors. This causes the compiler to 
+ * complain (warn) when it's used from extern inline functions, like all
+ * our functions here. HMM. Instead, ditch __builtin_return_address in favour
+ * of some different GNU extensions: "&&label" and gnu_inline. */
+extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_pc)(void);
+extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_pc)(void)
 {
-	return __builtin_return_address(0);
+	mylabel: return &&mylabel;
 }
 void warnx(const char *fmt, ...);
 
@@ -246,7 +252,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_
 {
 #ifdef LIBCRUNCH_TRACE_WIDEN_INT_TO_POINTER
 	/* To get a return address, use a noinline nested function. */
-	if (from_size < sizeof (void*)) warnx("Unsafe integer-to-pointer cast of value %llx %at %p\n", val, get_pc());
+	if (from_size < sizeof (void*)) warnx("Unsafe integer-to-pointer cast of value %llx %at %p\n", val, __libcrunch_get_pc());
 #endif
 }
 
@@ -558,11 +564,13 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 		/* Is ptr actually a t? If not, we're in trouble!
 		 * Maybe it's one-past and we just de-trapped it? 
 		 * NO, we handle that in caller. */
-		if (__builtin_expect(!hit->result, 0))
-		{
-			// loop: goto loop; /* internal error! this shouldn't happen! etc. */
-			__asm__ volatile ("ud2");
-		}
+		//if (__builtin_expect(!hit->result, 0))
+		//{
+		//	// loop: goto loop; /* internal error! this shouldn't happen! etc. */
+		//	__asm__ volatile ("ud2");
+		//}
+		/* HMM. Commented this abort out since I'mnow  less sure that it's a good idea.
+		 * See the bounds-toint test case. */
 		/* Does "obj" include "derivedfrom"? */
 		return (__libcrunch_bounds_t) { (void*) hit->obj_base, (void*) hit->obj_limit };
 	}
@@ -578,6 +586,10 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	 * - the byte-address derived is a multiple of t->pos_maxoff away from derivedfrom
 	   ... AFTER it is converted back from a trap value
 	 */
+	
+	// FIXME: what if *p_derived is a trap? 
+	// i.e. we just did pointer arithmetic on one?
+	// Then we should de-trap it at the same time we de-trap derivedfrom, I think
 	
 	// deriving a null pointer or MAP_FAILED is okay, I suppose? don't allow it, for now
 	// if (!derived || derived == (void*) -1) goto out;
@@ -614,6 +626,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 
 	// too high?
 	if ((char*) *p_derived > (char*) bounds.limit) { goto out_fail; }
+	
+	// FIXME: experiment with Austin et al's "unsigned subtraction" hack here
 
 	// "one past"?
 	if ((char*) *p_derived == (char*) bounds.limit)
@@ -627,7 +641,7 @@ out:
 out_fail:
 	/* Don't fail here; print a warning and return a trapped pointer */
 	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld; lb %p; ub %p)",
-		get_pc(), *p_derived, derivedfrom, (char*) *p_derived - (char*) derivedfrom, bounds.base, bounds.limit);
+		__libcrunch_get_pc(), *p_derived, derivedfrom, (char*) *p_derived - (char*) derivedfrom, bounds.base, bounds.limit);
 	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
 	return 1;
 }
