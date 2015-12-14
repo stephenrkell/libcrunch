@@ -1842,6 +1842,9 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 	}
 	else
 	{
+		debug_printf(0, "libcrunch: no bounds for %p, target type %s, offset %d in allocation of %s at %p\n", 
+			obj, NAME_FOR_UNIQTYPE(t), target_offset_within_uniqtype, NAME_FOR_UNIQTYPE(alloc_uniqtype),
+			alloc_start);
 		goto return_min_bounds;
 	}
 
