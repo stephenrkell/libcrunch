@@ -159,6 +159,13 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_i
 	return 0;
 }
 
+extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_local_bounds)(int idx, int limit);
+extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_local_bounds)(int idx, int limit)
+{
+	/* FIXME: actually do something more sophisticated involving trap pointers here. */
+	if (__builtin_expect(idx >= limit, 0)) abort();
+}
+
 /* FIXME: reinstate "extended counts" versions, which were
 
 #ifdef LIBCRUNCH_EXTENDED_COUNTS

@@ -51,6 +51,242 @@ let instrLoc (maybeInst : Cil.instr option) =
    Some(i) -> Cil.get_instrLoc i
  | None -> locUnknown
 
+let varinfoIsLocal vi = not vi.vglob && not vi.vaddrof
+
+let hostIsLocal lhost = 
+    match lhost with
+        Var(vi) -> varinfoIsLocal vi 
+          | Mem(_) -> false
+
+let boundsTAsNumber maybeBoundsT gs = 
+    let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
+    in
+    match maybeBoundsT with
+        None -> 
+            (* Zero bounds objects. *)
+            Int64.of_int 0
+      | Some(TComp(ci, attrs)) when ci.cname = "__libcrunch_bounds_s" ->
+            (* A singleton bounds_t. *)
+            Int64.of_int 1
+      | Some(TArray(TComp(ci, attrs), Some(boundExpr), [])) when ci.cname = "__libcrunch_bounds_s" ->
+            (* An array of bounds_t. *)
+            match constInt64ValueOfExpr boundExpr with
+                Some(x) -> x
+              | None -> failwith "bounds array type does not have constant bound"
+
+let boundsTTimesN maybeBoundsT (n : int64) gs =
+    output_string stderr ((Int64.to_string n) ^ " times bounds type " ^ 
+        (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        " is: "); flush stderr;
+    let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
+    in
+    let prod = match maybeBoundsT with
+        None -> None
+      | Some(TComp(ci, attrs)) when ci.cname = "__libcrunch_bounds_s" ->
+            if n = Int64.of_int 1 then Some(bounds_t)
+            else Some(TArray(bounds_t, Some(Const(CInt64(n, IInt, None))), []))
+      | Some(TArray(TComp(ci, attrs), Some(boundExpr), [])) when ci.cname = "__libcrunch_bounds_s" ->
+            (* Okay, now we have n times as many. *)
+            Some(
+                TArray(bounds_t, 
+                        Some(Const(CInt64(Int64.mul n (match constInt64ValueOfExpr boundExpr with
+                            Some(m) -> m
+                          | None -> failwith "array bound is not constant (*)"), IInt, None))),
+                      []
+                )
+            )
+    in
+    output_string stderr ((match prod with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        "\n"); flush stderr; 
+    prod
+
+let boundsTPlusN maybeBoundsT (n : int64) gs =
+    output_string stderr ((Int64.to_string n) ^ " plus bounds type " ^ 
+        (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        " is: "); flush stderr;
+    let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
+    in
+    let sum = match maybeBoundsT with
+        None -> if n = Int64.of_int 0 then None
+                else if n = Int64.of_int 1 then Some(bounds_t)
+                else Some(TArray(bounds_t, Some(makeIntegerConstant n), []))
+      | Some(TComp(ci, attrs)) when ci.cname = "__libcrunch_bounds_s" -> 
+            if n = Int64.of_int 0 then Some(bounds_t)
+            else Some(TArray(bounds_t, Some(makeIntegerConstant ((Int64.add n (Int64.of_int 1)))), []))
+      | Some(TArray(TComp(ci, attrs), Some(boundExpr), [])) when ci.cname = "__libcrunch_bounds_s" ->
+            (* Okay, now we have n more. *)
+            Some(TArray(TComp(ci, attrs), 
+                Some(makeIntegerConstant(Int64.add n (match constInt64ValueOfExpr boundExpr with
+                        Some(m) -> m
+                      | None -> failwith "array bound is not constant (+)"
+                    ))),
+                []
+            ))
+    in
+    output_string stderr ((match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        "\n");
+    sum
+
+let boundsTPlusBoundsT maybeBoundsT1 maybeBoundsT2 gs =
+    let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
+    in
+    let sum = match maybeBoundsT2 with
+        None -> boundsTPlusN maybeBoundsT1 (Int64.of_int 0) gs
+      | Some(TComp(ci, attrs)) when ci.cname = "__libcrunch_bounds_s" -> 
+            boundsTPlusN maybeBoundsT1 (Int64.of_int 1) gs
+      | Some(TArray(TComp(ci, attrs), Some(boundExpr), [])) when ci.cname = "__libcrunch_bounds_s" ->
+            let m = (match constInt64ValueOfExpr boundExpr with
+                Some n -> n
+              | None -> failwith "internal error: bounds type has unbounded array"
+            )
+            in
+            boundsTPlusN maybeBoundsT1 m gs
+    in
+    output_string stderr ("Sum of bounds types " ^ 
+        (match maybeBoundsT1 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        " and " ^ 
+        (match maybeBoundsT2 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        " is " ^
+        (match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        "\n");
+    sum
+
+let rec boundsTForT (t : Cil.typ) gs = 
+    let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
+    in
+    (* We want to produce either nothing, or a single bounds_t, or 
+     * a one-dimensional array of bounds_ts. 
+     * This is basically because structs are heterogeneous -- they might contain
+     * an array of m pointers and then an array of n pointers. 
+     * There's no way to preserve this structure while still keeping,
+     * a single type for the whole structure's bounds (i.e. without
+     * creating a new struct type mirroring the input struct type;
+     * we could also have done this). *)
+    let maybeBoundsT = match t with
+        TVoid(attrs) ->  failwith "asked bounds type for void"
+      | TInt(ik, attrs) -> None
+      | TFloat(fk, attrs) -> None
+      | TPtr(pt, attrs) -> (match pt with TVoid(_) -> None | _ -> Some(bounds_t))
+      | TArray(at, None, attrs) -> failwith "asked bounds type for unbounded array type"
+      | TArray(at, Some(boundExpr), attrs) -> 
+            boundsTTimesN (boundsTForT at gs) (match constInt64ValueOfExpr boundExpr with
+                    Some n -> n
+                  | None -> failwith "getting bounds type for non-constant array bounds"
+                ) gs
+      | TFun(_, _, _, _) -> failwith "asked bounds type for incomplete (function) type"
+      | TNamed(ti, attrs) -> boundsTForT ti.ttype gs
+      | TComp(ci, attrs) -> 
+            List.fold_left (fun x -> fun y -> boundsTPlusBoundsT x y gs) None (
+                List.map (fun fi -> boundsTForT fi.ftype gs) ci.cfields
+            )
+      | TEnum(ei, attrs) -> None
+      | TBuiltin_va_list(attrs) -> None
+    in
+    output_string stderr ("Bounds type for " ^ 
+        (typToString t) ^ 
+        " is " ^ (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "none") ^ 
+        "\n");
+    maybeBoundsT
+
+let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (host : Cil.lhost) (prevOffsets : Cil.offset) gs = 
+    let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
+    in
+    let indexExpr = match offs with
+        Field(fi, nextOffset) -> 
+            let compTypeBeingIndexed = Cil.typeOf (Lval(host, prevOffsets))
+            in
+            let rec addEarlierFields = fun acc -> fun someFis -> (
+                match someFis with
+                    [] -> acc
+                  | someFi :: more -> 
+                    if someFi = fi then acc (* terminate early *)
+                    else addEarlierFields (acc @ [someFi]) more
+            )
+            in
+            let earlierFields = addEarlierFields [] fi.fcomp.cfields
+            in
+            (* Add up all the boundsTs for *earlier* fields in the struct. *)
+            let fieldOffsetAsBoundsT = List.fold_left 
+                (fun x -> fun y -> boundsTPlusBoundsT x y gs) 
+                None 
+                (List.map (fun fi -> boundsTForT fi.ftype gs) earlierFields)
+            in
+            let fieldOffset = boundsTAsNumber fieldOffsetAsBoundsT gs
+            in
+            boundsIndexExprForOffset
+                (BinOp(PlusA, startIndexExpr, makeIntegerConstant fieldOffset, intType))
+                nextOffset host (offsetAppend prevOffsets (Field(fi, NoOffset))) gs
+      | Index(intExp, nextOffset) -> 
+            (* We're indexing into an array at intExp (which we've already 
+             * checked is in bounds).
+             *
+             * Example:
+             * 
+             *    x[i][j].p
+             * 
+             * We want the expression for i.
+             * First we recursively compute the offset that we'd want if i were zero.
+             * Then we add i times the array size for Cil.typeOf (x[i]), 
+             * i.e. the number of bounds objects that the whole [j].p tail accounts for.
+             *)
+            let offsetUpToHere = offsetAppend prevOffsets (Index(intExp, NoOffset))
+            in
+            let zeroIndexExpr = boundsIndexExprForOffset startIndexExpr nextOffset
+                host offsetUpToHere gs
+            in
+            (BinOp(PlusA, zeroIndexExpr, ( 
+                (BinOp(Mult, intExp, (
+                    let elemT = Cil.typeOf (Lval(host, offsetUpToHere))
+                    in
+                    let maybeElemTBoundsT = boundsTForT elemT gs
+                    in
+                    makeIntegerConstant (boundsTAsNumber maybeElemTBoundsT gs)
+                ), intType))
+            ), intType))
+      | NoOffset -> startIndexExpr
+    in
+    output_string stderr ("Bounds index expression for indexing " ^ 
+        (lvalToString (host, prevOffsets)) ^ " giving " ^ 
+        (lvalToString (host, offsetFromList ((offsetToList prevOffsets) @ (offsetToList offs)))) ^ 
+        " is " ^ (expToString indexExpr) ^ "\n");
+    indexExpr
+
+let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun inlineAssertFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
+    output_string stderr ("Making local bounds check for indexing expression " ^ 
+        (expToString (Lval(localHost, offsetFromList prevOffsets))) ^ 
+        " by index expression " ^ (expToString (intExp)) ^ "\n");
+    (* To avoid leaking bad pointers when writing to a shared location, 
+     * we make the assignment to a temporary, then check the temporary,
+     * then copy from the temporary to the actual target. *)
+    let loc = instrLoc currentInst in
+    (* What's the bound of the local? *)
+    [
+        (* Test the intExp against the bound *)
+        let rec getArrayBound t = match t with
+          | TArray(at, None, attrs) -> failwith "asked local bound for unbounded array type"
+          | TArray(at, Some(boundExpr), attrs) -> 
+                (match constInt64ValueOfExpr boundExpr with
+                    Some n -> n
+                  | None -> failwith "getting local bound for non-constant-length array"
+                )
+          | TNamed(ti, attrs) -> getArrayBound t
+        in
+        let bound = getArrayBound (Cil.typeOf (Lval(localHost, offsetFromList prevOffsets)))
+        in
+        (* If we're trying to go out-of-bounds, do what? Rather than faff with CIL
+         * blocks/statements, just call an inline function. *)
+        Call( None,
+            (Lval(Var(checkLocalBoundsInlineFun.svar),NoOffset)),
+            [
+              (* index *)
+              intExp;
+              (* limit *)
+              Const(CInt64(bound, IInt, None))
+            ],
+            loc
+        )
+    ]
+
 let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp ptrBoundsExp lvalToBoundsFun currentInst = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
@@ -125,7 +361,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       )
     ])
 
-let makeBoundsUpdateInstruction enclosingFile enclosingFunction fetchBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
+let makeBoundsFetchInstruction enclosingFile enclosingFunction fetchBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
     let loc = instrLoc currentInst in
     Call( (lvalToBoundsFun justWrittenLval),
             (Lval(Var(fetchBoundsFun.svar),NoOffset)),
@@ -144,11 +380,51 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun un
      * do we copy bounds, 
      *       make them ourselves, 
      *    or fetch them? *)
+    let doFetch = fun () -> makeBoundsFetchInstruction enclosingFile enclosingFunction fetchBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
+    in
     begin match writtenE with
-        _ -> ()
-    end;
-    (* FIXME *)
-    makeBoundsUpdateInstruction enclosingFile enclosingFunction fetchBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
+            (* We only get called if we definitely want to update the bounds for 
+             * justWrittenLval.
+             * It follows that justWrittenLval is a pointer
+             * for which we are locally caching bounds.
+             * 
+             * The main problem is: do we infer the bounds,
+             * or do we have to call liballocs to fetch them?
+             * 
+             * We can infer the bounds if
+             * 
+             * - we're copying an also-local pointer (perhaps a subobject of a local struct/array)
+             *      => copy the bounds *)
+        Lval(someHost, someOffset) when hostIsLocal someHost -> 
+            (* - we're taking the address of a local or global variable
+                    => bounds are implied by the address value and the type of the object *)
+            doFetch ()
+      | AddrOf(someHost, NoOffset)  when hostIsLocal someHost -> doFetch ()
+      | StartOf(someHost, NoOffset) when hostIsLocal someHost -> doFetch ()
+           (* - we're taking the address of a subobject or array element 
+                 of a local or global variable
+                    => similar, just a bit more complex: *)
+      | AddrOf(someHost, someOffset)  when hostIsLocal someHost -> doFetch ()
+      | StartOf(someHost, someOffset) when hostIsLocal someHost -> doFetch ()
+            (* - we're taking the address of a subobject within a heap object, 
+                    i.e. a Mem() constructor,
+             *      and if we have bounds for the Mem(Lval(...), offset) pointer lval. *)
+      | Lval(Mem(memExp (* what about nested lvals in here? *) ), someOffset) when someOffset <> NoOffset ->
+            doFetch ()
+            (* Casts? Literal pointers? *)
+            (* Note that if we're loading a pointer stored on the heap, we
+             * can do nothing; we have to fetch its bounds.
+             * 
+             * In the example
+             * 
+             *    p = q + 1
+             * 
+             * ... we've already checked that "q + 1" is valid at the point where
+             * we do the write. PROBLEM: we've split this across a function call,
+             * __check_derive_ptr. HMM. Perhaps this transformation hasn't happened yet?
+             *)
+      | _ -> doFetch ()
+    end
     
 
 (* How do we deal with Stephen D's "unspecified values" problem?
@@ -269,6 +545,7 @@ class crunchBoundVisitor = fun enclosingFile ->
   val mutable fetchBoundsInlineFun = emptyFunction "__fetch_bounds"
   val mutable checkDerivePtrInlineFun = emptyFunction "__check_derive_ptr"
   val mutable detrapInlineFun = emptyFunction "__libcrunch_detrap"
+  val mutable checkLocalBoundsInlineFun = emptyFunction "__check_local_bounds"
   
   initializer
     (* according to the docs for pushGlobal, non-types go at the end of globals --
@@ -316,6 +593,13 @@ class crunchBoundVisitor = fun enclosingFile ->
                             enclosingFile "__libcrunch_detrap" (TFun(ulongType, 
                             Some [ ("ptr", voidPtrType, []) ], 
                             false, [])) 
+    ;
+    checkLocalBoundsInlineFun <- findOrCreateExternalFunctionInFile
+                            enclosingFile "__libcrunch_check_local_bounds" (TFun(intType, 
+                            Some [ ("ptr", intType, []);
+                                   ("limit", intType, [])
+                            ], 
+                            false, [])) 
 
   val currentInst : instr option ref = ref None
   val currentFunc : fundec option ref = ref None
@@ -346,17 +630,64 @@ class crunchBoundVisitor = fun enclosingFile ->
           then SkipChildren
       else
           (* We've done computeFileCFG, so no need to do the CFG info thing *)
-          (* Figure out which pointer locals also need cached bounds. *)
+          (* Figure out which pointer locals also need cached bounds. 
+          
+             - a pointer local var gets a local bounds var
+             
+             - an local array of pointer gets an array of bounds
+             
+                  ** WHAT about out-of-bounds access to local arrays?
+                     GAH.
+                     AHA. We're okay. I think.
+                     If we're accessing a local array, 
+                     we know its bound statically.
+                     We might have to insert a dynamic check that the index is in bounds.
+                     This is *not* the same as a full bounds check.
+                     This mini-check suffices to ensure our bounds are accessed correctly too.
+             
+             - same for arrays of arrays. FLATTEN the array.
+             
+             - what about a pointer inside a local struct?
+             
+                  ** HMM. Ideally we would create a mirror struct, locally.
+                     Or, more simply, can we get away with "arrays of bounds" for any depth?
+                     Yes. This seems sensible.
+                     
+                     PROBLEM: if *any* array element is used, the *whole* array will be retained
+                     by the optimiser.
+             
+             What about address-taken locals?
+             These should *not* get bounds, because
+             they might be written to by other code, 
+             making the cached bounds inconsistent.
+             
+             What about variable-length locals?
+             These should be promoted to alloca()'d chunks,
+             meaning they are automatically address-taken,
+             meaning they also don't get bounds.
+             Of course, like all uses of the address-taken check,
+             we're giving up opportunities to cache bounds
+             in the case where the address doesn't actually escape.
+           *)
           (
             currentFunctionLocalsToCacheBoundsFor <- [] (* !seenAdjustedLocals *); 
-          (* let rec makeBoundsLocals vil = match vil with
-              [] -> ()
-            | vi :: more -> 
-                let made = makeLocalVar f ("__cil_crunchbound_" ^ vi.vname) boundsType
-                in 
-                boundsLocals := VarinfoMap.add vi made !boundsLocals
-          in
-          makeBoundsLocals currentFunctionLocalsToCacheBoundsFor; *) 
+            
+            let locals = List.filter varinfoIsLocal (f.sformals @ f.slocals)
+            in
+            let boundsTsToCreate = List.map (fun vi -> 
+                boundsTForT vi.vtype enclosingFile.globals
+            ) locals
+            in
+            let boundsTemps = List.map (fun (vi, maybe_bt) ->
+                match maybe_bt with
+                    Some(bt) -> Some(
+                        output_string stderr ("Creating bounds for local " ^ 
+                            vi.vname ^ "; bounds have type " ^ (typToString bt) ^ "\n");
+                        Cil.makeTempVar f ~name:("__cil_localbound_" ^ vi.vname ^ "_") bt
+                    )
+                  | None -> None
+            ) (Cilallocs.zip locals boundsTsToCreate)
+            in
             DoChildren
           )
   
@@ -423,7 +754,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             then begin
                                 (* Queue some instructions to write the bounds. *)
                                self#queueInstr [
-                                makeBoundsUpdateInstruction enclosingFile f fetchBoundsInlineFun uniqtypeGlobals lv lvalToBoundsFun !currentInst
+                                makeBoundsFetchInstruction enclosingFile f fetchBoundsInlineFun uniqtypeGlobals lv lvalToBoundsFun !currentInst
                                 ];
                                 is
                             end
@@ -466,12 +797,12 @@ class crunchBoundVisitor = fun enclosingFile ->
              *)
              let offsetList = offsetToList initialOff
              in
-             let rec hoistIndexing ol lhost offsetsOkayWithoutCheck = 
+             let rec hoistIndexing ol lhost offsetsOkayWithoutCheck origHost prevOffsetList = 
                  match ol with 
                      [] -> (lhost, offsetFromList offsetsOkayWithoutCheck)
                    | NoOffset :: rest -> failwith "impossible: NoOffset in offset list"
                    | Field(fi, ign) :: rest -> 
-                         hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Field(fi, ign)])
+                         hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Field(fi, ign)]) lhost (prevOffsetList @ [Field(fi, ign)])
                    | Index(intExp, ign) :: rest -> 
                          let isPossiblyOOB = 
                              (* Try to get a bound *)
@@ -500,21 +831,63 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     (* isPossiblyOOB = *)
                                     isSelectingOnFlexibleArrayMember 
                                         || (not (isStaticallyZero intExp))
-                              | Some(bound) -> match (foldConstants intExp) with
-                                    Const(CInt64(intValue, _, _)) -> 
+                              | Some(bound) -> match constInt64ValueOfExpr intExp with
+                                    Some(intValue) -> 
                                         intValue < (Int64.of_int 0) || intValue >= bound
-                                  | Const(CChr(chrValue)) -> begin
-                                        match charConstToInt chrValue with
-                                            CInt64(intValue, _, _) -> 
-                                                intValue < (Int64.of_int 0)
-                                                 || intValue >= bound
-                                            | _ -> true
-                                        end
-                                  | _ -> true
+                                  | None ->
+                                    (* This means we couldn't simplify the expression
+                                     * to a constant. We really want to dynamically
+                                     * check that `intExp' is within the `bound'. This is
+                                     * simpler than a call to __fetch_bounds because
+                                     * we know exactly where the object was allocated.
+                                     * In fact we *don't* want to invoke __fetch_bounds,
+                                     * because we need to evaluate this simpler check in order
+                                     * to access the locally cached bounds which __fetch_bounds
+                                     * will want. So,
+                                     * 
+                                     *  - if the lvalue we're within is local,
+                                     *    then
+                                     *  - do a simple test on intExp, and 
+                                     *    if it's in bounds, we can proceed
+                                     *    (and retrieve the cached bounds,
+                                     *    if necessary -- e.g. if we can have
+                                     *    an array of non-address-taken local pointers,
+                                     *    and are doing arithmetic on elements of the array,
+                                     *    using indexing expressions that are non-constant.
+                                     *    So we *do* care about this case. 
+                                     *    (We had said: HMM. What about variably-indexed locals?
+                                     *    That's exactly the case we're considering!)
+                                     *
+                                     *    What if the check fails? i.e. we're indexing
+                                     *    a local array by an out-of-bounds amount.
+                                     *    Then we should fail *before* we access the bound.
+                                     *    The "right" failure is to segfault on a trapped
+                                     *    rep of the calculated address.
+                                     *    Perhaps more helpful would be to trap the address
+                                     *    of the local.
+                                     *)
+                                    if hostIsLocal origHost then
+                                        (* Emit a simple check that we're in-bounds.
+                                         * This is sufficient to ensure that 
+                                         * access to the cached bounds locals,
+                                         * even using the variable intExp,
+                                         * is safe. *)
+                                        let checkInstrs = checkInLocalBounds 
+                                            enclosingFile theFunc
+                                            detrapInlineFun checkLocalBoundsInlineFun 
+                                            inlineAssertFun uniqtypeGlobals 
+                                            (* localHost *) origHost
+                                            prevOffsetList
+                                            (* intExp *) intExp
+                                            !currentInst
+                                        in
+                                        self#queueInstr checkInstrs;
+                                        false (* i.e. *not* possibly OOB, once we've checked. *)
+                                    else true
                             in
                             if not isPossiblyOOB then
                                 (* simple recursive call *)
-                                hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(intExp, ign)])
+                                hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(intExp, ign)]) lhost (prevOffsetList @ [Index(intExp, ign)])
                             else 
                                 (* if we started with x[i].rest, 
                                  * make a temporary to hold &x + i, 
@@ -532,10 +905,10 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 in
                                 (
                                     self#queueInstr checkInstrs;
-                                    hoistIndexing rest (Mem(Lval(Var(tempVar), NoOffset))) []
+                                    hoistIndexing rest (Mem(Lval(Var(tempVar), NoOffset))) [] lhost (prevOffsetList @ [Index(intExp, ign)])
                                 )
              in
-             let eventualLval = hoistIndexing offsetList initialHost []
+             let eventualLval = hoistIndexing offsetList initialHost [] initialHost []
              in
              eventualLval
         )
