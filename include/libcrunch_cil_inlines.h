@@ -61,6 +61,35 @@ struct __libcrunch_bounds_s
 	 * mapping number, base, size
 	 * some XOR scheme
 	 */
+	
+	/* Assuming a 2GB maximum object size, 
+	 * the most significant 31 bits of the base will always be shared 
+	 * with the pointer, because
+	 * even a 2GB change will only affect lower bits.
+	 * HMM. Is this true? If my 16-bit base address is 
+	 *
+	 * 0111 1111 1111 1111
+	 * 
+	 * and I increment by one, I get
+	 *
+	 * 1000 0000 0000 0000
+	 * 
+	 * i.e. a one-byte interval means *all* the bits have changed!
+	 * 
+	 * We can still factor the base ptr into
+	 * - a difference in the top bits (small)    (difference from what?
+	             needs to be *invariant* w.r.t. changes to the ptr!)
+	 * - the base as an offset (from the top bits followed by all-zeroes lower bits)
+	 * - the limit as a number in [0, 2GB)     (31 bits)
+	 *
+	 * So, hmm, no, this seems not to work.
+	 * Actually though,
+	 * there *is* an "invariant bounding region" -- it's just not denoted by a 
+	 * specific sequence of address bits. How can we represent it efficiently?
+	 * By its base address? 2GB plus/minus means that a 4GB-aligned address,
+	 * denoting a 4GB region, will include the bounding region.
+	 * HMM. Have I now contradicted what I just wrote?
+	 */
 };
 typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
 
@@ -553,6 +582,12 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(const __libcrunch_bounds_t *in)
 {
 	return in->base == (void*) -1;
+}
+
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(const void *base, const void *limit);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(const void *base, const void *limit)
+{
+	return (__libcrunch_bounds_t) { (void*) base, (void*) limit };
 }
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, struct uniqtype *t);
