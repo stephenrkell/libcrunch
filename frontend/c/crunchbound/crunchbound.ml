@@ -503,7 +503,7 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
                 (* not an Index, so stop now *)
                 (revAccIndexes, List.rev offlist)
           | Index(intExp, ign) :: more -> 
-                splitLeadingIndexesAndReverse (Index(intExp, ign) :: revAccIndexes) offlist
+                splitLeadingIndexesAndReverse (Index(intExp, ign) :: revAccIndexes) more
           | NoOffset :: _ -> failwith "impossible: NoOffset in offset list"
         in
         let splitTrailingIndexes offlist = splitLeadingIndexesAndReverse [] (List.rev offlist)
