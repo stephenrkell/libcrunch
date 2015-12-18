@@ -13,6 +13,10 @@ liballocs_base = os.path.realpath(os.path.dirname(__file__) + "/../../../../liba
 sys.path.append(liballocs_base + "/tools")
 sys.path.append(liballocs_base + "/tools/lang/c/lib")
 from compilerwrapper import CompilerWrapper
+sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../lib"))
+sys.path.append(liballocs_base + "/tools")
+from allocscompilerwrapper import *
+cilly_cmd = liballocs_base + "/tools/lang/c/cil/bin/cilly"
 
 class CrunchACC(CompilerWrapper):
         
@@ -32,9 +36,11 @@ class CrunchACC(CompilerWrapper):
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
             includeArgs = [ \
-            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../../../../liballocs.hg/tools/lang/c/cilallocs/cilallocs.cmxs"), \
-            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimpleaddr/vsimpleaddr.cmxs") \
-                , "--dovsimpleAddr" ]
+            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../../../../liballocs.hg/tools/lang/c/cilallocs/cilallocs.cmxs") \
+            , \
+            ]
+#            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimpleaddr/vsimpleaddr.cmxs") \
+#                , "--dovsimpleAddr" ]
 #            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
@@ -56,7 +62,7 @@ class CrunchACC(CompilerWrapper):
             return outputFilename
 
     def getUnderlyingCompilerCommand(self, sourceFiles):
-        return ["cilly"] + self.getCillyArgs(sourceFiles)
+        return [cilly_cmd] + self.getCillyArgs(sourceFiles)
 
     def main(self):
         # un-export CC from the env if it's set to allocscc, because 
@@ -74,7 +80,7 @@ class CrunchACC(CompilerWrapper):
         passedThroughArgs = sys.argv[1:]
 
         if "DEBUG_CC" in os.environ:
-            verboseArgs = ["--verbose"]
+            verboseArgs = ["--verbose", "--live_debug"]
         else:
             verboseArgs = []
 
