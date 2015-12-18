@@ -51,11 +51,18 @@ let instrLoc (maybeInst : Cil.instr option) =
    Some(i) -> Cil.get_instrLoc i
  | None -> locUnknown
 
-let varinfoIsLocal vi = not vi.vglob && not vi.vaddrof
+let varinfoIsLocal vi currentFuncAddressTakenLocalNames = not vi.vglob && 
+    ( let isAT = (List.mem vi.vname currentFuncAddressTakenLocalNames)
+      in
+        (if isAT then output_string stderr ("Local var " ^ vi.vname ^ " would count as local " ^ 
+        "but is address-taken\n") else ())
+        ;
+        not isAT
+    )
 
-let hostIsLocal lhost = 
+let hostIsLocal lhost currentFuncAddressTakenLocalNames = 
     match lhost with
-        Var(vi) -> varinfoIsLocal vi 
+        Var(vi) -> varinfoIsLocal vi currentFuncAddressTakenLocalNames
           | Mem(_) -> false
 
 let boundsTAsNumber maybeBoundsT gs = 
@@ -194,22 +201,28 @@ let rec boundsTForT (t : Cil.typ) gs =
     maybeBoundsT
 
 let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (host : Cil.lhost) (prevOffsets : Cil.offset) gs = 
+    output_string stderr ("Hello from boundsIndexExprForOffset\n");
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
     in
     let indexExpr = match offs with
         Field(fi, nextOffset) -> 
+            output_string stderr ("Hit Field case\n");
             let compTypeBeingIndexed = Cil.typeOf (Lval(host, prevOffsets))
             in
             let rec addEarlierFields = fun acc -> fun someFis -> (
+                output_string stderr ("In addEarlierFields\n");
                 match someFis with
                     [] -> acc
                   | someFi :: more -> 
-                    if someFi = fi then acc (* terminate early *)
+                    (* HACK: can't use deep equality on fieldinfos, and I'm uneasy 
+                     * about the shallow one. So test name and location. *)
+                    if (someFi.floc = fi.floc && someFi.fname = fi.fname) then acc (* terminate early *)
                     else addEarlierFields (acc @ [someFi]) more
             )
             in
             let earlierFields = addEarlierFields [] fi.fcomp.cfields
             in
+            output_string stderr ("Found " ^ (string_of_int (List.length earlierFields)) ^ "\n");
             (* Add up all the boundsTs for *earlier* fields in the struct. *)
             let fieldOffsetAsBoundsT = List.fold_left 
                 (fun x -> fun y -> boundsTPlusBoundsT x y gs) 
@@ -218,10 +231,12 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
             in
             let fieldOffset = boundsTAsNumber fieldOffsetAsBoundsT gs
             in
+            output_string stderr ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
             boundsIndexExprForOffset
                 (BinOp(PlusA, startIndexExpr, makeIntegerConstant fieldOffset, intType))
                 nextOffset host (offsetAppend prevOffsets (Field(fi, NoOffset))) gs
       | Index(intExp, nextOffset) -> 
+            output_string stderr ("Hit Index case\n");
             (* We're indexing into an array at intExp (which we've already 
              * checked is in bounds).
              *
@@ -236,6 +251,7 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
              *)
             let offsetUpToHere = offsetAppend prevOffsets (Index(intExp, NoOffset))
             in
+            output_string stderr ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
             let zeroIndexExpr = boundsIndexExprForOffset startIndexExpr nextOffset
                 host offsetUpToHere gs
             in
@@ -257,24 +273,27 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
     indexExpr
 
 let boundsLvalForLocalLval (boundsTempsAndVars : (varinfo option * varinfo) list) (gs: Cil.global list) ((lh, loff) : lval) : lval =
+    output_string stderr "Hello from boundsLvalForLocalLval";
     match lh with
         Var(local_vi) -> 
-            let (maybe_found_bvi, _) = try List.find (fun (maybe_bvi, vi) -> vi = local_vi) boundsTempsAndVars
+            output_string stderr "Hello from Var case";
+            let (maybe_found_bvi, _) = try List.find (fun (maybe_bvi, vi) -> vi.vname = local_vi.vname) boundsTempsAndVars
                 with Not_found -> (None, local_vi)
             in
             output_string stderr ("Looking for bounds for " ^ (lvalToString (lh, loff)) ^ 
-                " where local varinfos having bounds are " ^ 
-                (List.fold_left (^) "" 
+                " where local varinfos having bounds are: " ^ 
+                (List.fold_left (fun l -> fun r -> l ^ (if l = "" then "" else ", ") ^ r) "" 
                     (List.map (fun (maybe_vi, orig_vi) -> 
                         match maybe_vi with
-                            Some(vi) -> lvalToString (Var(vi), NoOffset)
-                      | None -> "(gap)"
+                            Some(vi) -> lvalToString (Var(orig_vi), NoOffset)
+                           | None -> "(none for " ^ orig_vi.vname ^ ")"
                     ) boundsTempsAndVars)
-                )
+                ) ^ "\n"
             )
             ;
             let indexExpr = boundsIndexExprForOffset zero loff (Var(local_vi)) NoOffset gs
             in
+            output_string stderr ("Bounds index expr is `" ^ (expToString indexExpr) ^ "'\n");
             begin match maybe_found_bvi with
                 Some(bvi) -> (Var(bvi), 
                     match Cil.typeSig (Cil.typeOf (Lval(Var(bvi), NoOffset))) with
@@ -283,6 +302,7 @@ let boundsLvalForLocalLval (boundsTempsAndVars : (varinfo option * varinfo) list
                             if not (isStaticallyZero indexExpr) then 
                                     failwith "singleton bounds but non-zero bounds expr"
                            else NoOffset
+                      | _ -> failwith "bad bounds var type"
                     )
               | None -> failwith ("no local bounds var for local lvalue: " ^ 
                 (lvalToString (lh, loff)) ^ " of type " ^ (typToString (Cil.typeOf (Lval(lh, loff)))))
@@ -308,6 +328,7 @@ let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLoca
                   | None -> failwith "getting local bound for non-constant-length array"
                 )
           | TNamed(ti, attrs) -> getArrayBound ti.ttype
+          | _ -> failwith "getArrayBound called on something not an array type"
         in
         let bound = getArrayBound (Cil.typeOf (Lval(localHost, offsetFromList prevOffsets)))
         in
@@ -324,6 +345,27 @@ let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLoca
             loc
         )
     ]
+    
+let mightBeTrappedPointer ptrE =
+(* FIXME: want to canonicalise the Lval and AddrOf expressions first,
+ * to avoid *&*&... -style mixups. *)
+match ptrE with
+    (* Just rule out some common definitely-not cases for now. *)
+      (* address-of Vars are fresh from the compiler, so can't be trapped...
+       * address-of Mems might actually be wrapping arbitrary lvals *)
+    | AddrOf(Var(vi), loff) -> false
+    | StartOf(Var(vi), loff) -> false
+      (* handle cast-of-addressof specially*)
+    | CastE(castToT, AddrOf(Var(vi), _)) -> false
+    | CastE(castToT, StartOf(_, _)) -> false
+    | Lval(lhost, loff) -> true
+    | UnOp(op, subE, subT) -> true
+    | BinOp(op, subE1, subE2, subT) -> true
+    | CastE(castToT, castE) -> true
+    | AddrOf(lhost, loff) -> true
+    | StartOf(lhost, loff) -> true
+    | _ -> true
+
 
 let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp ptrBoundsExp lvalToBoundsFun currentInst = 
     (* To avoid leaking bad pointers when writing to a shared location, 
@@ -399,7 +441,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       )
     ])
 
-let makeBoundsFetchInstruction enclosingFile enclosingFunction fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
+let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
     let loc = instrLoc currentInst in
     Call( Some(lvalToBoundsFun justWrittenLval),
             (Lval(Var(fetchBoundsFun.svar),NoOffset)),
@@ -412,13 +454,41 @@ let makeBoundsFetchInstruction enclosingFile enclosingFunction fetchBoundsFun ma
             loc
         )
 
-let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE (lvalToBoundsFun : lval -> lval) currentInst =
+let makeCallToMakeBounds outputLval baseExpr limitExpr loc makeBoundsFun =
+    Call( outputLval,
+            (Lval(Var(makeBoundsFun.svar),NoOffset)),
+            [
+                (*  unsigned long ptr *)
+                baseExpr    (* i..e the *value* of the pointer we just wrote *)
+            ;   (* unsigned long limit *)
+                limitExpr
+            ],
+            loc
+        )
+
+let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE (lvalToBoundsFun : lval -> lval) currentInst =
     let loc = instrLoc currentInst in
     (* Here we do the case analysis: 
      * do we copy bounds, 
      *       make them ourselves, 
      *    or fetch them? *)
-    let doFetch = fun () -> makeBoundsFetchInstruction enclosingFile enclosingFunction fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
+    output_string stderr "Making bounds write instructions...\n";
+    let doFetch = fun () -> (
+        let isNull = isStaticallyNullPtr writtenE
+        in
+        output_string stderr ("Is this pointer statically null? " ^ (if isNull then "true" else "false") ^ "\n");
+        if isNull then (
+            (* Make null bounds *)
+            output_string stderr "Making null bounds\n";
+            makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) zero one loc makeBoundsFun
+        ) else (
+            output_string stderr "Falling back on __fetch_bounds\n";
+            let result = makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
+            in
+            output_string stderr "Made __fetch_bounds call\n";
+            result
+        )
+    )
     in
     let rec offsetContainsField offs = match offs with
             NoOffset -> false
@@ -426,6 +496,7 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun ma
           | Index(intExp, rest) -> offsetContainsField rest
     in
     let handleAddrOfVarOrField someHost someOffset = 
+        output_string stderr "Handling AddrOf(var or field)...\n";
         let rec splitLeadingIndexesAndReverse revAccIndexes offlist = match offlist with
             [] -> (revAccIndexes, [])
           | Field(fi, ign)     :: more -> 
@@ -439,7 +510,9 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun ma
         in
         let (trailingIndexes, leadingOthers) = splitTrailingIndexes (offsetToList someOffset)
         in
-        let indexedExpr = (Lval(someHost, offsetFromList leadingOthers))
+        let indexedLval = (someHost, offsetFromList leadingOthers)
+        in
+        let indexedExpr = Lval(indexedLval)
         in
         let indexedType = Cil.typeOf indexedExpr
         in
@@ -460,21 +533,17 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun ma
         in
         let arrayElementCount = multiplyAccumulateArrayBounds (Int64.of_int 1) indexedType
         in
-        let baseExpr = CastE(charPtrType, indexedExpr)
+        (* NOTE: to avoid introducing pointer arithmetic that we will later redundantly check, 
+         * we instead do our arithmetic in the integer domain. *)
+        let baseExpr = CastE(ulongType, mkAddrOrStartOf indexedLval)
         in
-        let limitExpr = BinOp(PlusPI, baseExpr, makeIntegerConstant arrayElementCount, charPtrType)
+        let limitExpr = BinOp(PlusA, baseExpr, BinOp(
+            Mult, makeIntegerConstant arrayElementCount, (SizeOf(indexedType)), ulongType), 
+            ulongType)
         in
-        Call( Some(lvalToBoundsFun justWrittenLval),
-                (Lval(Var(makeBoundsFun.svar),NoOffset)),
-                [
-                    (* const void *ptr *)
-                    baseExpr    (* i..e the *value* of the pointer we just wrote *)
-                ;   (* const void *limit *)
-                    limitExpr
-                ],
-                loc
-            )
+        makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) baseExpr limitExpr loc makeBoundsFun
     in
+    output_string stderr ("Matching writtenE: " ^ expToString writtenE ^ "\n");
     begin match writtenE with
             (* We only get called if we definitely want to update the bounds for 
              * justWrittenLval.
@@ -485,7 +554,7 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun ma
              * or do we have to call liballocs to fetch them?
              * 
              * We can infer the bounds if... *)
-        Lval(Var(someVi), someOffset) when hostIsLocal (Var(someVi)) -> 
+        Lval(Var(someVi), someOffset) when hostIsLocal (Var(someVi)) currentFuncAddressTakenLocalNames -> 
             (* - we're copying an also-local pointer (perhaps a subobject of a local struct/array)
              *      => copy the bounds *)
             let (sourceBoundsLval : lval) = lvalToBoundsFun (Var(someVi), someOffset)
@@ -535,7 +604,7 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun ma
             (offsetToList someOffset) @ [Index(zero, NoOffset)]
         ))
       | AddrOf(Mem(Lval(Var(lvi), loff)) (* what about nested lvals in here? *), someOffset)
-        when varinfoIsLocal lvi ->
+        when varinfoIsLocal lvi currentFuncAddressTakenLocalNames ->
             (* We're dereferencing a local pointer and then the address of 
              * the object we find there, or a subobject of it. By pattern-match semantics, 
              * someOffset does not contain any Field components... *) 
@@ -555,7 +624,7 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun ma
              * subobject of it, so the bounds are determined by the *type* of the 
              * subobject being selected. *)
       | StartOf(Mem(Lval(Var(lvi), loff)) (* what about nested lvals in here? *), someOffset)
-        when varinfoIsLocal lvi ->
+        when varinfoIsLocal lvi currentFuncAddressTakenLocalNames ->
             (* I don't think this happens, because by definition, *memExp
              * doesn't have array type. *)
             failwith "impossible: at least I thought so (StartOf *memExp)"
@@ -599,8 +668,6 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction fetchBoundsFun ma
  * also. Pointer masks for unbounded-length uniqtypes need some care. *)
 
 
-let varinfoIsLocal vi = (not vi.vglob) && vi.vstorage != Static
-
 (* What do we keep bounds for?
  * Note that not everything that gets indexed/adjusted is a variable.
  *
@@ -643,32 +710,16 @@ let varinfoIsLocal vi = (not vi.vglob) && vi.vstorage != Static
  * at the point where we do the bounds checking?
  * 
  * All non-constant indexing of local non-a-t'n arrays (at any depth) has been transformed
- * into pointer arithmetic.
+ * into a simple check against the locally known bounds.
+ *
+ * All indexing of other arrays and pointers has been transformed into pointer arithmetic.
  * 
- * Hence any indexing of a local non-a-t'n array is passable statically.
- 
- * Can we just say "if a local array is indexed by a non-constant expression,
- * treat it as address-taken, i.e. don't cache bounds"? YES.
- * We handle whether an array index is statically in-bounds later and separately.
- * Therefore we don't have to worry about pulling out a pointer and keeping
- * bounds for that.
- * That *would* be a valid optimisation though -- it would let us cache more bounds.
+ * All constant indexing of a local non-a-t'n array is checked statically (FIXME).
+ * 
+ * This is better than if we just said "if a local array is indexed by a non-constant expression,
+ * treat it as address-taken, i.e. don't cache bounds".
  *)
 
-let rec isWithinArray (loff : offset) : bool = 
-    match loff with
-        NoOffset -> false
-      | Index(_, rest) -> true
-      | Field(fi, rest) -> isWithinArray rest
-
-let isBoundsCacheablePointer (lv : lval) : bool = 
-    begin match lv with
-        (Var(vi), offset) -> varinfoIsLocal vi && isPointerType (Cil.typeOf (Lval(lv)))
-            && (not vi.vaddrof)
-            (* FIXME: exclude only variably-indexed arrays *)
-            && (not (isWithinArray offset))
-      | _ -> false
-    end
 
 (* It's important not to confuse two things here.
  * 
@@ -685,6 +736,25 @@ let isBoundsCacheablePointer (lv : lval) : bool =
  * - don't lift calculations of addresses which are statically 
  * safe.
  *)
+ 
+class addressTakenVisitor = fun seenAddressTakenLocalNames -> object(self) inherit nopCilVisitor
+    method vexpr (e: exp) : exp visitAction = begin
+        match e with
+             AddrOf(Var(vi), _) when not vi.vglob ->
+                seenAddressTakenLocalNames :=
+                    if List.mem vi.vname !seenAddressTakenLocalNames
+                    then !seenAddressTakenLocalNames
+                    else vi.vname :: !seenAddressTakenLocalNames
+                ; DoChildren
+           | StartOf(Var(vi), _) when not vi.vglob -> 
+                seenAddressTakenLocalNames :=
+                    if List.mem vi.vname !seenAddressTakenLocalNames 
+                    then !seenAddressTakenLocalNames
+                    else vi.vname :: !seenAddressTakenLocalNames
+                ; DoChildren
+           | _ -> DoChildren
+    end
+end (* class *)
 
 class crunchBoundVisitor = fun enclosingFile -> 
                                object(self)
@@ -742,8 +812,8 @@ class crunchBoundVisitor = fun enclosingFile ->
     makeBoundsInlineFun <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__make_bounds" (TFun(boundsType, 
                             Some [ 
-                                   ("base", voidConstPtrType, []);
-                                   ("limit", voidConstPtrType, [])
+                                   ("base", ulongType, []);
+                                   ("limit", ulongType, [])
                                  ], 
                             false, []))
     ;
@@ -772,6 +842,8 @@ class crunchBoundVisitor = fun enclosingFile ->
   val currentInst : instr option ref = ref None
   val currentFunc : fundec option ref = ref None
   val currentLval : lval option ref = ref None
+  val currentBlock : block option ref = ref None
+  val currentFuncAddressTakenLocalNames : string list ref = ref []
   
   (* Remember the set of __uniqtype objects for which we've created a global
    * weak extern. *)
@@ -781,11 +853,31 @@ class crunchBoundVisitor = fun enclosingFile ->
   (* val boundsLocals : Cil.varinfo VarinfoMap.t ref = ref VarinfoMap.empty *)
   val mutable currentFunctionBoundsTempsAndVars = []
 
+  method vblock (b: block) : block visitAction = 
+      currentBlock := Some(b);
+      DoChildren
+
   method vfunc (f: fundec) : fundec visitAction = 
       currentFunc := Some(f);
       let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
         with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
       in
+      (output_string stderr ("CIL dump of function `" ^ f.svar.vname ^ "': ");
+       Cil.dumpBlock (new plainCilPrinterClass) stderr 0 f.sbody;
+       output_string stderr "\n");
+      (* Do our own scan for AddrOf and StartOf. 
+       * The CIL one is not trustworthy, because any array subexpression
+       * has internally been tripped via a StartOf (perhaps now rewritten? FIXME)
+       * meaning it contains false positives. *)
+      let tempAddressTakenLocalNames = ref []
+      in
+      let _ = visitCilBlock (new addressTakenVisitor tempAddressTakenLocalNames) f.sbody
+      in
+      output_string stderr ("Address-taken locals in `" ^ f.svar.vname ^ "' : [" ^ (
+        List.fold_left (fun l -> fun r -> l ^ (if l = "" then "" else ", ") ^ r) "" !tempAddressTakenLocalNames
+      ^ "]\n"));
+      currentFuncAddressTakenLocalNames := !tempAddressTakenLocalNames
+      ;
       (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
       let startswith s pref = 
           if (String.length s) >= (String.length pref) 
@@ -837,7 +929,7 @@ class crunchBoundVisitor = fun enclosingFile ->
              in the case where the address doesn't actually escape.
            *)
           (
-            let locals = List.filter varinfoIsLocal (f.sformals @ f.slocals)
+            let locals = List.filter (fun v -> varinfoIsLocal v !currentFuncAddressTakenLocalNames) (f.sformals @ f.slocals)
             in
             let boundsTsToCreate = List.map (fun vi -> 
                 boundsTForT vi.vtype enclosingFile.globals
@@ -869,7 +961,7 @@ class crunchBoundVisitor = fun enclosingFile ->
             INITIALIZATION OF A LOCAL WITH-BOUNDS POINTER MUST INITIALIZE ITS BOUNDS.
             If we're initializing from something non-local, 
             for an initial load from the heap, say, 
-            we use an invalid bounds value.
+            we use an invalid bounds value. (FIXME: do this laziness optimisation.)
             But if we're taking the address of a local array,
             we should write its bounds precisely and immediately.
             If we're taking the address of a field within some object, 
@@ -884,7 +976,7 @@ class crunchBoundVisitor = fun enclosingFile ->
             Set((lhost, loff), e, l) ->
                 let instrsToQueue =
                     (* We might be writing a non-void pointer on the lhs. 
-                     *      If we're have bounds for that pointer, we need to write some bounds.
+                     *      If we're keeping bounds for that pointer, we need to write some bounds.
                      *      Sometimes we have to fetch those bounds;
                      *      Sometimes we can copy them;
                      *      Sometimes we can *create* them 
@@ -892,15 +984,29 @@ class crunchBoundVisitor = fun enclosingFile ->
                      *          -- if it's selecting a subobject from a variable
                      *          -- if it's selecting a subobject via a pointer we have bounds for.
                      *)
-                    if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff))) && 
-                        hostIsLocal lhost
-                    then
-                        (* Queue some instructions to write the bounds. *)
-                        [makeBoundsWriteInstruction enclosingFile f fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e lvalToBoundsFun !currentInst]
+                    if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
+                    then (
+                        output_string stderr ("Saw write to a non-void pointer lval: " ^ (
+                            lvalToString (lhost, loff)
+                        ) ^ "\n")
+                        ;
+                        if hostIsLocal lhost !currentFuncAddressTakenLocalNames
+                        then (
+                            (* Queue some instructions to write the bounds. *)
+                            output_string stderr "Local, so updating its bounds.\n"
+                            ;
+                            [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e lvalToBoundsFun !currentInst]
+                            )
+                        else (
+                            output_string stderr "Host is not local\n";
+                            []
+                        )
+                    )
                     else []
                 in begin
+                output_string stderr "Queueing some instructions\n";
                 instrsToQueue @ [outerI]
-            end
+                end
           | Call(olv, e, es, l) -> begin
                 (* We might be writing a pointer. 
                  * Since, if so, the pointer has come from a function call, we don't know
@@ -910,15 +1016,26 @@ class crunchBoundVisitor = fun enclosingFile ->
                     match olv with
                         None -> [outerI]
                       | Some(lhost, loff) -> 
-                        if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
-                                && hostIsLocal lhost
+                        if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff))) then (
+                            output_string stderr ("Saw call writing to a non-void pointer lval: " ^ (
+                                lvalToString (lhost, loff)
+                            ) ^ "\n")
+                            ;
+                            if hostIsLocal lhost !currentFuncAddressTakenLocalNames
                             then begin
+                                output_string stderr "Local, so updating its bounds.\n"
+                                ;
                                 (* Queue some instructions to write the bounds. *)
                                [
-                                makeBoundsFetchInstruction enclosingFile f fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) lvalToBoundsFun !currentInst
+                                makeBoundsFetchInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) lvalToBoundsFun !currentInst
                                 ] @ [outerI]
                             end
-                            else [outerI]
+                            else (
+                                output_string stderr "Host is not local\n";
+                                [outerI]
+                            )
+                        )
+                        else [outerI]
                         
             end
           | (* Asm(attrs, instrs, locs, u, v, l) -> *) _ -> [outerI]
@@ -1030,7 +1147,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                      *    Perhaps more helpful would be to trap the address
                                      *    of the local.
                                      *)
-                                    if hostIsLocal origHost then
+                                    if hostIsLocal origHost !currentFuncAddressTakenLocalNames then
                                         (* Emit a simple check that we're in-bounds.
                                          * This is sufficient to ensure that 
                                          * access to the cached bounds locals,
@@ -1087,79 +1204,88 @@ class crunchBoundVisitor = fun enclosingFile ->
           (* When we get here, indexing in lvalues has been rewritten. 
            * Also, we've run on any expressions nested within those lvalues.
            * First, de-trap pointers that are differenced. *)
-          if match e with
-                BinOp(MinusPP, _, _, t) -> true
-              | _ -> false
-          then
-            (* When differencing pointers of distinct type, what type denominates? *)
-            let unifyPointerTargetTypes pt1 pt2 = 
-                match (pt1, pt2) with
-                    (TPtr(t1, _), TPtr(t2, _)) when t1 = t2 -> t1
-                  | (TPtr(TVoid(_), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
-                  | (TPtr(TVoid(_), _), TPtr(TInt(IUChar, _), _)) -> TInt(IUChar, [])
-                  | (TPtr(TVoid(_), _), TPtr(TInt(ISChar, _), _)) -> TInt(ISChar, [])
-                  | (TPtr(TInt(IChar, _), _),  TPtr(TVoid(_), _)) -> TInt(IChar, [])
-                  | (TPtr(TInt(IUChar, _), _), TPtr(TVoid(_), _)) -> TInt(IUChar, [])
-                  | (TPtr(TInt(ISChar, _), _), TPtr(TVoid(_), _)) -> TInt(ISChar, [])
-                  | (TPtr(TInt(IChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
-                  | (TPtr(TInt(IChar, _), _),  TPtr(TInt(IUChar, _), _)) -> TInt(IChar, [])
-                  | (TPtr(TInt(ISChar, _), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
-                  | (TPtr(TInt(ISChar, _), _),  TPtr(TInt(IUChar, _), _)) -> TInt(IChar, [])
-                  | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
-                  | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
-                  | (_, _) -> failwith "impossible: differencing non-unifiable pointer types"
-            in
-            (* De-trap both pointer expressions. *)
-            match e with BinOp(MinusPP, ptrExpLeft, ptrExpRight, t) -> 
-                    let tmpVarL = Cil.makeTempVar f ~name:"__cil_detrapL_" ulongType in
-                    let tmpVarR = Cil.makeTempVar f ~name:"__cil_detrapR_" ulongType in
-                    self#queueInstr [
-                        Call( Some(Var(tmpVarL), NoOffset), 
-                              Lval(Var(detrapInlineFun.svar), NoOffset), 
-                              [ ptrExpLeft ],
-                              instrLoc !currentInst
-                        );
-                        Call( Some(Var(tmpVarR), NoOffset), 
-                              Lval(Var(detrapInlineFun.svar), NoOffset),
-                              [ ptrExpRight ],
-                              instrLoc !currentInst
-                        );
-                    ];
-                    BinOp(Div, BinOp(MinusA, Lval(Var(tmpVarL), NoOffset), Lval(Var(tmpVarR), NoOffset), ulongType), 
-                        SizeOf (unifyPointerTargetTypes (Cil.typeOf ptrExpLeft) (Cil.typeOf ptrExpRight)),
-                        (* ptrdiff_t *) longType)
-            | _ -> failwith "impossible"
-          else if match e with
-                   CastE(t, subex) -> true
-                 | _ -> false
-                then match e with 
-                CastE(t, subex) ->
-                  let subexTs = getConcreteType(Cil.typeSig(Cil.typeOf(subex)))
-                  in 
-                  let targetTs = getConcreteType(Cil.typeSig(t))
-                  in
-                  if (tsIsPointer subexTs) && (not (tsIsPointer targetTs))
-                    (* Making an integer from a pointer: need to de-trap.
-                     * Go via a helper -- also handy for tracing this?
-                     * ACTUALLY will make life more difficult for tracing
-                     * escape of pointerness, but do it anyway. *)
-                    then 
-                        let tmpVar = Cil.makeTempVar ~name:"__cil_detrap_" f ulongType in
+          match e with
+              BinOp(MinusPP, e1, e2, t) when mightBeTrappedPointer e1 || mightBeTrappedPointer e2 ->
+                let e1MightBeTrapped = mightBeTrappedPointer e1
+                in
+                let e2MightBeTrapped = mightBeTrappedPointer e2
+                in
+                (* When differencing pointers of distinct type, what type denominates? *)
+                let unifyPointerTargetTypes pt1 pt2 = 
+                    match (pt1, pt2) with
+                        (TPtr(t1, _), TPtr(t2, _)) when t1 = t2 -> t1
+                      | (TPtr(TVoid(_), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
+                      | (TPtr(TVoid(_), _), TPtr(TInt(IUChar, _), _)) -> TInt(IUChar, [])
+                      | (TPtr(TVoid(_), _), TPtr(TInt(ISChar, _), _)) -> TInt(ISChar, [])
+                      | (TPtr(TInt(IChar, _), _),  TPtr(TVoid(_), _)) -> TInt(IChar, [])
+                      | (TPtr(TInt(IUChar, _), _), TPtr(TVoid(_), _)) -> TInt(IUChar, [])
+                      | (TPtr(TInt(ISChar, _), _), TPtr(TVoid(_), _)) -> TInt(ISChar, [])
+                      | (TPtr(TInt(IChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
+                      | (TPtr(TInt(IChar, _), _),  TPtr(TInt(IUChar, _), _)) -> TInt(IChar, [])
+                      | (TPtr(TInt(ISChar, _), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
+                      | (TPtr(TInt(ISChar, _), _),  TPtr(TInt(IUChar, _), _)) -> TInt(IChar, [])
+                      | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
+                      | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
+                      | (_, _) -> failwith "impossible: differencing non-unifiable pointer types"
+                in
+                (* De-trap both pointer expressions, if necessary. *)
+                let e1ToUse = 
+                    if not e1MightBeTrapped then e1
+                    else (
+                        let tmpVarL = Cil.makeTempVar f ~name:"__cil_detrapL_" ulongType in
                         self#queueInstr [
-                            Call( Some(Var(tmpVar), NoOffset), 
+                            Call( Some(Var(tmpVarL), NoOffset), 
                                   Lval(Var(detrapInlineFun.svar), NoOffset), 
-                                  [ subex ],
+                                  [ e1 ],
                                   instrLoc !currentInst
                             )
-                        ]
-                        ;
-                        CastE(t, Lval(Var(tmpVar), NoOffset))
-                    else e
-              | _ -> failwith "impossible 2"
+                        ];
+                        Lval(Var(tmpVarL), NoOffset)
+                    )
+                in
+                let e2ToUse = 
+                    if not e2MightBeTrapped then e2
+                    else (
+                        let tmpVarR = Cil.makeTempVar f ~name:"__cil_detrapR_" ulongType in
+                        self#queueInstr [Call( Some(Var(tmpVarR), NoOffset), 
+                                  Lval(Var(detrapInlineFun.svar), NoOffset),
+                                  [ e2 ],
+                                  instrLoc !currentInst
+                            );
+                        ];
+                        Lval(Var(tmpVarR), NoOffset)
+                    )
+                in
+                BinOp(Div, BinOp(MinusA, e1ToUse, e2ToUse, ulongType), 
+                    SizeOf (unifyPointerTargetTypes (Cil.typeOf e1) (Cil.typeOf e2)),
+                    (* ptrdiff_t *) longType)
+          | CastE(t, subex) -> 
+              let subexTs = getConcreteType(Cil.typeSig(Cil.typeOf(subex)))
+              in 
+              let targetTs = getConcreteType(Cil.typeSig(t))
+              in
+              if (tsIsPointer subexTs) && (not (tsIsPointer targetTs)) 
+                && (mightBeTrappedPointer subex)
+                (* Making an integer from a pointer: need to de-trap.
+                 * Go via a helper -- also handy for tracing this?
+                 * ACTUALLY will make life more difficult for tracing
+                 * escape of pointerness, but do it anyway. *)
+                then
+                let tmpVar = Cil.makeTempVar ~name:"__cil_detrap_" f ulongType in
+                    self#queueInstr [
+                        Call( Some(Var(tmpVar), NoOffset), 
+                              Lval(Var(detrapInlineFun.svar), NoOffset), 
+                              [ subex ],
+                              instrLoc !currentInst
+                        )
+                    ]
+                    ;
+                    CastE(t, Lval(Var(tmpVar), NoOffset))
+                else e
           (* Now we just need to handle pointer arithmetic. 
            * We let it stand if we're at top level; otherwise we hoist it
            * to another temporary. *)
-          else let maybeAdjustment = begin match e with
+        | _ -> (let maybeAdjustment = begin match e with
               |  BinOp(PlusPI, ptrExp, intExp, t) -> Some(ptrExp, intExp)
               |  BinOp(IndexPI, ptrExp, intExp, t) -> Some(ptrExp, intExp)
               |  BinOp(MinusPI, ptrExp, intExp, t) -> Some(ptrExp, UnOp(Neg, intExp, Cil.typeOf intExp))
@@ -1197,6 +1323,7 @@ class crunchBoundVisitor = fun enclosingFile ->
             AddrOf((Mem(ptrExp), NoOffset)) -> ptrExp
           | _ -> fixedE
           *)
+    ) (* end ChangeDoChildrenPost *)
 end
 
 (* Things I've punted on: 

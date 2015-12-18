@@ -584,8 +584,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_
 	return in->base == (void*) -1;
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(const void *base, const void *limit);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(const void *base, const void *limit)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit)
 {
 	return (__libcrunch_bounds_t) { (void*) base, (void*) limit };
 }
