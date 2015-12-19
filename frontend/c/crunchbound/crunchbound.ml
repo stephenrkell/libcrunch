@@ -572,16 +572,16 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
                           | None -> failwith "getting array bounds for non-constant array bounds"
                 end
               | TNamed(ti, attrs) -> multiplyAccumulateArrayBounds acc ti.ttype
-              | _ -> acc
+              | _ -> (acc, t)
         in
-        let arrayElementCount = multiplyAccumulateArrayBounds (Int64.of_int 1) indexedType
+        let (arrayElementCount, arrayElementT) = multiplyAccumulateArrayBounds (Int64.of_int 1) indexedType
         in
         (* NOTE: to avoid introducing pointer arithmetic that we will later redundantly check, 
          * we instead do our arithmetic in the integer domain. *)
         let baseExpr = CastE(ulongType, mkAddrOrStartOf indexedLval)
         in
         let limitExpr = BinOp(PlusA, baseExpr, BinOp(
-            Mult, makeIntegerConstant arrayElementCount, (SizeOf(indexedType)), ulongType), 
+            Mult, makeIntegerConstant arrayElementCount, (SizeOf(arrayElementT)), ulongType), 
             ulongType)
         in
         makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) baseExpr limitExpr loc makeBoundsFun
@@ -600,6 +600,21 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
         Lval(Var(someVi), someOffset) when hostIsLocal (Var(someVi)) currentFuncAddressTakenLocalNames -> 
             (* - we're copying an also-local pointer (perhaps a subobject of a local struct/array)
              *      => copy the bounds *)
+            let (sourceBoundsLval : lval) = lvalToBoundsFun (Var(someVi), someOffset)
+            in
+            let destBoundsLval = lvalToBoundsFun justWrittenLval
+            in
+            Set(destBoundsLval, Lval(sourceBoundsLval), loc)
+      | BinOp(PlusPI, Lval(Var(someVi), someOffset), someIntExp, somePtrT) 
+        when hostIsLocal (Var(someVi)) currentFuncAddressTakenLocalNames ->
+            (* This is a simple adjustment of a locally cached-bounds ptr, 
+             * rather than a straight copy. 
+             * 
+             * By construction, we've just checked the adjustment. If it wasn't
+             * legit, we created a trapped pointer.
+             * 
+             * Either way, the bounds of the adjusted pointer are always identical 
+             * to the bounds of the pre-adjusted pointer. So just copy them. *)
             let (sourceBoundsLval : lval) = lvalToBoundsFun (Var(someVi), someOffset)
             in
             let destBoundsLval = lvalToBoundsFun justWrittenLval
@@ -1275,9 +1290,11 @@ class crunchBoundVisitor = fun enclosingFile ->
                       | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
                       | (_, _) -> failwith "impossible: differencing non-unifiable pointer types"
                 in
-                (* De-trap both pointer expressions, if necessary. *)
+                (* De-trap both pointer expressions, if necessary. 
+                 * If it's not necessary to detrap them, we just cast them to ulongType,
+                 * because we do the arithmetic in the integer domain. *)
                 let e1ToUse = 
-                    if not e1MightBeTrapped then e1
+                    if not e1MightBeTrapped then CastE(ulongType, e1)
                     else (
                         let tmpVarL = Cil.makeTempVar f ~name:"__cil_detrapL_" ulongType in
                         self#queueInstr [
@@ -1291,7 +1308,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     )
                 in
                 let e2ToUse = 
-                    if not e2MightBeTrapped then e2
+                    if not e2MightBeTrapped then CastE(ulongType, e2)
                     else (
                         let tmpVarR = Cil.makeTempVar f ~name:"__cil_detrapR_" ulongType in
                         self#queueInstr [Call( Some(Var(tmpVarR), NoOffset), 
