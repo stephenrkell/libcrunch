@@ -367,14 +367,52 @@ match ptrE with
     | _ -> true
 
 
-let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp ptrBoundsExp lvalToBoundsFun currentInst = 
+let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
      * then copy from the temporary to the actual target. *)
     let loc = instrLoc currentInst in
     let exprTmpVar = Cil.makeTempVar ~name:"__cil_adjexpr_" enclosingFunction (typeOf ptrExp) in
     let checkTmpVar = Cil.makeTempVar ~name:"__cil_adjcheck_" enclosingFunction intType in 
-    (exprTmpVar, [
+    let rec simplifyPtrExprs someE = (
+      (* Try to see through AddrOf and Mems to get down to a local lval if possible. 
+       * Here we are applying the equivalences from the CIL documentation.
+       * We first simplify any nested pointer expressions
+       * (which may nest inside *non*-pointer expressions!)
+       * then simplify the whole. This is necessary to, say, turn
+       * "*&*&*&*&p" into "p". *)
+      let rec simplifyOffset offs = match offs with
+          NoOffset -> NoOffset
+        | Field(fi, rest) -> Field(fi, simplifyOffset rest)
+        | Index(intExp, rest) -> Index(simplifyPtrExprs intExp, simplifyOffset rest)
+      in
+      let withSubExprsSimplified = match someE with
+        |Lval(Var(vi), offs) -> Lval(Var(vi), simplifyOffset offs)
+        |Lval(Mem(subE), offs) -> Lval(Mem(simplifyPtrExprs subE), simplifyOffset offs)
+        |UnOp(op, subE, subT) -> UnOp(op, simplifyPtrExprs subE, subT)
+        |BinOp(op, subE1, subE2, subT) -> BinOp(op, simplifyPtrExprs subE1, simplifyPtrExprs subE2, subT)
+        |CastE(subT, subE) -> CastE(subT, simplifyPtrExprs subE)
+        |AddrOf(Var(vi), offs) -> AddrOf(Var(vi), simplifyOffset offs)
+        |AddrOf(Mem(subE), offs) -> AddrOf(Mem(simplifyPtrExprs subE), simplifyOffset offs)
+        |StartOf(Var(vi), offs) -> StartOf(Var(vi), simplifyOffset offs)
+        |StartOf(Mem(subE), offs) -> StartOf(Mem(simplifyPtrExprs subE), offs)
+        |_ -> someE
+      in
+      match withSubExprsSimplified with
+         (* e.g.  (&p->foo)->bar           is   p->foo.bar      *)
+         Lval(Mem(AddrOf(Mem a, aoff)), off) -> Lval(Mem a, offsetFromList((offsetToList aoff) @ (offsetToList off)))
+         (* e.g.  (&v.baz)->bum            is   v.baz.bum       *)
+       | Lval(Mem(AddrOf(Var v, aoff)), off) -> Lval(Var v, offsetFromList((offsetToList aoff) @ (offsetToList off)))
+         (* e.g.  &*p                      is   p               *)
+       | AddrOf (Mem a, NoOffset)            -> a
+         (* note that 
+                  &p->f   (i.e. with some offset)  cannot be simplified          *)
+       | _ -> withSubExprsSimplified
+    )
+    in
+    let simplifiedPtrExp = simplifyPtrExprs ptrExp
+    in    
+      (exprTmpVar, [
         (* Recall the form of a check for p = q + 1: 
          * 
          * temp = e;
@@ -414,7 +452,12 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
               ptrExp
             ;
               (* __libcrunch_bounds_t *opt_derivedfrom_bounds *)
-              ptrBoundsExp
+              (
+                match simplifiedPtrExp with
+                    Lval(lh, loff) when hostIsLocal lh currentFuncAddressTakenLocalNames -> 
+                        mkAddrOf (lvalToBoundsFun (lh, loff))
+                  | _ -> nullPtr
+              )
               (* struct uniqtype *t *)  (* the pointed-*TO* type of the pointer *)
             ; let pointeeUniqtypeVar = 
                 let pointeeTs = match (exprConcreteType ptrExp) with
@@ -1175,13 +1218,17 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  * check that,
                                  * then recurse
                                  * with current lvalue *(temp).rest *)
+                                let lvalToBoundsFun = boundsLvalForLocalLval currentFunctionBoundsTempsAndVars enclosingFile.globals
+                                in
+                                let ptrExp =  (Cil.mkAddrOrStartOf (lhost, offsetFromList offsetsOkayWithoutCheck))
+                                in
                                 let (tempVar, checkInstrs) = hoistAndCheckAdjustment 
                                     enclosingFile theFunc
                                     checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
-                                    (* ptrExp *) (Cil.mkAddrOrStartOf (lhost, offsetFromList offsetsOkayWithoutCheck))
+                                    ptrExp
                                     (* intExp *) intExp
-                                    (* ptrBoundsExp *) nullPtr
-                                    (* lvalToBoundsFun *) (boundsLvalForLocalLval currentFunctionBoundsTempsAndVars enclosingFile.globals)
+                                    (* lvalToBoundsFun *) lvalToBoundsFun
+                                    !currentFuncAddressTakenLocalNames
                                     !currentInst
                                 in
                                 (
@@ -1307,8 +1354,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
-                                    (* ptrBoundsExp *) nullPtr
                                     (* lvalToBoundsFun *) (boundsLvalForLocalLval currentFunctionBoundsTempsAndVars enclosingFile.globals)
+                                    !currentFuncAddressTakenLocalNames
                                     !currentInst
                     in
                     (
