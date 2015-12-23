@@ -426,7 +426,41 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
     in
     let simplifiedPtrExp = simplifyPtrExprs ptrExp
     in    
-      (exprTmpVar, [
+    (* Since exprTmpVar is a non-address-taken local pointer, we might want it to have 
+     * local bounds. Only create them if we don't have to fetch them (i.e. to propagate
+     * local bounds info that we already have, not to early grab bounds info for expressions
+     * that we don't have bounds for). *)
+    let haveLocalBoundsForAdjustedExpr = match simplifiedPtrExp with
+        Lval(lh, loff) when hostIsLocal lh currentFuncAddressTakenLocalNames -> true
+      | _ -> false
+    in
+    let maybeExprTmpBoundsVar = if haveLocalBoundsForAdjustedExpr
+        then Some(match lvalToBoundsFun (Var(exprTmpVar), NoOffset) with
+            (Var(bvi), NoOffset) -> bvi
+          | lv -> failwith ("unexpected lval: " ^ (lvalToString lv)))
+        else None
+    in
+      (exprTmpVar, 
+            (* if we just created local bounds for the temporary, initialise them *)
+            (
+                if haveLocalBoundsForAdjustedExpr
+                then 
+                    let tempBoundsLocal = begin match maybeExprTmpBoundsVar with
+                        Some(bvi) -> bvi
+                      | None -> failwith "no local bounds when we should have them"
+                    end
+                    in 
+                    let derivedFromBounds = begin match simplifiedPtrExp with
+                        Lval(lh, loff) when hostIsLocal lh currentFuncAddressTakenLocalNames -> 
+                            Lval(lvalToBoundsFun (lh, loff))
+                      | _ -> failwith "no derived-from bounds when we should have them"
+                    end 
+                    in
+                    [Set( (Var(tempBoundsLocal), NoOffset), derivedFromBounds, loc )]
+                else []
+            )
+            @
+            [
         (* Recall the form of a check for p = q + 1: 
          * 
          * temp = e;
