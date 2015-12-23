@@ -322,229 +322,6 @@ let boundsLvalForLocalLval (boundsLocals : Cil.varinfo VarinfoMap.t ref) enclosi
             in
             (Var(boundsVi), offs)
         | _ -> failwith "local lvalue not a Var"
-
-let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun inlineAssertFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
-    output_string stderr ("Making local bounds check for indexing expression " ^ 
-        (expToString (Lval(localHost, offsetFromList prevOffsets))) ^ 
-        " by index expression " ^ (expToString (intExp)) ^ "\n");
-    (* To avoid leaking bad pointers when writing to a shared location, 
-     * we make the assignment to a temporary, then check the temporary,
-     * then copy from the temporary to the actual target. *)
-    let loc = instrLoc currentInst in
-    (* What's the bound of the local? *)
-    [
-        (* Test the intExp against the bound *)
-        let rec getArrayBound t = match t with
-          | TArray(at, None, attrs) -> failwith "asked local bound for unbounded array type"
-          | TArray(at, Some(boundExpr), attrs) -> 
-                (match constInt64ValueOfExpr boundExpr with
-                    Some n -> n
-                  | None -> failwith "getting local bound for non-constant-length array"
-                )
-          | TNamed(ti, attrs) -> getArrayBound ti.ttype
-          | _ -> failwith "getArrayBound called on something not an array type"
-        in
-        let bound = getArrayBound (Cil.typeOf (Lval(localHost, offsetFromList prevOffsets)))
-        in
-        (* If we're trying to go out-of-bounds, do what? Rather than faff with CIL
-         * blocks/statements, just call an inline function. *)
-        Call( None,
-            (Lval(Var(checkLocalBoundsInlineFun.svar),NoOffset)),
-            [
-              (* index *)
-              intExp;
-              (* limit *)
-              Const(CInt64(bound, IInt, None))
-            ],
-            loc
-        )
-    ]
-    
-let mightBeTrappedPointer ptrE =
-(* FIXME: want to canonicalise the Lval and AddrOf expressions first,
- * to avoid *&*&... -style mixups. *)
-match ptrE with
-    (* Just rule out some common definitely-not cases for now. *)
-      (* address-of Vars are fresh from the compiler, so can't be trapped...
-       * address-of Mems might actually be wrapping arbitrary lvals *)
-    | AddrOf(Var(vi), loff) -> false
-    | StartOf(Var(vi), loff) -> false
-      (* handle cast-of-addressof specially*)
-    | CastE(castToT, AddrOf(Var(vi), _)) -> false
-    | CastE(castToT, StartOf(_, _)) -> false
-    | Lval(lhost, loff) -> true
-    | UnOp(op, subE, subT) -> true
-    | BinOp(op, subE1, subE2, subT) -> true
-    | CastE(castToT, castE) -> true
-    | AddrOf(lhost, loff) -> true
-    | StartOf(lhost, loff) -> true
-    | _ -> true
-
-
-let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
-    (* To avoid leaking bad pointers when writing to a shared location, 
-     * we make the assignment to a temporary, then check the temporary,
-     * then copy from the temporary to the actual target. *)
-    let loc = instrLoc currentInst in
-    let exprTmpVar = Cil.makeTempVar ~name:"__cil_adjexpr_" enclosingFunction (typeOf ptrExp) in
-    let checkTmpVar = Cil.makeTempVar ~name:"__cil_adjcheck_" enclosingFunction intType in 
-    let rec simplifyPtrExprs someE = (
-      (* Try to see through AddrOf and Mems to get down to a local lval if possible. 
-       * Here we are applying the equivalences from the CIL documentation.
-       * We first simplify any nested pointer expressions
-       * (which may nest inside *non*-pointer expressions!)
-       * then simplify the whole. This is necessary to, say, turn
-       * "*&*&*&*&p" into "p". *)
-      let rec simplifyOffset offs = match offs with
-          NoOffset -> NoOffset
-        | Field(fi, rest) -> Field(fi, simplifyOffset rest)
-        | Index(intExp, rest) -> Index(simplifyPtrExprs intExp, simplifyOffset rest)
-      in
-      let withSubExprsSimplified = match someE with
-        |Lval(Var(vi), offs) -> Lval(Var(vi), simplifyOffset offs)
-        |Lval(Mem(subE), offs) -> Lval(Mem(simplifyPtrExprs subE), simplifyOffset offs)
-        |UnOp(op, subE, subT) -> UnOp(op, simplifyPtrExprs subE, subT)
-        |BinOp(op, subE1, subE2, subT) -> BinOp(op, simplifyPtrExprs subE1, simplifyPtrExprs subE2, subT)
-        |CastE(subT, subE) -> CastE(subT, simplifyPtrExprs subE)
-        |AddrOf(Var(vi), offs) -> AddrOf(Var(vi), simplifyOffset offs)
-        |AddrOf(Mem(subE), offs) -> AddrOf(Mem(simplifyPtrExprs subE), simplifyOffset offs)
-        |StartOf(Var(vi), offs) -> StartOf(Var(vi), simplifyOffset offs)
-        |StartOf(Mem(subE), offs) -> StartOf(Mem(simplifyPtrExprs subE), offs)
-        |_ -> someE
-      in
-      match withSubExprsSimplified with
-         (* e.g.  (&p->foo)->bar           is   p->foo.bar      *)
-         Lval(Mem(AddrOf(Mem a, aoff)), off) -> Lval(Mem a, offsetFromList((offsetToList aoff) @ (offsetToList off)))
-         (* e.g.  (&v.baz)->bum            is   v.baz.bum       *)
-       | Lval(Mem(AddrOf(Var v, aoff)), off) -> Lval(Var v, offsetFromList((offsetToList aoff) @ (offsetToList off)))
-         (* e.g.  &*p                      is   p               *)
-       | AddrOf (Mem a, NoOffset)            -> a
-         (* note that 
-                  &p->f   (i.e. with some offset)  cannot be simplified          *)
-       | _ -> withSubExprsSimplified
-    )
-    in
-    let simplifiedPtrExp = simplifyPtrExprs ptrExp
-    in    
-    (* Since exprTmpVar is a non-address-taken local pointer, we might want it to have 
-     * local bounds. Only create them if we don't have to fetch them (i.e. to propagate
-     * local bounds info that we already have, not to early grab bounds info for expressions
-     * that we don't have bounds for). *)
-    let haveLocalBoundsForAdjustedExpr = match simplifiedPtrExp with
-        Lval(lh, loff) when hostIsLocal lh currentFuncAddressTakenLocalNames -> true
-      | _ -> false
-    in
-    let maybeExprTmpBoundsVar = if haveLocalBoundsForAdjustedExpr
-        then Some(match lvalToBoundsFun (Var(exprTmpVar), NoOffset) with
-            (Var(bvi), NoOffset) -> bvi
-          | lv -> failwith ("unexpected lval: " ^ (lvalToString lv)))
-        else None
-    in
-      (exprTmpVar, 
-            (* if we just created local bounds for the temporary, initialise them *)
-            (
-                if haveLocalBoundsForAdjustedExpr
-                then 
-                    let tempBoundsLocal = begin match maybeExprTmpBoundsVar with
-                        Some(bvi) -> bvi
-                      | None -> failwith "no local bounds when we should have them"
-                    end
-                    in 
-                    let derivedFromBounds = begin match simplifiedPtrExp with
-                        Lval(lh, loff) when hostIsLocal lh currentFuncAddressTakenLocalNames -> 
-                            Lval(lvalToBoundsFun (lh, loff))
-                      | _ -> failwith "no derived-from bounds when we should have them"
-                    end 
-                    in
-                    [Set( (Var(tempBoundsLocal), NoOffset), derivedFromBounds, loc )]
-                else []
-            )
-            @
-            [
-        (* Recall the form of a check for p = q + 1: 
-         * 
-         * temp = e;
-         * // check new pointer value against adjusted pointer
-         * result = __check_derive_ptr(q+1, q, t, &temp, &p_bounds, &q_bounds); 
-         * /* does: p_bounds = q_bounds; */    // p now points into the same object as q
-         * /* does: substitute trap value on output */  // output may go out of bounds
-         * /* does: rewrite trap value on input */  // adjustment may bring trap value back *in* bounds
-         * assert(check);
-         * p = temp;
-         * 
-         * We want the common case, where a pointer is incremented in a loop
-         * within the same object,
-         * to result in only a single check remaining in the optimised output.
-         * Will this work?
-         * We will make a bounds variable for the local pointer; the pointer is "locally fat".
-         * On each increment, its bounds will be unchanged. Will the compiler be able to see this?
-         * p = p + 1
-         * will do
-         * p_bounds = p_bounds
-         * so yes, I think so.
-         * BUT the loop might not be bounded! Even dynamically, on entry!
-         * So a check inside the loop will remain... HMM. BUT ONLY against p_bounds!
-         * There is no metadata query in the loop body.
-         * Worth reading Moessenboeck's bounds checking optimisation at this point.
-         *)
-      (* first enqueue an assignment of the whole expression to exprTmpVar *)
-      Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
-      (* next enqueue the check call *)
-      Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
-            (Lval(Var(checkDerivePtrInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
-            [ 
-              (* const void **p_derived *)
-              CastE( voidPtrPtrType, mkAddrOf (Var(exprTmpVar), NoOffset))
-            ;
-              (* const void *derivedfrom *)
-              ptrExp
-            ;
-              (* __libcrunch_bounds_t *opt_derivedfrom_bounds *)
-              (
-                match simplifiedPtrExp with
-                    Lval(lh, loff) when hostIsLocal lh currentFuncAddressTakenLocalNames -> 
-                        mkAddrOf (lvalToBoundsFun (lh, loff))
-                  | _ -> nullPtr
-              )
-              (* struct uniqtype *t *)  (* the pointed-*TO* type of the pointer *)
-            ; let pointeeUniqtypeVar = 
-                let pointeeTs = match (exprConcreteType ptrExp) with
-                        TSPtr(ts, _) -> ts
-                      | _ -> failwith "recipient is not a pointer"
-                 in ensureUniqtypeGlobal pointeeTs enclosingFile uniqtypeGlobals
-              in
-              mkAddrOf (Var(pointeeUniqtypeVar), NoOffset)
-            ],
-            loc
-      );
-      (* then enqueue the assertion about its result *)
-      Call( None,
-            (Lval(Var(inlineAssertFun.svar),NoOffset)),
-            [
-              (* arg is the check result *)
-              Lval(Var(checkTmpVar), NoOffset);
-              Const(CStr("__check_derive_ptr(" ^ exprTmpVar.vname ^ ", " ^ "" ^ ")"));
-              Const(CStr( loc.file ));
-              Const(CInt64(Int64.of_int (if loc.line == -1 then 0 else loc.line), IUInt, None));
-              Const(CStr( enclosingFunction.svar.vname ))
-            ],
-            loc
-      )
-    ])
-
-let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
-    let loc = instrLoc currentInst in
-    Call( Some(lvalToBoundsFun justWrittenLval),
-            (Lval(Var(fetchBoundsFun.svar),NoOffset)),
-            [
-                (* const void *ptr *)
-                Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
-            ;   (* struct uniqtype *t *)
-                mkAddrOf (Var(ensureUniqtypeGlobal (exprConcreteType (Lval(justWrittenLval))) enclosingFile uniqtypeGlobals), NoOffset)
-            ],
-            loc
-        )
-
 let makeCallToMakeBounds outputLval baseExpr limitExpr loc makeBoundsFun =
     Call( outputLval,
             (Lval(Var(makeBoundsFun.svar),NoOffset)),
@@ -723,6 +500,249 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              * __check_derive_ptr. HMM. Perhaps this transformation hasn't happened yet?
              *)
       | _ -> MustFetch
+
+let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun inlineAssertFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
+    output_string stderr ("Making local bounds check for indexing expression " ^ 
+        (expToString (Lval(localHost, offsetFromList prevOffsets))) ^ 
+        " by index expression " ^ (expToString (intExp)) ^ "\n");
+    (* To avoid leaking bad pointers when writing to a shared location, 
+     * we make the assignment to a temporary, then check the temporary,
+     * then copy from the temporary to the actual target. *)
+    let loc = instrLoc currentInst in
+    (* What's the bound of the local? *)
+    [
+        (* Test the intExp against the bound *)
+        let rec getArrayBound t = match t with
+          | TArray(at, None, attrs) -> failwith "asked local bound for unbounded array type"
+          | TArray(at, Some(boundExpr), attrs) -> 
+                (match constInt64ValueOfExpr boundExpr with
+                    Some n -> n
+                  | None -> failwith "getting local bound for non-constant-length array"
+                )
+          | TNamed(ti, attrs) -> getArrayBound ti.ttype
+          | _ -> failwith "getArrayBound called on something not an array type"
+        in
+        let bound = getArrayBound (Cil.typeOf (Lval(localHost, offsetFromList prevOffsets)))
+        in
+        (* If we're trying to go out-of-bounds, do what? Rather than faff with CIL
+         * blocks/statements, just call an inline function. *)
+        Call( None,
+            (Lval(Var(checkLocalBoundsInlineFun.svar),NoOffset)),
+            [
+              (* index *)
+              intExp;
+              (* limit *)
+              Const(CInt64(bound, IInt, None))
+            ],
+            loc
+        )
+    ]
+    
+let mightBeTrappedPointer ptrE =
+(* FIXME: want to canonicalise the Lval and AddrOf expressions first,
+ * to avoid *&*&... -style mixups. *)
+match ptrE with
+    (* Just rule out some common definitely-not cases for now. *)
+      (* address-of Vars are fresh from the compiler, so can't be trapped...
+       * address-of Mems might actually be wrapping arbitrary lvals *)
+    | AddrOf(Var(vi), loff) -> false
+    | StartOf(Var(vi), loff) -> false
+      (* handle cast-of-addressof specially*)
+    | CastE(castToT, AddrOf(Var(vi), _)) -> false
+    | CastE(castToT, StartOf(_, _)) -> false
+    | Lval(lhost, loff) -> true
+    | UnOp(op, subE, subT) -> true
+    | BinOp(op, subE1, subE2, subT) -> true
+    | CastE(castToT, castE) -> true
+    | AddrOf(lhost, loff) -> true
+    | StartOf(lhost, loff) -> true
+    | _ -> true
+
+
+let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun makeBoundsFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
+    (* To avoid leaking bad pointers when writing to a shared location, 
+     * we make the assignment to a temporary, then check the temporary,
+     * then copy from the temporary to the actual target. *)
+    let loc = instrLoc currentInst in
+    let exprTmpVar = Cil.makeTempVar ~name:"__cil_adjexpr_" enclosingFunction (typeOf ptrExp) in
+    let checkTmpVar = Cil.makeTempVar ~name:"__cil_adjcheck_" enclosingFunction intType in 
+    let rec simplifyPtrExprs someE = (
+      (* Try to see through AddrOf and Mems to get down to a local lval if possible. 
+       * Here we are applying the equivalences from the CIL documentation.
+       * We first simplify any nested pointer expressions
+       * (which may nest inside *non*-pointer expressions!)
+       * then simplify the whole. This is necessary to, say, turn
+       * "*&*&*&*&p" into "p". *)
+      let rec simplifyOffset offs = match offs with
+          NoOffset -> NoOffset
+        | Field(fi, rest) -> Field(fi, simplifyOffset rest)
+        | Index(intExp, rest) -> Index(simplifyPtrExprs intExp, simplifyOffset rest)
+      in
+      let withSubExprsSimplified = match someE with
+        |Lval(Var(vi), offs) -> Lval(Var(vi), simplifyOffset offs)
+        |Lval(Mem(subE), offs) -> Lval(Mem(simplifyPtrExprs subE), simplifyOffset offs)
+        |UnOp(op, subE, subT) -> UnOp(op, simplifyPtrExprs subE, subT)
+        |BinOp(op, subE1, subE2, subT) -> BinOp(op, simplifyPtrExprs subE1, simplifyPtrExprs subE2, subT)
+        |CastE(subT, subE) -> CastE(subT, simplifyPtrExprs subE)
+        |AddrOf(Var(vi), offs) -> AddrOf(Var(vi), simplifyOffset offs)
+        |AddrOf(Mem(subE), offs) -> AddrOf(Mem(simplifyPtrExprs subE), simplifyOffset offs)
+        |StartOf(Var(vi), offs) -> StartOf(Var(vi), simplifyOffset offs)
+        |StartOf(Mem(subE), offs) -> StartOf(Mem(simplifyPtrExprs subE), offs)
+        |_ -> someE
+      in
+      match withSubExprsSimplified with
+         (* e.g.  (&p->foo)->bar           is   p->foo.bar      *)
+         Lval(Mem(AddrOf(Mem a, aoff)), off) -> Lval(Mem a, offsetFromList((offsetToList aoff) @ (offsetToList off)))
+         (* e.g.  (&v.baz)->bum            is   v.baz.bum       *)
+       | Lval(Mem(AddrOf(Var v, aoff)), off) -> Lval(Var v, offsetFromList((offsetToList aoff) @ (offsetToList off)))
+         (* e.g.  &*p                      is   p               *)
+       | AddrOf (Mem a, NoOffset)            -> a
+         (* note that 
+                  &p->f   (i.e. with some offset)  cannot be simplified          *)
+       | _ -> withSubExprsSimplified
+    )
+    in
+    let simplifiedPtrExp = simplifyPtrExprs ptrExp
+    in    
+    (* Since exprTmpVar is a non-address-taken local pointer, we might want it to have 
+     * local bounds. Only create them if we don't have to fetch them (i.e. to propagate
+     * local bounds info that we already have, not to early grab bounds info for expressions
+     * that we don't have bounds for). *)
+    let boundsForAdjustedExpr = boundsExprForExpr simplifiedPtrExp currentFuncAddressTakenLocalNames lvalToBoundsFun 
+    in
+    let haveBoundsForAdjustedExpr = match boundsForAdjustedExpr with
+        MustFetch -> false
+      | _ -> true
+    in
+    let maybeExprTmpBoundsVar = if haveBoundsForAdjustedExpr
+        (* This will *create* the bounds var, since it certainly doesn't exist already. *)
+        then Some(match lvalToBoundsFun (Var(exprTmpVar), NoOffset) with
+            (Var(bvi), NoOffset) -> bvi
+          | lv -> failwith ("unexpected lval: " ^ (lvalToString lv)))
+        else None
+    in
+      (exprTmpVar, 
+            (* if we just created local bounds for the temporary, initialise them *)
+            (
+                (* We either copy the bounds, if they're local, 
+                 * or we emit a make_bounds Call to initialise them. 
+                 * Note that we never emit a fetch call. *)
+                if haveBoundsForAdjustedExpr
+                then
+                let tempBoundsLocal = begin match maybeExprTmpBoundsVar with
+                    Some(bvi) -> bvi
+                  | None -> failwith "no local bounds when we should have them"
+                end
+                in
+                begin match boundsForAdjustedExpr with
+                    BoundsBaseLimitRvals(baseExpr, limitExpr) ->
+                        [makeCallToMakeBounds (Some(Var(tempBoundsLocal), NoOffset))
+                            baseExpr limitExpr loc makeBoundsFun]
+                  | BoundsLval(blv) ->  
+                        let tempBoundsLocal = begin match maybeExprTmpBoundsVar with
+                            Some(bvi) -> bvi
+                          | None -> failwith "no local bounds when we should have them"
+                        end
+                        in
+                        [Set( (Var(tempBoundsLocal), NoOffset), Lval(blv), loc )]
+                  | MustFetch -> []
+                end
+                else []
+            )
+            @
+            [
+        (* Recall the form of a check for p = q + 1: 
+         * 
+         * temp = e;
+         * // check new pointer value against adjusted pointer
+         * result = __check_derive_ptr(q+1, q, t, &temp, &p_bounds, &q_bounds); 
+         * /* does: p_bounds = q_bounds; */    // p now points into the same object as q
+         * /* does: substitute trap value on output */  // output may go out of bounds
+         * /* does: rewrite trap value on input */  // adjustment may bring trap value back *in* bounds
+         * assert(check);
+         * p = temp;
+         * 
+         * We want the common case, where a pointer is incremented in a loop
+         * within the same object,
+         * to result in only a single check remaining in the optimised output.
+         * Will this work?
+         * We will make a bounds variable for the local pointer; the pointer is "locally fat".
+         * On each increment, its bounds will be unchanged. Will the compiler be able to see this?
+         * p = p + 1
+         * will do
+         * p_bounds = p_bounds
+         * so yes, I think so.
+         * BUT the loop might not be bounded! Even dynamically, on entry!
+         * So a check inside the loop will remain... HMM. BUT ONLY against p_bounds!
+         * There is no metadata query in the loop body.
+         * Worth reading Moessenboeck's bounds checking optimisation at this point.
+         *)
+      (* first enqueue an assignment of the whole expression to exprTmpVar *)
+      Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
+      (* next enqueue the check call *)
+      Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
+            (Lval(Var(checkDerivePtrInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
+            [ 
+              (* const void **p_derived *)
+              CastE( voidPtrPtrType, mkAddrOf (Var(exprTmpVar), NoOffset))
+            ;
+              (* const void *derivedfrom *)
+              ptrExp
+            ;
+              (* __libcrunch_bounds_t *opt_derivedfrom_bounds *)
+              ( match boundsForAdjustedExpr with
+                    BoundsLval(lv) -> mkAddrOf lv
+                  | BoundsBaseLimitRvals(_, _) -> 
+                        (* We just created a variable and stored these bounds to it, 
+                         * so just pass that temporary's address. (Although we created
+                         * it to store the *derived* pointer's bounds, by definition
+                         * these must be the same as the derived-from bounds, and that's
+                         * what we initialised it with.) *)
+                        begin
+                        match maybeExprTmpBoundsVar with
+                            Some(bvi) -> mkAddrOf (Var(bvi), NoOffset)
+                          | None -> failwith "no local bounds when we should have them (arg expr)"
+                        end
+                  | _ -> nullPtr
+              )
+              (* struct uniqtype *t *)  (* the pointed-*TO* type of the pointer *)
+            ; let pointeeUniqtypeVar = 
+                let pointeeTs = match (exprConcreteType ptrExp) with
+                        TSPtr(ts, _) -> ts
+                      | _ -> failwith "recipient is not a pointer"
+                 in ensureUniqtypeGlobal pointeeTs enclosingFile uniqtypeGlobals
+              in
+              mkAddrOf (Var(pointeeUniqtypeVar), NoOffset)
+            ],
+            loc
+      );
+      (* then enqueue the assertion about its result *)
+      Call( None,
+            (Lval(Var(inlineAssertFun.svar),NoOffset)),
+            [
+              (* arg is the check result *)
+              Lval(Var(checkTmpVar), NoOffset);
+              Const(CStr("__check_derive_ptr(" ^ exprTmpVar.vname ^ ", " ^ "" ^ ")"));
+              Const(CStr( loc.file ));
+              Const(CInt64(Int64.of_int (if loc.line == -1 then 0 else loc.line), IUInt, None));
+              Const(CStr( enclosingFunction.svar.vname ))
+            ],
+            loc
+      )
+    ])
+
+let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
+    let loc = instrLoc currentInst in
+    Call( Some(lvalToBoundsFun justWrittenLval),
+            (Lval(Var(fetchBoundsFun.svar),NoOffset)),
+            [
+                (* const void *ptr *)
+                Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
+            ;   (* struct uniqtype *t *)
+                mkAddrOf (Var(ensureUniqtypeGlobal (exprConcreteType (Lval(justWrittenLval))) enclosingFile uniqtypeGlobals), NoOffset)
+            ],
+            loc
+        )
 
 
 let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE (lvalToBoundsFun : lval -> lval) currentInst =
@@ -1294,7 +1314,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 in
                                 let (tempVar, checkInstrs) = hoistAndCheckAdjustment 
                                     enclosingFile theFunc
-                                    checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
                                     ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) lvalToBoundsFun
@@ -1423,7 +1443,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     output_string stderr ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
                     let tempVar, checkInstrs = hoistAndCheckAdjustment enclosingFile f
-                                    checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)
