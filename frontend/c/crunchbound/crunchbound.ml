@@ -557,30 +557,12 @@ let makeCallToMakeBounds outputLval baseExpr limitExpr loc makeBoundsFun =
             loc
         )
 
-let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE (lvalToBoundsFun : lval -> lval) currentInst =
-    let loc = instrLoc currentInst in
-    (* Here we do the case analysis: 
-     * do we copy bounds, 
-     *       make them ourselves, 
-     *    or fetch them? *)
-    output_string stderr "Making bounds write instructions...\n";
-    let doFetch = fun () -> (
-        let isNull = isStaticallyNullPtr writtenE
-        in
-        output_string stderr ("Is this pointer statically null? " ^ (if isNull then "true" else "false") ^ "\n");
-        if isNull then (
-            (* Make null bounds *)
-            output_string stderr "Making null bounds\n";
-            makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) zero one loc makeBoundsFun
-        ) else (
-            output_string stderr "Falling back on __fetch_bounds\n";
-            let result = makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
-            in
-            output_string stderr "Made __fetch_bounds call\n";
-            result
-        )
-    )
-    in
+type bounds_expr = 
+    BoundsLval of lval
+  | BoundsBaseLimitRvals of (Cil.exp * Cil.exp)
+  | MustFetch
+
+let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun = 
     let rec offsetContainsField offs = match offs with
             NoOffset -> false
           | Field(fi, _) -> true
@@ -632,27 +614,15 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
             Mult, makeIntegerConstant arrayElementCount, (SizeOf(arrayElementT)), ulongType), 
             ulongType)
         in
-        makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) baseExpr limitExpr loc makeBoundsFun
-    in
-    output_string stderr ("Matching writtenE: " ^ expToString writtenE ^ "\n");
-    begin match writtenE with
-            (* We only get called if we definitely want to update the bounds for 
-             * justWrittenLval.
-             * It follows that justWrittenLval is a pointer
-             * for which we are locally caching bounds.
-             * 
-             * The main problem is: do we infer the bounds,
-             * or do we have to call liballocs to fetch them?
-             * 
-             * We can infer the bounds if... *)
+        BoundsBaseLimitRvals(baseExpr, limitExpr)
+    in    
+    match e with
         Lval(Var(someVi), someOffset) when hostIsLocal (Var(someVi)) currentFuncAddressTakenLocalNames -> 
-            (* - we're copying an also-local pointer (perhaps a subobject of a local struct/array)
-             *      => copy the bounds *)
+            (* - it's an also-local pointer (perhaps a subobject of a local struct/array)
+             *      => we can copy the bounds *)
             let (sourceBoundsLval : lval) = lvalToBoundsFun (Var(someVi), someOffset)
             in
-            let destBoundsLval = lvalToBoundsFun justWrittenLval
-            in
-            Set(destBoundsLval, Lval(sourceBoundsLval), loc)
+            BoundsLval(sourceBoundsLval)
       | BinOp(PlusPI, Lval(Var(someVi), someOffset), someIntExp, somePtrT) 
         when hostIsLocal (Var(someVi)) currentFuncAddressTakenLocalNames ->
             (* This is a simple adjustment of a locally cached-bounds ptr, 
@@ -665,9 +635,7 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
              * to the bounds of the pre-adjusted pointer. So just copy them. *)
             let (sourceBoundsLval : lval) = lvalToBoundsFun (Var(someVi), someOffset)
             in
-            let destBoundsLval = lvalToBoundsFun justWrittenLval
-            in
-            Set(destBoundsLval, Lval(sourceBoundsLval), loc)
+            BoundsLval(sourceBoundsLval)
       | AddrOf(Var(someVi), someOffset)  -> handleAddrOfVarOrField (Var(someVi)) someOffset
         (* - we're taking the address of a local variable, global variable or subobject.
                 => bounds are implied by the address value and the type of the object.
@@ -720,9 +688,7 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
              * FIXME: are we simply sidestepping the checks that the indexing is in-bounds? *)
             let sourceBoundsLval = lvalToBoundsFun (Var(lvi), loff)
             in
-            let destBoundsLval = lvalToBoundsFun justWrittenLval
-            in
-            Set(destBoundsLval, Lval(sourceBoundsLval), loc)
+            BoundsLval(sourceBoundsLval)
             (* For the question about nested lvalues, above: by definition, thanks to CIL,
              * these have no side effect, so they won't be updating any bounds themselves,
              * so we don't need to intercept them.
@@ -734,7 +700,7 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
             (* I don't think this happens, because by definition, *memExp
              * doesn't have array type. *)
             failwith "impossible: at least I thought so (StartOf *memExp)"
-            
+
             (* Casts? Literal pointers? 
              * HMM. Literal pointers always need their bounds retrieving, because
              * by definition we don't know what exists there.
@@ -756,9 +722,52 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
              * we do the write. PROBLEM: we've split this across a function call,
              * __check_derive_ptr. HMM. Perhaps this transformation hasn't happened yet?
              *)
-      | _ -> doFetch ()
+      | _ -> MustFetch
+
+
+let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE (lvalToBoundsFun : lval -> lval) currentInst =
+    let loc = instrLoc currentInst in
+    (* Here we do the case analysis: 
+     * do we copy bounds, 
+     *       make them ourselves, 
+     *    or fetch them? *)
+    output_string stderr "Making bounds write instructions...\n";
+    let doFetch = fun () -> (
+        let isNull = isStaticallyNullPtr writtenE
+        in
+        output_string stderr ("Is this pointer statically null? " ^ (if isNull then "true" else "false") ^ "\n");
+        if isNull then (
+            (* Make null bounds *)
+            output_string stderr "Making null bounds\n";
+            makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) zero one loc makeBoundsFun
+        ) else (
+            output_string stderr "Falling back on __fetch_bounds\n";
+            let result = makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
+            in
+            output_string stderr "Made __fetch_bounds call\n";
+            result
+        )
+    )
+    in
+    output_string stderr ("Matching writtenE: " ^ expToString writtenE ^ "\n");
+    (* We only get called if we definitely want to update the bounds for 
+     * justWrittenLval.
+     * It follows that justWrittenLval is a pointer
+     * for which we are locally caching bounds.
+     * 
+     * The main problem is: do we infer the bounds,
+     * or do we have to call liballocs to fetch them?
+     * 
+     * We can infer the bounds if... *)
+    let destBoundsLval = lvalToBoundsFun justWrittenLval
+    in
+    begin match boundsExprForExpr writtenE currentFuncAddressTakenLocalNames lvalToBoundsFun with 
+        BoundsLval(sourceBoundsLval) ->
+            Set(destBoundsLval, Lval(sourceBoundsLval), loc)
+      | BoundsBaseLimitRvals(baseExpr, limitExpr) ->
+            makeCallToMakeBounds (Some(destBoundsLval)) baseExpr limitExpr loc makeBoundsFun
+      | MustFetch -> doFetch ()
     end
-    
 
 (* How do we deal with Stephen D's "unspecified values" problem?
  * Here he is referring to how uninitialised memory takes unspecified values, 
