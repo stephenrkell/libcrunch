@@ -272,41 +272,55 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
         " is " ^ (expToString indexExpr) ^ "\n");
     indexExpr
 
-let boundsLvalForLocalLval (boundsTempsAndVars : (varinfo option * varinfo) list) (gs: Cil.global list) ((lh, loff) : lval) : lval =
+let makeBoundsLocal vi bt enclosingFunction enclosingFile = 
+    Cil.makeTempVar enclosingFunction ~name:("__cil_localbound_" ^ vi.vname ^ "_") bt
+
+let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Cil.varinfo VarinfoMap.t ref) = 
+    debug_print 0 ("Ensuring we have bounds local for " ^ vi.vname ^ "\n");
+    try  
+        let found = VarinfoMap.find vi !boundsLocals
+        in 
+        debug_print 0 ("Already exists\n");
+        found
+    with Not_found -> 
+     debug_print 0 ("Creating new bounds local for type " ^ vi.vname ^ "\n");
+     let maybe_bt = boundsTForT vi.vtype enclosingFile.globals 
+     in
+     let bt = match maybe_bt with
+            Some(bt) -> bt
+          | None -> failwith ("creating bounds local for a type that doesn't need it: " ^ 
+                typToString vi.vtype)
+     in
+     let newLocalVi = makeBoundsLocal vi bt enclosingFunction enclosingFile 
+     in
+     let newBoundsLocalsMap = (VarinfoMap.add vi newLocalVi !boundsLocals)
+     in
+     boundsLocals := newBoundsLocalsMap;
+     newLocalVi
+
+let boundsLvalForLocalLval (boundsLocals : Cil.varinfo VarinfoMap.t ref) enclosingFunction enclosingFile ((lh, loff) : lval) : lval =
     output_string stderr "Hello from boundsLvalForLocalLval";
+    let gs = enclosingFile.globals
+    in
     match lh with
         Var(local_vi) -> 
             output_string stderr "Hello from Var case";
-            let (maybe_found_bvi, _) = try List.find (fun (maybe_bvi, vi) -> vi.vname = local_vi.vname) boundsTempsAndVars
-                with Not_found -> (None, local_vi)
-            in
-            output_string stderr ("Looking for bounds for " ^ (lvalToString (lh, loff)) ^ 
-                " where local varinfos having bounds are: " ^ 
-                (List.fold_left (fun l -> fun r -> l ^ (if l = "" then "" else ", ") ^ r) "" 
-                    (List.map (fun (maybe_vi, orig_vi) -> 
-                        match maybe_vi with
-                            Some(vi) -> lvalToString (Var(orig_vi), NoOffset)
-                           | None -> "(none for " ^ orig_vi.vname ^ ")"
-                    ) boundsTempsAndVars)
-                ) ^ "\n"
-            )
-            ;
+            let boundsVi = getOrCreateBoundsLocal local_vi enclosingFunction enclosingFile boundsLocals 
+            in 
             let indexExpr = boundsIndexExprForOffset zero loff (Var(local_vi)) NoOffset gs
             in
             output_string stderr ("Bounds index expr is `" ^ (expToString indexExpr) ^ "'\n");
-            begin match maybe_found_bvi with
-                Some(bvi) -> (Var(bvi), 
-                    match Cil.typeSig (Cil.typeOf (Lval(Var(bvi), NoOffset))) with
-                        TSArray(_) -> Index(indexExpr, NoOffset)
-                      | TSComp(_) -> 
-                            if not (isStaticallyZero indexExpr) then 
-                                    failwith "singleton bounds but non-zero bounds expr"
-                           else NoOffset
-                      | _ -> failwith "bad bounds var type"
-                    )
-              | None -> failwith ("no local bounds var for local lvalue: " ^ 
-                (lvalToString (lh, loff)) ^ " of type " ^ (typToString (Cil.typeOf (Lval(lh, loff)))))
-            end
+            let offs = (
+                match Cil.typeSig (Cil.typeOf (Lval(Var(boundsVi), NoOffset))) with
+                    TSArray(_) -> Index(indexExpr, NoOffset)
+                  | TSComp(_) -> 
+                        if not (isStaticallyZero indexExpr) then 
+                                failwith "singleton bounds but non-zero bounds expr"
+                       else NoOffset
+                  | _ -> failwith "bad bounds var type"
+            )
+            in
+            (Var(boundsVi), offs)
         | _ -> failwith "local lvalue not a Var"
 
 let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun inlineAssertFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
@@ -907,9 +921,9 @@ class crunchBoundVisitor = fun enclosingFile ->
    * weak extern. *)
   val uniqtypeGlobals : Cil.global UniqtypeMap.t ref = ref UniqtypeMap.empty
 
-  (* Remember the mapping from locals to their bounds. *)
-  (* val boundsLocals : Cil.varinfo VarinfoMap.t ref = ref VarinfoMap.empty *)
-  val mutable currentFunctionBoundsTempsAndVars = []
+  (* Remember the mapping from locals to their bounds. We zap this on each
+   * vfunc. *)
+  val boundsLocals : Cil.varinfo VarinfoMap.t ref = ref VarinfoMap.empty
 
   method vblock (b: block) : block visitAction = 
       currentBlock := Some(b);
@@ -917,6 +931,7 @@ class crunchBoundVisitor = fun enclosingFile ->
 
   method vfunc (f: fundec) : fundec visitAction = 
       currentFunc := Some(f);
+      boundsLocals := VarinfoMap.empty;
       let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
         with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
       in
@@ -989,24 +1004,21 @@ class crunchBoundVisitor = fun enclosingFile ->
           (
             let locals = List.filter (fun v -> varinfoIsLocal v !currentFuncAddressTakenLocalNames) (f.sformals @ f.slocals)
             in
-            let boundsTsToCreate = List.map (fun vi -> 
-                boundsTForT vi.vtype enclosingFile.globals
-            ) locals
-            in
-            let (boundsTempsAndVars : (varinfo option * varinfo) list) = List.map (fun (vi, maybe_bt) ->
-                match maybe_bt with
-                    Some(bt) -> (Some(
+            let boundsTsToCreate = 
+            List.map (fun vi -> 
+                match boundsTForT vi.vtype enclosingFile.globals with
+                    Some(bt) -> 
                         output_string stderr ("Creating bounds for local " ^ 
                             vi.vname ^ "; bounds have type " ^ (typToString bt) ^ "\n");
-                        Cil.makeTempVar f ~name:("__cil_localbound_" ^ vi.vname ^ "_") bt
-                    ), vi)
-                  | None -> (None, vi)
-            ) (Cilallocs.zip locals boundsTsToCreate)
-            in
-            currentFunctionBoundsTempsAndVars <- boundsTempsAndVars
-            ;
+                        let created = getOrCreateBoundsLocal vi f enclosingFile boundsLocals
+                        in
+                        ()
+                  | None -> ()
+            ) locals
+            in 
             DoChildren
-            )
+          )
+        
   
   method vinst (outerI: instr) : instr list visitAction = begin
     currentInst := Some(outerI); (* used from vexpr *)
@@ -1028,7 +1040,7 @@ class crunchBoundVisitor = fun enclosingFile ->
             WRITES TO A LOCAL WITH-BOUNDS POINTER MUST COPY ITS BOUNDS.
             The same as above applies.
          *)
-        let lvalToBoundsFun = boundsLvalForLocalLval currentFunctionBoundsTempsAndVars enclosingFile.globals
+        let lvalToBoundsFun = boundsLvalForLocalLval boundsLocals f enclosingFile
         in 
         match outerI with
             Set((lhost, loff), e, l) ->
@@ -1233,7 +1245,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  * check that,
                                  * then recurse
                                  * with current lvalue *(temp).rest *)
-                                let lvalToBoundsFun = boundsLvalForLocalLval currentFunctionBoundsTempsAndVars enclosingFile.globals
+                                let lvalToBoundsFun = boundsLvalForLocalLval boundsLocals theFunc enclosingFile
                                 in
                                 let ptrExp =  (Cil.mkAddrOrStartOf (lhost, offsetFromList offsetsOkayWithoutCheck))
                                 in
@@ -1371,7 +1383,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     checkDerivePtrInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
-                                    (* lvalToBoundsFun *) (boundsLvalForLocalLval currentFunctionBoundsTempsAndVars enclosingFile.globals)
+                                    (* lvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)
                                     !currentFuncAddressTakenLocalNames
                                     !currentInst
                     in
