@@ -3,6 +3,43 @@
 #include <stddef.h>
 #include <assert.h>
 
+/* PROBLEMS exposed by this test case and its variants:
+ * 
+ * "bad cast before adjust"
+       for (float *pf = ((float*) i) - 1; pf >= (float*) &is[0]; --pf)
+	   -- see fail-bounds-type-backin
+
+ * "bad cast after adjust"
+	   for (float *pf = (float*) (i - sizeof (float)); pf > (float*) &is[0]; --pf)
+	   -- see bounds-type-simple
+
+ * "compare one-prev with bad-cast"
+	    for (float *pf = (float*) (i - sizeof (float)); pf >= (float*) &is[0]; --pf)
+	    - i.e. the same as above but with ">=" and not ">" ^-^ here
+	
+	    - what happens: we trap the pointer from the last "--pf", because it's one-prev.
+	
+	       + OTHER small problems:
+	            1. "max_bounds" (in libcrunch.c) might not be sensible
+	            2. stack frame types are unions, i.e. have repeated offsets -- is this correct?
+
+	    - what should happen: sloppily accommodate the one-prev, like with bounds-type-simple,
+	          iff the users asks for it
+
+ * "cast trapped pointer":
+	   for (float *pf = (float*) (i - 5 * sizeof (float)); pf < (float*) &is[5]; ++pf) 
+	   -- see fail-bounds-type-trapped
+	   
+	   - what happens: we call __is_aU on a trapped ptr, confusing things
+	       ... giving storage and/or invalid-stackframe liballocs errors
+	       but (consequently) no libcrunch errors
+	   - what should happen: always de-trap calls to __is_aU?
+	       flag up the liballocs errors more explicitly?
+	       make crunchbound rewrite all pointer arithmetic to be on char* ?
+	            -- would this help? if we did (char*)(float*)oob, it still does the cast.
+	       just give up?
+ */
+
 int main(void)
 {
 	char pad1[200];
@@ -16,12 +53,14 @@ int main(void)
 	assert(i - (unsigned long) &is[4] == sizeof (int));
 		
 	/* If we convert it back to a float* when *out of bounds*, it should not be usable,
-	 * but __fetchbounds might (ideally) let us sloppily accommodate it anyway. 
+	 * but __fetch_bounds might (ideally) let us sloppily accommodate it anyway. 
 	 * If we convert it back to an in-bounds float*, it should do whatever casting
 	 * &is[4] to float* would normally do. This is to continue after printing a warning.
 	 * Here we assume float and int have the same size. */
 	// for (float *pf = ((float*) i) - 1; pf >= (float*) &is[0]; --pf) // "[bad] cast before adjust"
 	for (float *pf = (float*) (i - sizeof (float)); pf >= (float*) &is[0]; --pf) // "adjust before [good] cast"
+	// for (float *pf = (float*) (i - 5 * sizeof (float)); pf < (float*) &is[5]; ++pf) // "adjust before [good] cast"
+	// for (float *pf = (float*) (i - 5 * sizeof (float)); pf < (float*) &is[5]; ++pf) // "adjust before [good] cast"
 	{
 		printf("About to deref: %p\n", pf);
 		printf("Saw a float: %f\n", *pf);

@@ -72,7 +72,8 @@ default: checkall
 
 checkall: $(patsubst %,checkrun-%,$(cases))
 
-# Some cases are expected to fail
+# Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
+# Note that bounds errors never do this. HMM. Soon, type errors might not either.
 checkrun-fail-%:
 	@echo "expected-fail case is fail-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -82,12 +83,20 @@ checkrun-fail-%:
 		    match "checks failed otherwise" '[1-9][0-9]*' >/dev/null || \
 		(tail -n26 $$err; false)
 		
-# Some cases are expected to abort
+# Some cases are expected to abort the program (assertion failed, segfault, etc.)
 checkrun-abort-%:
 	@echo "expected-fail case is fail-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	if $(MAKE) cleanrun-abort-$* 1>$$out 2>$$err; then false; else true; fi
+		
+# Some cases are expected to succeed without liballocs being involved.
+checkrun-noquery-%:
+	@echo "no-query case is noquery-$*" && \
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	if $(MAKE) cleanrun-noquery-$* 1>$$out 2>$$err && \
+           ! grep '^queries handled.* [1-9]+[0-9]*$$' $$err; then true; else false; fi
 
 # Most test cases should output a libcrunch summary in which 
 # -- zero or more checks passed (trivially or by lazy typing)
