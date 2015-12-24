@@ -739,7 +739,16 @@ let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddres
                 (* const void *ptr *)
                 Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
             ;   (* struct uniqtype *t *)
-                mkAddrOf (Var(ensureUniqtypeGlobal (exprConcreteType (Lval(justWrittenLval))) enclosingFile uniqtypeGlobals), NoOffset)
+                (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
+                let ptrT = exprConcreteType (Lval(justWrittenLval))
+                in
+                let ts = match ptrT with 
+                    TSPtr(targetTs, _) -> targetTs
+                  | _ -> failwith "fetching bounds for a non-pointer"
+                in
+                let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
+                in
+                mkAddrOf (Var(uniqtypeGlobal), NoOffset)
             ],
             loc
         )
