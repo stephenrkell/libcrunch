@@ -1365,7 +1365,8 @@ struct match_cb_args
 	signed target_offset;
 };
 static int match_pointer_subobj_strict_cb(struct uniqtype *spans, signed span_start_offset, 
-		unsigned depth, struct uniqtype *containing, struct contained *contained_pos, void *arg)
+		unsigned depth, struct uniqtype *containing, struct contained *contained_pos, 
+		signed containing_span_start_offset, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
 	struct uniqtype *t = spans;
@@ -1379,7 +1380,8 @@ static int match_pointer_subobj_strict_cb(struct uniqtype *spans, signed span_st
 	return 0;
 }
 static int match_pointer_subobj_generic_cb(struct uniqtype *spans, signed span_start_offset, 
-		unsigned depth, struct uniqtype *containing, struct contained *contained_pos, void *arg)
+		unsigned depth, struct uniqtype *containing, struct contained *contained_pos, 
+		signed containing_span_start_offset, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
 	struct uniqtype *t = spans;
@@ -1537,6 +1539,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 			0,
 			0,
 			NULL, NULL,
+			0, 
 			&args
 		);
 		/* Here we walk the subobject hierarchy until we hit 
@@ -1641,7 +1644,8 @@ struct bounds_cb_arg
 };
 
 static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned depth,
-	struct uniqtype *containing, struct contained *contained_pos, void *arg_void)
+	struct uniqtype *containing, struct contained *contained_pos, 
+	signed containing_span_start_offset, void *arg_void)
 {
 	struct bounds_cb_arg *arg = (struct bounds_cb_arg *) arg_void;
 
@@ -1656,12 +1660,14 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 	 * So we want to clear the state once we descend through a non-array. */
 	if (UNIQTYPE_IS_ARRAY(containing))
 	{
-		arg->innermost_containing_array_type_span_start_offset = span_start_offset;
+		arg->innermost_containing_array_type_span_start_offset
+		 = containing_span_start_offset;
 		arg->innermost_containing_array_t = containing;
 		
 		if (!arg->outermost_containing_array_t)
 		{
-			arg->outermost_containing_array_type_span_start_offset = span_start_offset;
+			arg->outermost_containing_array_type_span_start_offset
+			 = containing_span_start_offset;
 			arg->outermost_containing_array_t = containing;
 			arg->accum_array_bounds = UNIQTYPE_ARRAY_LEN(containing);
 			if (arg->accum_array_bounds < 1) arg->accum_array_bounds = 0;
