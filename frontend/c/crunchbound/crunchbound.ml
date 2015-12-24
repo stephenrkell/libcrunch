@@ -1116,7 +1116,7 @@ class crunchBoundVisitor = fun enclosingFile ->
         in 
         match outerI with
             Set((lhost, loff), e, l) ->
-                let instrsToQueue =
+                let instrsToAppend =
                     (* We might be writing a non-void pointer on the lhs. 
                      *      If we're keeping bounds for that pointer, we need to write some bounds.
                      *      Sometimes we have to fetch those bounds;
@@ -1147,7 +1147,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     else []
                 in begin
                 output_string stderr "Queueing some instructions\n";
-                instrsToQueue @ [outerI]
+                [outerI] @ instrsToAppend
                 end
           | Call(olv, e, es, l) -> begin
                 (* We might be writing a pointer. 
@@ -1168,9 +1168,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 output_string stderr "Local, so updating its bounds.\n"
                                 ;
                                 (* Queue some instructions to write the bounds. *)
-                               [
+                               [outerI] @ [
                                 makeBoundsFetchInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) lvalToBoundsFun !currentInst
-                                ] @ [outerI]
+                                ]
                             end
                             else (
                                 output_string stderr "Host is not local\n";
