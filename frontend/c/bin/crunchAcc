@@ -44,6 +44,7 @@ class CrunchACC(CompilerWrapper):
 #            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
+            includeArgs = []
         
         return ["--save-temps", "--keepunused", "-Wno-unused-variable", "-Wno-unused-label"] + includeArgs
             # We need the above -Wno-unused-... because CIL creates
