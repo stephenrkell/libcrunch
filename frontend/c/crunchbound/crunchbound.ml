@@ -327,9 +327,9 @@ let makeCallToMakeBounds outputLval baseExpr limitExpr loc makeBoundsFun =
             (Lval(Var(makeBoundsFun.svar),NoOffset)),
             [
                 (*  unsigned long ptr *)
-                baseExpr    (* i..e the *value* of the pointer we just wrote *)
+                CastE(ulongType, baseExpr)    (* i..e the *value* of the pointer we just wrote *)
             ;   (* unsigned long limit *)
-                limitExpr
+                CastE(ulongType, limitExpr)
             ],
             loc
         )
@@ -454,16 +454,17 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              handleAddrOfVarOrField (Mem(memExp)) (offsetFromList (
             (offsetToList someOffset) @ [Index(zero, NoOffset)]
         ))
-      | AddrOf(Mem(Lval(Var(lvi), loff)) (* what about nested lvals in here? *), someOffset)
+      | AddrOf(Mem(Lval(Var(lvi), varOff)) (* what about nested lvals in here? *), addrOff)
         when varinfoIsLocal lvi currentFuncAddressTakenLocalNames ->
-            (* We're dereferencing a local pointer and then the address of 
+            (* We're dereferencing a local pointer and then taking the address of 
              * the object we find there, or a subobject of it. By pattern-match semantics, 
-             * someOffset does not contain any Field components... *) 
-            if offsetContainsField someOffset then failwith "internal error: offset contains field"
+             * someOffset does not contain any Field components, so the subobject is
+             * just an array element. *) 
+            if offsetContainsField addrOff then failwith "internal error: offset contains field"
             else
             (* Therefore, the bounds are simply those of the local pointer. 
              * FIXME: are we simply sidestepping the checks that the indexing is in-bounds? *)
-            let sourceBoundsLval = lvalToBoundsFun (Var(lvi), loff)
+            let sourceBoundsLval = lvalToBoundsFun (Var(lvi), varOff)
             in
             BoundsLval(sourceBoundsLval)
             (* For the question about nested lvalues, above: by definition, thanks to CIL,
@@ -472,11 +473,21 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              * So, in fact, it doesn't matter what's in memExp. We're selecting a 
              * subobject of it, so the bounds are determined by the *type* of the 
              * subobject being selected. *)
-      | StartOf(Mem(Lval(Var(lvi), loff)) (* what about nested lvals in here? *), someOffset)
+      | StartOf(Mem(Lval(Var(lvi), varOff)) (* what about nested lvals in here? *), startOff)
         when varinfoIsLocal lvi currentFuncAddressTakenLocalNames ->
-            (* I don't think this happens, because by definition, *memExp
-             * doesn't have array type. *)
-            failwith "impossible: at least I thought so (StartOf *memExp)"
+            (* We're dereferencing a local pointer and then taking the array-start address of 
+             * the object we find there, or a subobject of it. By pattern-match semantics, 
+             * someOffset does not contain any Field components, so the subobject is just
+             * an array element. *) 
+            if offsetContainsField startOff then failwith "internal error: offset contains field"
+            else
+            (* Again, the bounds are simply those of the local pointer. 
+             * FIXME again: are we simply sidestepping the checks that the indexing is in-bounds? *)
+            let sourceBoundsLval = lvalToBoundsFun (Var(lvi), varOff)
+            in
+            BoundsLval(sourceBoundsLval)
+            (* Ditto / see above. *)
+
 
             (* Casts? Literal pointers? 
              * HMM. Literal pointers always need their bounds retrieving, because
@@ -965,7 +976,7 @@ class crunchBoundVisitor = fun enclosingFile ->
     checkDerivePtrInlineFun <- findOrCreateExternalFunctionInFile
                             enclosingFile "__check_derive_ptr" (TFun(intType, 
                             Some [ ("p_derived", voidPtrPtrType, []);
-                                   ("derived_from", voidPtrType, []); 
+                                   ("derivedfrom", voidConstPtrType, []); 
                                    ("opt_derivedfrom_bounds", boundsPtrType, []); 
                                    ("t", uniqtypePtrType, []); 
                                  ], 
@@ -1031,7 +1042,7 @@ class crunchBoundVisitor = fun enclosingFile ->
       in 
       if startswith f.svar.vname "__liballocs_" 
           || stringEndsWith f.svar.vdecl.file "libcrunch_cil_inlines.h"
-          then SkipChildren
+          then (currentFunc := None; SkipChildren)
       else
           (* We've done computeFileCFG, so no need to do the CFG info thing *)
           (* Figure out which pointer locals also need cached bounds. 
@@ -1088,7 +1099,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                   | None -> ()
             ) locals
             in 
-            DoChildren
+            ChangeDoChildrenPost(f, fun x -> currentFunc := None; x)
           )
         
   

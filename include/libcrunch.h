@@ -14,12 +14,14 @@ extern _Bool __libcrunch_is_initialized __attribute__((weak));
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
 extern unsigned long __libcrunch_aborted_init __attribute__((weak));
 extern unsigned long __libcrunch_trivially_succeeded __attribute__((weak));
+extern unsigned long __libcrunch_checked_pointer_adjustments __attribute__((weak));
 #endif
 extern unsigned long __libcrunch_begun __attribute__((weak));
 extern unsigned long __libcrunch_aborted_typestr __attribute__((weak));
 extern unsigned long __libcrunch_failed __attribute__((weak));
 extern unsigned long __libcrunch_succeeded __attribute__((weak));
 extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
+extern unsigned long __libcrunch_created_invalid_pointer __attribute__((weak));
 
 /* Uniqtypes for signed_char and unsigned_char.
  * 

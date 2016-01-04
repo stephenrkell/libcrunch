@@ -220,6 +220,7 @@ unsigned long __libcrunch_begun;
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
 unsigned long __libcrunch_aborted_init;
 unsigned long __libcrunch_trivially_succeeded;
+unsigned long __libcrunch_checked_pointer_adjustments;
 #endif
 unsigned long __libcrunch_aborted_typestr;
 unsigned long __libcrunch_lazy_heap_type_assignment;
@@ -227,6 +228,7 @@ unsigned long __libcrunch_failed;
 unsigned long __libcrunch_failed_in_alloc;
 unsigned long __libcrunch_failed_and_suppressed;
 unsigned long __libcrunch_succeeded;
+unsigned long __libcrunch_created_invalid_pointer;
 
 struct __libcrunch_is_a_cache_s /* __thread */ __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
 unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
@@ -1834,17 +1836,17 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 		{
 			// bounds are the whole array
 			// FIXME: cache
-			return (__libcrunch_bounds_t) {
-				alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset, 
+			return __make_bounds(
+				(unsigned long) alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset, 
 				(arg.innermost_containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
-					(char*) alloc_start + alloc_size_bytes
-					: alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset
+					(unsigned long) alloc_start + alloc_size_bytes
+					: (unsigned long) alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset
 						+ (arg.innermost_containing_array_t->array_len * t->pos_maxoff)
-			};
+			);
 		}
 		// bounds are just this object
 		// FIXME: cache
-		return (__libcrunch_bounds_t) { (void*) obj, (char*) obj + t->pos_maxoff };
+		return __make_bounds((unsigned long) obj, (unsigned long) obj + t->pos_maxoff);
 	}
 	else
 	{
@@ -1859,16 +1861,27 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 
 return_min_bounds:
 	// FIXME: cache?
-	return (__libcrunch_bounds_t) { (void*) obj, (char*) obj + 1 };
+	return __make_bounds((unsigned long) obj, (unsigned long) obj + 1);
 
 return_alloc_bounds:
 	// FIXME: cache
-	return (__libcrunch_bounds_t) { 
-		(char*) alloc_start - alloc_uniqtype->neg_maxoff,
-		(char*) alloc_start + alloc_size_bytes
-	};
+	return __make_bounds(
+		(unsigned long) alloc_start - alloc_uniqtype->neg_maxoff,
+		(unsigned long) alloc_start + alloc_size_bytes
+	);
 
 abort_returning_max_bounds: 
 	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p\n", obj);
-	return (__libcrunch_bounds_t) { (void*) 0, (void*) -1 };
+	return __libcrunch_max_bounds(obj);
+}
+
+void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
+		__libcrunch_bounds_t bounds)
+{
+	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld; lb %p; ub %p)",
+		__builtin_return_address(0), derived, derivedfrom, 
+		(char*) derived - (char*) derivedfrom, 
+		__libcrunch_get_base(&bounds, derivedfrom), 
+		__libcrunch_get_limit(&bounds, derivedfrom));
+	++__libcrunch_created_invalid_pointer;
 }

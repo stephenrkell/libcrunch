@@ -8,6 +8,8 @@ unsigned long int __libcrunch_failed = 0;
 unsigned long int __libcrunch_succeeded = 0;
 unsigned long int __libcrunch_aborted_typestr = 0;
 unsigned long int __libcrunch_is_a_hit_cache = 0;
+unsigned long int __libcrunch_created_invalid_pointer = 0;
+unsigned long int __libcrunch_checked_pointer_adjustments = 0;
 
 /* We really want to fit in 64 bits on x86-64. */
 struct __libcrunch_bounds_s
@@ -65,4 +67,9 @@ int __can_hold_pointer_internal(const void *obj, const void *target)
 __libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *t)
 {
         return (__libcrunch_bounds_t) { (void*) 0, (void*) -1 };
+}
+
+void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
+		__libcrunch_bounds_t bounds)
+{
 }

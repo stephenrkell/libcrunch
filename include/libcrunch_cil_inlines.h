@@ -4,94 +4,35 @@
 /* NO -- assume uniqtype is already defined, e.g. by -include */
 // #include "uniqtype.h"
 
-/* We really want to fit in 64 bits on x86-64. */
+/* Ideally we really want to fit in 64 bits on x86-64. 
+ * This makes life a bit trickier, however. 
+ * For now, we support both representations, using conditional compilation. */
 struct __libcrunch_bounds_s
 {
-	/* Suppose base and bound are not more than 4G apart. 
-	 * This doesn't mean their top bits will be alike, necessarily.
-	 * We still need 32 bits to represent the difference.
-	 * 
-	 * Next, introduce further restrictions about alignment.
-	 * Generally "base" will be aligned to some unit,
-	 * likely a power of two between 2^0 and 2^4.
-	 * Then base mod sizemul is always 0, so we can add 
-	 * some number in the range [0, sizemul) to base.
-	 * 
-	 * Realistic case that screws with this: static char[BIG]
-	 * in shared libs. Can be loaded anywhere (high, low),
-	 * can be any size (small, large e.g. if in bss),
-	 * and can get placed at any address with only byte alignment.
-	 * 
-	 * We could indirect through the mappings table to try to
-	 * shorten the base address, but the offset could still
-	 * be huge. Actually that does help: 1024 base addresses
-	 * is our maximum, and 32 bits of offset, giving us a 42-bit
-	 * base. That only leaves 22 bits for size, though, or 4MB.
-	 * (Note that stack- or heap-allocated char arrays are still 
-	 * 8- or 16-byte -aligned. So the case of a huge heap-allocated
-	 * char array still only requires length and a 44-bit address.
-	 * I suppose huge arrays are best referred to by a mapping number
-	 * too. HMM.
-	 * So is the answer just to use 10-bit mapping numbers, 32-bit
-	 * offsets within mappings to encode the base address (HMM, a 
-	 * limitation already), and 22 bits plus alignment-recovered
-	 * low-order bits to encode the sub-bounds somehow? Still seems
-	 * too tight. A large bss char array still can't be represented
-	 * (without constraining it e.g. to a power-of-two size).
-	 * 
-	 * I seem to be going more in the direction of baggy bounds checking.
-	 * This seems hard to justify without more link-time constraints
-	 * than I'd like.
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	/* We store only the lower 32 bits of the base and limit. 
+	 * We infer the upper 32 bits from those of the derivedfrom ptr,
+	 * and from the inequality
+	 *    base <= ptr < limit
+	 * ... see __libcrunch_get_base and __libcrunch_get_limit.
 	 */
-	//unsigned long sizemul:17;
-	/* */
-	//unsigned long base:47; /* [ 0000 0000 0000,  8000 0000 0000 ) */
-	
-	void *base;
-	void *limit;
-	
-	/* GAH. Can't we use the obvious fact: that when we have bounds, we always 
-	 * have a pointer value too?
-	 * 
-	 * 32-bit negbound and posbound are too naive, because we want 
-	 * "same object, same bounds" to hold.
-	 * Could use mapping numbers, I suppose.
-	 * Can we use "high-order, low-order"?
-	 * 
-	 * mapping number, base, size
-	 * some XOR scheme
-	 */
-	
-	/* Assuming a 2GB maximum object size, 
-	 * the most significant 31 bits of the base will always be shared 
-	 * with the pointer, because
-	 * even a 2GB change will only affect lower bits.
-	 * HMM. Is this true? If my 16-bit base address is 
-	 *
-	 * 0111 1111 1111 1111
-	 * 
-	 * and I increment by one, I get
-	 *
-	 * 1000 0000 0000 0000
-	 * 
-	 * i.e. a one-byte interval means *all* the bits have changed!
-	 * 
-	 * We can still factor the base ptr into
-	 * - a difference in the top bits (small)    (difference from what?
-	             needs to be *invariant* w.r.t. changes to the ptr!)
-	 * - the base as an offset (from the top bits followed by all-zeroes lower bits)
-	 * - the limit as a number in [0, 2GB)     (31 bits)
-	 *
-	 * So, hmm, no, this seems not to work.
-	 * Actually though,
-	 * there *is* an "invariant bounding region" -- it's just not denoted by a 
-	 * specific sequence of address bits. How can we represent it efficiently?
-	 * By its base address? 2GB plus/minus means that a 4GB-aligned address,
-	 * denoting a 4GB region, will include the bounding region.
-	 * HMM. Have I now contradicted what I just wrote?
-	 */
+	unsigned long base:32;
+	unsigned long limit:32;
+#else
+	unsigned long base;
+	unsigned long limit;
+#endif
 };
 typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
+
+#ifndef unlikely
+#define __libcrunch_defined_unlikely
+#define unlikely(cond) (__builtin_expect( (cond), 0 ))
+#endif
+#ifndef likely
+#define __libcrunch_defined_likely
+#define likely(cond)   (__builtin_expect( (cond), 1 ))
+#endif
 
 /* Our functions are *not* weak -- they're defined in the noop library. 
  * (We would like the noop library not to be necessary.) */
@@ -114,6 +55,8 @@ int __can_hold_pointer_internal(const void *obj, const void *value) PURE;
 
 /* Bounds checking */
 __libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, struct uniqtype *u) PURE;
+void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
+		__libcrunch_bounds_t bounds);
 // NOTE that __check_derive_ptr is entirely inline, in terms of __fetch_bounds
 
 /* Utilities */
@@ -129,6 +72,8 @@ extern unsigned long __libcrunch_aborted_typestr __attribute__((weak));
 extern unsigned long __libcrunch_succeeded __attribute__((weak));
 extern unsigned long __libcrunch_failed __attribute__((weak));
 extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
+extern unsigned long __libcrunch_checked_pointer_adjustments __attribute__((weak));
+extern unsigned long __libcrunch_created_invalid_pointer __attribute__((weak));
 
 extern unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
 extern const unsigned short __libcrunch_is_a_cache_size;
@@ -145,6 +90,18 @@ extern unsigned short __libcrunch_is_a_cache_next_victim;
 #define LIBCRUNCH_TRAP_ONE_BEFORE 2
 #define LIBCRUNCH_TRAP_INVALID 15     
 #define LIBCRUNCH_TRAP_MASK (((unsigned long)(LIBCRUNCH_TRAP_INVALID)) << LIBCRUNCH_TRAP_TAG_SHIFT)
+
+/* tentative redesign to integrate bounds and types:
+ * 
+ * - lower
+ * - upper     (one-past)
+ * - t         (may be null, i.e. bounds only)
+ * - sz        (size of t)
+ * - period    (need not be same as period, i.e. if T is int, alloc is array of stat, say)
+ *                 ** ptr arithmetic is only valid if sz == period
+ *                 ** entries with sz != period are still useful for checking types 
+ * - results   (__is_a, __like_a, __locally_like_a, __is_function_refining, ... others?)
+ */
 
 struct __libcrunch_is_a_cache_s
 {
@@ -171,13 +128,13 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void);
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void)
 {
-	if (__builtin_expect(! & __libcrunch_is_initialized, 0))
+	if (unlikely(! & __libcrunch_is_initialized))
 	{
 		/* This means that we're not linked with libcrunch. 
 		 * There's nothing we can do! */
 		return -1;
 	}
-	if (__builtin_expect(!__libcrunch_is_initialized, 0))
+	if (unlikely(!__libcrunch_is_initialized))
 	{
 		/* This means we haven't initialized.
 		 * Try that now (it won't try more than once). */
@@ -192,7 +149,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_
 extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_local_bounds)(int idx, int limit)
 {
 	/* FIXME: actually do something more sophisticated involving trap pointers here. */
-	if (__builtin_expect(idx >= limit, 0)) abort();
+	if (unlikely(idx >= limit)) abort();
 }
 
 /* FIXME: reinstate "extended counts" versions, which were
@@ -203,7 +160,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_
 		++__libcrunch_begun; \
 		// Check for init first, else we can't use the counts. \
 		\ 
-		if (__builtin_expect((__libcrunch_check_init() == -1), 0)) \
+		if (unlikely(__libcrunch_check_init() == -1)) \
 		{ \
 			++__libcrunch_begun; \
 			++__libcrunch_aborted_init; \
@@ -223,7 +180,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_
 		{ \
 			return 1; \
 		} \
-		if (__builtin_expect((__libcrunch_check_init() == -1), 0)) \
+		if (unlikely(__libcrunch_check_init() == -1)) \
 		{ \
 			return 1; \
 		} \
@@ -236,7 +193,7 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aU(const void *
 	
 	// Null uniqtype means __is_aS got a bad typestring, OR we're not 
 	// linked with enough uniqtypes data. 
-	if (__builtin_expect(r == NULL, 0))
+	if (unlikely(r == NULL))
 	{
 		++__libcrunch_begun;
 		if (__libcrunch_debug_level > 0) warnx("Aborted __is_a(%p, %p), reason: %\n", obj, r, 
@@ -275,11 +232,23 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
  * to avoid multiple-definition link errors. This causes the compiler to 
  * complain (warn) when it's used from extern inline functions, like all
  * our functions here. HMM. Instead, ditch __builtin_return_address in favour
- * of some different GNU extensions: "&&label" and gnu_inline. */
+ * of some different GNU extensions: "&&label" and gnu_inline. ACTUALLY that
+ * doesn't work on my current gcc (4.9.2) because it mistakenly thinks that 
+ * "&&mylabel" is a local variable, then does bogus UB optimisations on the
+ * result. SIGH. Use an arch-specific sequence instead. DOUBLE SIGH: if we
+ * write "callq 0" it gets relocated, so use .byte. */
 extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_pc)(void);
 extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_pc)(void)
 {
-	mylabel: return &&mylabel;
+	// mylabel: return &&mylabel;
+	void *addr;
+	__asm__ volatile (".byte 0xe8   # callq \n\
+	                   .byte 0x0    # 0 \n\
+	                   .byte 0x0    # \n\
+	                   .byte 0x0    # \n\
+	                   .byte 0x0    # \n\
+	                   pop %0" : "=r"(addr)); /* FIXME: CIL frontc parse bug: */ // : /* no inputs */ : /* no clobbers */);
+	return addr;
 }
 void warnx(const char *fmt, ...);
 
@@ -312,7 +281,7 @@ extern inline struct __libcrunch_is_a_cache_s *(__attribute__((always_inline,gnu
 							&& diff % __libcrunch_is_a_cache[i].period == 0)))
 			{
 				// hit -- make sure we're not the next victim
-				if (__builtin_expect(__libcrunch_is_a_cache_next_victim == i, 0))
+				if (unlikely(__libcrunch_is_a_cache_next_victim == i))
 				{
 					if (__libcrunch_is_a_cache_size > 0)
 					{
@@ -339,14 +308,14 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 		return 1; 
 	} 
 	// int inited = __libcrunch_check_init (); 
-	// if (__builtin_expect((inited == -1), 0)) 
+	// if (unlikely(inited == -1))
 	// { 
 	//	 return 1; 
 	// } 
 	
 	/* Null uniqtype means __is_aS got a bad typestring, OR we're not  
 	 * linked with enough uniqtypes data. */ 
-	if (__builtin_expect( !uniqtype, 0)) 
+	if (unlikely(!uniqtype))
 	{ 
 	   __libcrunch_begun++; 
 	   __libcrunch_aborted_typestr++; 
@@ -392,7 +361,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const voi
 		return 1;
 	}
 	// int inited = __libcrunch_check_init ();
-	// if (__builtin_expect((inited == -1), 0))
+	// if (unlikely(inited == -1))
 	// {
 	//	 return 1;
 	// }
@@ -416,14 +385,14 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const v
 		return 1;
 	}
 	// int inited = __libcrunch_check_init (); 
-	// if (__builtin_expect((inited == -1), 0)) 
+	// if (unlikely(inited == -1))
 	// { 
 	//	 return 1; 
 	// } 
 	
 	/* Null uniqtype means __is_aS got a bad typestring, OR we're not  
 	 * linked with enough uniqtypes data. */ 
-	if (__builtin_expect( !uniqtype, 0)) 
+	if (unlikely(!uniqtype))
 	{ 
 	   __libcrunch_begun++; 
 	   __libcrunch_aborted_typestr++; 
@@ -447,15 +416,10 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const 
 	{
 		return 1;
 	}
-	// int inited = __libcrunch_check_init ();
-	// if (/*__builtin_expect(*/(inited == -1)/*, 0)*/)
-	// {
-	//	 return 1;
-	// }
 
 	/* Null uniqtype means __is_aS got a bad typestring, OR we're not  
 	 * linked with enough uniqtypes data. */
-	if (/*__builtin_expect(*/ !s/*, 0)*/)
+	if (unlikely(!s))
 	{
 		__libcrunch_begun++;
 		__libcrunch_aborted_typestr++;
@@ -479,14 +443,14 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_ref
 		return 1;
 	}
 	// int inited = __libcrunch_check_init ();
-	// if (__builtin_expect((inited == -1), 0))
+	// if (unlikely(inited == -1))
 	// {
 	//	 return 1;
 	// }
 	
 	/* Null uniqtype means __is_aS got a bad typestring, OR we're not 
 	 * linked with enough uniqtypes data. */
-	if (__builtin_expect( !uniqtype, 0))
+	if (unlikely(!uniqtype))
 	{
 		__libcrunch_begun++;
 		__libcrunch_aborted_typestr++;
@@ -543,6 +507,7 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)
 	/* use XOR to allow kernel-mode pointers too (even though we generally don't support these) */
 	return (void *)(((unsigned long long) ptr) ^ (((unsigned long long) tag) << LIBCRUNCH_TRAP_TAG_SHIFT));
 }
+/* ONLY use untrap if you're *sure* you have a trapped pointer! */
 extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag);
 extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag)
 {
@@ -578,24 +543,145 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap
 				trapi <= -(1ull << LIBCRUNCH_TRAP_TAG_SHIFT));
 	/* i.e. trap values are the really-really-positive and really-really-negative addresses. */
 }
+/*
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(const __libcrunch_bounds_t *in);
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(const __libcrunch_bounds_t *in)
 {
 	return in->base == (void*) -1;
 }
-
+*/
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit)
 {
-	return (__libcrunch_bounds_t) { (void*) base, (void*) limit };
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	return (__libcrunch_bounds_t) {
+			((unsigned long) base) >> 32,
+			((unsigned long) limit) >> 32
+	};
+#else
+	return (__libcrunch_bounds_t) { base, limit };
+#endif
 }
+
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_max_bounds)(const void *ptr);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_max_bounds)(const void *ptr)
+{
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	/* Max bounds are when the two values are equal, 
+	 * because this always represents a 4GB region.
+	 * WHERE should we centre the bounds?
+	 * Let's play it safe and make them obj += 2GB.
+	 * Note that in extreme cases, this will actually not permit
+	 * some accesses which the intention of "max bounds" is to include. */
+	return __make_bounds(((unsigned long) obj) - 1ul<<31, ((unsigned long) obj) + 1ul<<31);
+#else
+	return (__libcrunch_bounds_t) { (unsigned long) 0, (unsigned long) -1 };
+#endif
+}
+
+#define _CLEAR_UPPER_32(i) \
+(((unsigned long) (i)) & ((1ul<<32)-1ul))
+#define _CLEAR_LOWER_32(i) \
+(((unsigned long) (i)) & ~((1ul<<32)-1ul))
+
+extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_base)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom);
+extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_base)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom)
+{
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	/* The bounds are storing only the lower bits of the base.
+	 * If they're <= derivedfrom's lower 32, they are shared with the base.
+	 * Otherwise, the base is 4GB lower.
+	 * (base <= derivedfrom < limit)
+	 */
+	if (likely(p_bounds->base <= _CLEAR_UPPER_32(derivedfrom)))
+	{
+		return (void*) (_CLEAR_LOWER_32(derivedfrom) + p_bounds->base);
+	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) - 0x100000000ul + p_bounds->base);
+#else
+	return (void*) p_bounds->base;
+#endif
+}
+
+extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_limit)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom);
+extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_limit)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom)
+{
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	/* The bounds are storing only the lower bits of the limit.
+	 * If derivedfrom's lower 32 < those bits, they are shared with the limit.
+	 * Otherwise, the limit is 4GB higher.
+	 * (base <= derivedfrom < limit)
+	 */
+	if (likely(_CLEAR_UPPER_32(derivedfrom) < limit))
+	{
+		return (void*) (_CLEAR_LOWER_32(derivedfrom) + p_bounds->limit);
+	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) + 0x100000000ul + p_bounds->limit);
+#else
+	return (void*) p_bounds->limit;
+#endif
+}
+
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr)
+{
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	/* Bounds/ptr orderings:
+	 * low               high
+	 *      B  P  L               normal
+	 *      B  L  P               > 4 GB a.k.a. invalid
+	 *      P  B  L               > 4 GB a.k.a. invalid
+	 *      P  L  B               base is lower
+	 *      L  B  P               limit is higher
+	 *      L  P  B               > 4 GB
+	 * 
+	 * so, in short
+	 *   try      p-2, p-1
+	 *   and if   p == 0, we're okay because we get   P B L  which is also invalid
+	 *   but if   p == 1  we also go for P B L, so try p-3, p-2
+	 * 
+	 * This means we can recognise invalid bounds as numbers just above p,
+	 * or, for low p, high positive numbers.
+	 */
+	unsigned p_low = (unsigned) _CLEAR_UPPER_32(ptr);
+	
+	if (likely(p_low != 1))
+	{
+		   return (__libcrunch_bounds_t) { p_low - 2, p_low - 1 };
+	} else return (__libcrunch_bounds_t) { p_low - 3, p_low - 2 };
+#else
+	return __make_bounds((unsigned long) -1l, 0ul);
+#endif
+}
+
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, void *ptr);
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, void *ptr)
+{
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	/* Bounds are invalid if
+	 * base is above ptr_l but below limit, or
+	 * limit is below ptr but above base.
+	 * 
+	 * These bounds are invalid because they denote an object bigger than 4GB.
+	 */
+	unsigned base = bounds.base;
+	unsigned limit = bounds.limit;
+	unsigned ptr_l = (unsigned) _CLEAR_UPPER_32(ptr);
+	return (base > ptr_l && base < limit)
+			|| (limit < ptr_l && limit > base);
+#else
+	return bounds.limit <= bounds.base;
+#endif
+}
+
+
+#undef _CLEAR_LOWER_32
+#undef _CLEAR_UPPER_32
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, struct uniqtype *t);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, struct uniqtype *t)
 {
 	/* We understand trap ptrs */
 	const void *testptr;
-	if (__builtin_expect(__libcrunch_is_trap_ptr(ptr, LIBCRUNCH_TRAP_ONE_PAST), 0))
+	if (unlikely(__libcrunch_is_trap_ptr(ptr, LIBCRUNCH_TRAP_ONE_PAST)))
 	{
 		testptr = (const char*) ptr - t->pos_maxoff;
 	} else testptr = ptr;
@@ -606,7 +692,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 		/* Is ptr actually a t? If not, we're in trouble!
 		 * Maybe it's one-past and we just de-trapped it? 
 		 * NO, we handle that in caller. */
-		//if (__builtin_expect(!hit->result, 0))
+		//if (unlikely(!hit->result, 0))
 		//{
 		//	// loop: goto loop; /* internal error! this shouldn't happen! etc. */
 		//	__asm__ volatile ("ud2");
@@ -614,13 +700,13 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 		/* HMM. Commented this abort out since I'mnow  less sure that it's a good idea.
 		 * See the bounds-toint test case. */
 		/* Does "obj" include "derivedfrom"? */
-		return (__libcrunch_bounds_t) { (void*) hit->obj_base, (void*) hit->obj_limit };
+		return __make_bounds((unsigned long) hit->obj_base, (unsigned long) hit->obj_limit);
 	}
 	/* Else if libcrunch is linked in, we can delegate to it. */
 	return __fetch_bounds_internal(ptr, t);
 }
-extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t);
-extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t)
+extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t);
+extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t)
 {
 	/* PRECONDITIONS (a.k.a. things we don't need to check here): 
 	 * - derivedfrom is an in-bounds pointer that really does point to a T
@@ -647,7 +733,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	 * has not been filled yet, it's our job to do it. */
 	// assert(opt_derivedfrom_bounds);
 	__libcrunch_bounds_t bounds;
-	if (opt_derivedfrom_bounds && !__libcrunch_bounds_invalid(opt_derivedfrom_bounds))
+	if (opt_derivedfrom_bounds /*&& !__libcrunch_bounds_invalid(opt_derivedfrom_bounds)*/)
 	{
 		bounds = *opt_derivedfrom_bounds;
 	}
@@ -656,23 +742,23 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 		bounds = __fetch_bounds(derivedfrom, t);
 	}
 	
-	if (__builtin_expect(__libcrunch_is_trap_ptr(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST), 0))
+	if (unlikely(__libcrunch_is_trap_ptr(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST)))
 	{
 		/* de-trap derivedfrom */
 		derivedfrom = __libcrunch_untrap(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST);
 	}
 	
 	// too low?
-	if ((char*) *p_derived < (char*) bounds.base) { goto out_fail; }
+	if (unlikely((char*) *p_derived < (char*) __libcrunch_get_base(&bounds, derivedfrom))) { goto out_fail; }
 	// NOTE: support for one-prev pointers as trap values goes here
 
 	// too high?
-	if ((char*) *p_derived > (char*) bounds.limit) { goto out_fail; }
+	if (unlikely((char*) *p_derived > (char*) __libcrunch_get_limit(&bounds, derivedfrom))) { goto out_fail; }
 	
 	// FIXME: experiment with Austin et al's "unsigned subtraction" hack here
 
 	// "one past"?
-	if ((char*) *p_derived == (char*) bounds.limit)
+	if ((char*) *p_derived == (char*) __libcrunch_get_limit(&bounds, derivedfrom))
 	{
 		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
 	}
@@ -682,10 +768,16 @@ out:
 	return 1;
 out_fail:
 	/* Don't fail here; print a warning and return a trapped pointer */
-	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld; lb %p; ub %p)",
-		__libcrunch_get_pc(), *p_derived, derivedfrom, (char*) *p_derived - (char*) derivedfrom, bounds.base, bounds.limit);
+	__libcrunch_bounds_error(*p_derived, derivedfrom, bounds);
 	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
 	return 1;
 }
+
+#ifdef __libcrunch_defined_unlikely
+#undef unlikely
+#endif
+#ifdef __libcrunch_defined_likely
+#undef likely
+#endif
 
 #endif

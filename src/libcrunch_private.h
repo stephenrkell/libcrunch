@@ -33,6 +33,7 @@ extern unsigned long __libcrunch_begun;
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
 extern unsigned long __libcrunch_aborted_init;
 extern unsigned long __libcrunch_trivially_succeeded_null;
+extern unsigned long __libcrunch_checked_pointer_adjustments;
 #endif
 extern unsigned long __libcrunch_aborted_typestr;
 extern unsigned long __libcrunch_lazy_heap_type_assignment;
@@ -40,6 +41,7 @@ extern unsigned long __libcrunch_failed_and_suppressed;
 extern unsigned long __libcrunch_failed_in_alloc;
 extern unsigned long __libcrunch_succeeded;
 extern unsigned long __libcrunch_is_a_hit_cache;
+extern unsigned long __libcrunch_created_invalid_pointer;
 
 unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
 #ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE
