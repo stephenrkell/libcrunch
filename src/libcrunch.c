@@ -1764,7 +1764,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 	if (t == &__uniqtype__signed_char
 			|| t == &__uniqtype__unsigned_char)
 	{
-		goto return_alloc_bounds;
+		goto return_alloc_bounds; // FIXME: this is C-specific
 	}
 	
 	/* We can assume that the memory at obj is validly a t, for some "valid"

@@ -275,6 +275,8 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
 let makeBoundsLocal vi bt enclosingFunction enclosingFile = 
     Cil.makeTempVar enclosingFunction ~name:("__cil_localbound_" ^ vi.vname ^ "_") bt
 
+let makeSizeOfPointeeType ptrExp = SizeOf(Cil.typeOf (Lval(Mem(ptrExp), NoOffset)))
+
 let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Cil.varinfo VarinfoMap.t ref) = 
     debug_print 0 ("Ensuring we have bounds local for " ^ vi.vname ^ "\n");
     try  
@@ -718,13 +720,15 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
                   | _ -> nullPtr
               )
               (* struct uniqtype *t *)  (* the pointed-*TO* type of the pointer *)
-            ; let pointeeUniqtypeVar = 
+            ; (let pointeeUniqtypeVar = 
                 let pointeeTs = match (exprConcreteType ptrExp) with
                         TSPtr(ts, _) -> ts
                       | _ -> failwith "recipient is not a pointer"
                  in ensureUniqtypeGlobal pointeeTs enclosingFile uniqtypeGlobals
               in
               mkAddrOf (Var(pointeeUniqtypeVar), NoOffset)
+              )
+            ; makeSizeOfPointeeType ptrExp
             ],
             loc
       );
@@ -745,22 +749,24 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
 
 let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
     let loc = instrLoc currentInst in
+    (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
+    let ptrT = exprConcreteType (Lval(justWrittenLval))
+    in
+    let ts = match ptrT with 
+        TSPtr(targetTs, _) -> targetTs
+      | _ -> failwith "fetching bounds for a non-pointer"
+    in
+    let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
+    in
     Call( Some(lvalToBoundsFun justWrittenLval),
             (Lval(Var(fetchBoundsFun.svar),NoOffset)),
             [
                 (* const void *ptr *)
                 Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
             ;   (* struct uniqtype *t *)
-                (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
-                let ptrT = exprConcreteType (Lval(justWrittenLval))
-                in
-                let ts = match ptrT with 
-                    TSPtr(targetTs, _) -> targetTs
-                  | _ -> failwith "fetching bounds for a non-pointer"
-                in
-                let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
-                in
                 mkAddrOf (Var(uniqtypeGlobal), NoOffset)
+            ;   (* what's the size of that thing? *)
+                makeSizeOfPointeeType (Lval(justWrittenLval))
             ],
             loc
         )
@@ -961,7 +967,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                             enclosingFile "__fetch_bounds" (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
-                                   ("t", voidConstPtrType, [])
+                                   ("t", voidConstPtrType, []);
+                                   ("t_sz", ulongType, [])
                                  ], 
                             false, []))
     ;
@@ -989,6 +996,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                    ("derivedfrom", voidConstPtrType, []); 
                                    ("opt_derivedfrom_bounds", boundsPtrType, []); 
                                    ("t", uniqtypePtrType, []); 
+                                   ("t_sz", ulongType, [])
                                  ], 
                             false, [])) 
     ;
