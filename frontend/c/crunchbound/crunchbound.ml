@@ -322,6 +322,7 @@ let boundsLvalForLocalLval (boundsLocals : Cil.varinfo VarinfoMap.t ref) enclosi
             in
             (Var(boundsVi), offs)
         | _ -> failwith "local lvalue not a Var"
+
 let makeCallToMakeBounds outputLval baseExpr limitExpr loc makeBoundsFun =
     Call( outputLval,
             (Lval(Var(makeBoundsFun.svar),NoOffset)),
@@ -927,6 +928,7 @@ class crunchBoundVisitor = fun enclosingFile ->
   val mutable inlineAssertFun = emptyFunction "__inline_assert"
   val mutable fetchBoundsInlineFun = emptyFunction "__fetch_bounds"
   val mutable makeBoundsInlineFun = emptyFunction "__make_bounds"
+  val mutable makeInvalidBoundsInlineFun = emptyFunction "__libcrunch_make_invalid_bounds"
   val mutable checkDerivePtrInlineFun = emptyFunction "__check_derive_ptr"
   val mutable detrapInlineFun = emptyFunction "__libcrunch_detrap"
   val mutable checkLocalBoundsInlineFun = emptyFunction "__check_local_bounds"
@@ -969,6 +971,14 @@ class crunchBoundVisitor = fun enclosingFile ->
                             Some [ 
                                    ("base", ulongType, []);
                                    ("limit", ulongType, [])
+                                 ], 
+                            false, []))
+    ;
+
+    makeInvalidBoundsInlineFun <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__libcrunch_make_invalid_bounds" (TFun(boundsType, 
+                            Some [ 
+                                   ("ptr", voidConstPtrType, [])
                                  ], 
                             false, []))
     ;
@@ -1085,20 +1095,128 @@ class crunchBoundVisitor = fun enclosingFile ->
              in the case where the address doesn't actually escape.
            *)
           (
-            let locals = List.filter (fun v -> varinfoIsLocal v !currentFuncAddressTakenLocalNames) (f.sformals @ f.slocals)
+            let varNeedsBounds = (fun v -> varinfoIsLocal v !currentFuncAddressTakenLocalNames)
             in
-            let boundsTsToCreate = 
-            List.map (fun vi -> 
-                match boundsTForT vi.vtype enclosingFile.globals with
+            let maybeCreateBounds = fun vi -> 
+                let boundsT = boundsTForT vi.vtype enclosingFile.globals
+                in
+                match boundsT with
                     Some(bt) -> 
                         output_string stderr ("Creating bounds for local " ^ 
                             vi.vname ^ "; bounds have type " ^ (typToString bt) ^ "\n");
                         let created = getOrCreateBoundsLocal vi f enclosingFile boundsLocals
                         in
-                        ()
-                  | None -> ()
-            ) locals
-            in 
+                        Some(boundsT, created)
+                  | None -> None
+            in
+            let localBoundsTsToCreate = List.map maybeCreateBounds (List.filter varNeedsBounds f.slocals)
+            in
+            let formalsNeedingBounds =  (List.filter varNeedsBounds f.sformals)
+            in
+            let formalBoundsTsToCreate = List.map maybeCreateBounds formalsNeedingBounds
+            in
+            (* The boundsTs were added by side-effect. 
+             * What we haven't done is initialise the ones that correspond to formals.
+             * Unlike locals, formals are already valid before initialisation.
+             * We initialise them to an invalid bounds value.
+             * Unfortunately this might depend on their actual value.
+             * So we need to make a call to a helper.
+             * We unroll all these calls. *)
+            let formalBoundsInitList = List.fold_left (fun acc -> fun (origVi, maybeBoundsTAndVi) -> 
+                match maybeBoundsTAndVi with
+                    Some(Some(TComp(ci, attrs)), boundVi) when ci.cname = "__libcrunch_bounds_s" ->
+                        (* singleton *)
+                        Call( Some(Var(boundVi), NoOffset),
+                                (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                [
+                                    (*  const void *ptr *)
+                                    Lval(Var(origVi), NoOffset)
+                                ],
+                                boundVi.vdecl (* loc *)
+                            ) :: acc
+                  | Some(Some(TArray(TComp(ci, attrs), Some(boundExpr), [])), boundVi) when ci.cname = "__libcrunch_bounds_s" ->
+                        (* array.
+                           Build a map from the array indices to the corresponding lvalue offsets.
+                         *)
+                        let rec enumeratePointerYieldingOffsetsForT t = match t with
+                            TVoid(attrs) -> []
+                          | TInt(ik, attrs) -> []
+                          | TFloat(fk, attrs) -> []
+                          | TPtr(pt, attrs) -> 
+                            (match (Cil.typeSig pt) with 
+                                TSBase(TVoid(_)) -> [] 
+                                | _ -> [NoOffset]
+                            )
+                          | TArray(at, None, attrs) -> failwith "asked to enumerate ptroffs for unbounded array type"
+                          | TArray(at, Some(boundExpr), attrs) -> 
+                                (* For each offset that yields a pointer in the element type,
+                                 * prepend it with Index(n), 
+                                 * and copy/repeat for all n in the range of the array. *)
+                                let arraySize = match constInt64ValueOfExpr boundExpr with
+                                    Some n -> n
+                                  | None -> failwith "enumerating ptroffs for non-constant array bounds"
+                                in
+                                let rec intsUpTo start endPlusOne = 
+                                    if start >= endPlusOne then [] else start :: (intsUpTo (start+1) endPlusOne)
+                                in
+                                let elementPtrOffsets = enumeratePointerYieldingOffsetsForT at
+                                in
+                                let arrayIndices = intsUpTo 0 (Int64.to_int arraySize)
+                                in
+                                (* copy the list of offsets, once
+                                 * for every index in the range of the array *)
+                                List.flatten (List.map (fun offset -> List.map (fun i ->
+                                    Index(makeIntegerConstant (Int64.of_int i), offset)
+                                ) arrayIndices) elementPtrOffsets)
+                          | TFun(_, _, _, _) -> failwith "asked to enumerate ptroffs for incomplete (function) type"
+                          | TNamed(ti, attrs) -> enumeratePointerYieldingOffsetsForT ti.ttype
+                          | TComp(ci, attrs) -> 
+                                (* For each field, recursively collect the offsets
+                                 * then prepend Field(fi) to each. We prepend the same fi,
+                                 * for all offsets yielded by a given field,
+                                 * then move on to the next field. *)
+                                List.fold_left (fun acc -> fun fi -> 
+                                    let thisFieldOffsets = enumeratePointerYieldingOffsetsForT fi.ftype
+                                    in
+                                    let prepended = List.map (fun offs -> 
+                                        Field(fi, offs)
+                                    ) thisFieldOffsets
+                                    in
+                                    prepended @ acc
+                                ) [] ci.cfields
+                          | TEnum(ei, attrs) -> []
+                          | TBuiltin_va_list(attrs) -> []
+                        in
+                        let initInstrs = List.fold_left (fun acc_is -> fun pOffset ->
+                            let indexExpr = boundsIndexExprForOffset zero pOffset (Var(origVi)) NoOffset enclosingFile.globals
+                            in
+                            Call( 
+                                Some(Var(boundVi), Index(indexExpr, NoOffset)),
+                                (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                [
+                                    (* const void * ptr *)
+                                    Lval(Var(origVi), pOffset)
+                                ],
+                                boundVi.vdecl (* loc *)
+                            ) :: acc_is
+                        ) [] (enumeratePointerYieldingOffsetsForT origVi.vtype)
+                        in
+                        initInstrs @ acc
+                  | Some(_) -> failwith "not a bounds type (v)"
+                  | None -> (* do nothing *) acc
+            ) [] (zip formalsNeedingBounds formalBoundsTsToCreate)
+            in
+            f.sbody <- { 
+                battrs = f.sbody.battrs; 
+                bstmts = {
+                    labels = [];
+                    skind = Instr(formalBoundsInitList);
+                    sid = 0;
+                    succs = [];
+                    preds = [] 
+                } :: f.sbody.bstmts
+            }
+            ;
             ChangeDoChildrenPost(f, fun x -> currentFunc := None; x)
           )
         
@@ -1484,14 +1602,6 @@ class crunchBoundVisitor = fun enclosingFile ->
           *)
     ) (* end ChangeDoChildrenPost *)
 end
-
-(* Things I've punted on: 
- * 
- * - any caching, for now; 
- * - pre-defining the hoisted pointers, so that they can be cached
-        (but are they ever written to more than once? no, but copy-propagation works);
- * - updating the cached bounds after a pointer write
- *)
 
 let feature : Feature.t = 
   { fd_name = "crunchbound";

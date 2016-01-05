@@ -1737,6 +1737,8 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 	 * not a constructor, because it's not safe to call super-early). */
 	__libcrunch_check_init();
 	
+	if (!obj) goto return_min_bounds;
+	
 	struct uniqtype *test_uniqtype = t;
 	memory_kind k = UNKNOWN;
 	const void *alloc_start;

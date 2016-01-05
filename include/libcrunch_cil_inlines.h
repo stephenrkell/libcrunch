@@ -65,6 +65,7 @@ const void *__libcrunch_typestr_to_uniqtype (const char *) __attribute__((weak))
 /* This is not weak. */
 void __assert_fail(const char *__assertion, const char *__file,
     unsigned int __line, const char *__function);
+void abort(void) __attribute__((noreturn));
 
 extern _Bool __libcrunch_is_initialized __attribute__((weak));
 extern unsigned long __libcrunch_begun __attribute__((weak));
@@ -652,8 +653,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 }
 
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, void *ptr);
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, void *ptr)
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, const void *ptr);
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, const void *ptr)
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* Bounds are invalid if
@@ -697,7 +698,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 		//	// loop: goto loop; /* internal error! this shouldn't happen! etc. */
 		//	__asm__ volatile ("ud2");
 		//}
-		/* HMM. Commented this abort out since I'mnow  less sure that it's a good idea.
+		/* HMM. Commented this abort out since I'm now less sure that it's a good idea.
 		 * See the bounds-toint test case. */
 		/* Does "obj" include "derivedfrom"? */
 		return __make_bounds((unsigned long) hit->obj_base, (unsigned long) hit->obj_limit);
@@ -733,7 +734,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	 * has not been filled yet, it's our job to do it. */
 	// assert(opt_derivedfrom_bounds);
 	__libcrunch_bounds_t bounds;
-	if (opt_derivedfrom_bounds /*&& !__libcrunch_bounds_invalid(opt_derivedfrom_bounds)*/)
+	if (opt_derivedfrom_bounds && !__libcrunch_bounds_invalid(*opt_derivedfrom_bounds, derivedfrom))
 	{
 		bounds = *opt_derivedfrom_bounds;
 	}
