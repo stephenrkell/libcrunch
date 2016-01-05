@@ -75,6 +75,7 @@ extern unsigned long __libcrunch_failed __attribute__((weak));
 extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
 extern unsigned long __libcrunch_checked_pointer_adjustments __attribute__((weak));
 extern unsigned long __libcrunch_created_invalid_pointer __attribute__((weak));
+extern unsigned long __libcrunch_fetch_bounds_called __attribute__((weak));
 
 extern unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
 extern const unsigned short __libcrunch_is_a_cache_size;
@@ -730,6 +731,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	/* We understand trap ptrs */
+	++__libcrunch_fetch_bounds_called; // TEMP
 	const void *testptr;
 	if (unlikely(__libcrunch_is_trap_ptr(ptr, LIBCRUNCH_TRAP_ONE_PAST)))
 	{
@@ -794,6 +796,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	else
 	{
 		bounds = __fetch_bounds(derivedfrom, t, t_sz);
+		if (opt_derivedfrom_bounds) *opt_derivedfrom_bounds = bounds;
 	}
 	
 	if (unlikely(__libcrunch_is_trap_ptr(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST)))
@@ -802,17 +805,23 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 		derivedfrom = __libcrunch_untrap(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST);
 	}
 	
+	unsigned long base = (unsigned long) __libcrunch_get_base(&bounds, derivedfrom);
+	unsigned long limit = (unsigned long) __libcrunch_get_limit(&bounds, derivedfrom);
+	unsigned long addr = (unsigned long) *p_derived;
+	
 	// too low?
-	if (unlikely((char*) *p_derived < (char*) __libcrunch_get_base(&bounds, derivedfrom))) { goto out_fail; }
+	//if (unlikely(addr < base)) { goto out_fail; }
 	// NOTE: support for one-prev pointers as trap values goes here
-
 	// too high?
-	if (unlikely((char*) *p_derived > (char*) __libcrunch_get_limit(&bounds, derivedfrom))) { goto out_fail; }
+	//if (unlikely(addr > limit)) { goto out_fail; }
 	
 	// FIXME: experiment with Austin et al's "unsigned subtraction" hack here
+	// which is (p292, Fig. 3)
+	//if ((unsigned)(addr-base) > size - sizeof (<type>)) FlagSpatialError();
+	if (addr - base > limit - base - t_sz) goto out_fail;
 
 	// "one past"?
-	if ((char*) *p_derived == (char*) __libcrunch_get_limit(&bounds, derivedfrom))
+	if (addr == limit)
 	{
 		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
 	}

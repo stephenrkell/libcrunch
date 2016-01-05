@@ -80,7 +80,7 @@ checkrun-fail-%:
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-$* 1>$$out 2>$$err && \
 		. ./checks.sh && tail -n26 "$$err" | \
-		    match "checks failed otherwise" '[1-9][0-9]*' >/dev/null || \
+		    match "       failed otherwise" '[1-9][0-9]*' >/dev/null || \
 		(tail -n26 $$err; false)
 		
 # Some cases are expected to abort the program (assertion failed, segfault, etc.)
@@ -108,9 +108,9 @@ checkrun-%:
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-$* 1>$$out 2>$$err && \
 		. ./checks.sh && tail -n26 "$$err" | \
-		    match "checks nontrivially passed" '[1-9][0-9]*' | \
-		    match "checks failed inside"        '0' | \
-		    match "checks failed otherwise"     '0' >/dev/null || \
+		    match "       nontrivially passed" '[1-9][0-9]*' | \
+		    match "       failed inside"        '0' | \
+		    match "       failed otherwise"     '0' >/dev/null || \
 		(tail -n26 $$err; false)
 
 # Some cases are special and require only an exit status of zero
@@ -139,8 +139,8 @@ checkrun-lazy-typing:
 	$(MAKE) cleanrun-lazy-typing 1>$$out 2>$$err && \
 		. ./checks.sh && tail -n26 "$$err" | \
 		    match "of which did lazy heap type assignment" '[1-9][0-9]*' | \
-		    match "checks failed inside"        '0' | \
-		    match "checks failed otherwise"     '0' >/dev/null || \
+		    match "       failed inside"        '0' | \
+		    match "       failed otherwise"     '0' >/dev/null || \
 		(tail -n26 $$err; false)
 
 _onlyrun-%:

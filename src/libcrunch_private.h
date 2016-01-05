@@ -42,6 +42,7 @@ extern unsigned long __libcrunch_failed_in_alloc;
 extern unsigned long __libcrunch_succeeded;
 extern unsigned long __libcrunch_is_a_hit_cache;
 extern unsigned long __libcrunch_created_invalid_pointer;
+extern unsigned long __libcrunch_fetch_bounds_called;
 
 unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
 #ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE

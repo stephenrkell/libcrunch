@@ -22,6 +22,7 @@ extern unsigned long __libcrunch_failed __attribute__((weak));
 extern unsigned long __libcrunch_succeeded __attribute__((weak));
 extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
 extern unsigned long __libcrunch_created_invalid_pointer __attribute__((weak));
+extern unsigned long __libcrunch_fetch_bounds_called __attribute__((weak));
 
 /* Uniqtypes for signed_char and unsigned_char.
  * 

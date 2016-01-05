@@ -229,6 +229,7 @@ unsigned long __libcrunch_failed_in_alloc;
 unsigned long __libcrunch_failed_and_suppressed;
 unsigned long __libcrunch_succeeded;
 unsigned long __libcrunch_created_invalid_pointer;
+unsigned long __libcrunch_fetch_bounds_called;
 
 struct __libcrunch_is_a_cache_s /* __thread */ __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
 unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
@@ -278,30 +279,33 @@ static void print_exit_summary(void)
 	fprintf(crunch_stream_err, "====================================================\n");
 	fprintf(crunch_stream_err, "libcrunch summary: \n");
 	fprintf(crunch_stream_err, "----------------------------------------------------\n");
-	fprintf(crunch_stream_err, "checks begun:                              % 9ld\n", __libcrunch_begun);
+	fprintf(crunch_stream_err, "type checks begun:                         % 9ld\n", __libcrunch_begun);
 	fprintf(crunch_stream_err, "----------------------------------------------------\n");
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(crunch_stream_err, "checks aborted due to init failure:        % 9ld\n", __libcrunch_aborted_init);
+	fprintf(crunch_stream_err, "       aborted due to init failure:        % 9ld\n", __libcrunch_aborted_init);
 #endif
-	fprintf(crunch_stream_err, "checks aborted for bad typename:           % 9ld\n", __libcrunch_aborted_typestr);
+	fprintf(crunch_stream_err, "       aborted for bad typename:           % 9ld\n", __libcrunch_aborted_typestr);
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(crunch_stream_err, "checks trivially passed:                   % 9ld\n", __libcrunch_trivially_succeeded);
+	fprintf(crunch_stream_err, "       trivially passed:                   % 9ld\n", __libcrunch_trivially_succeeded);
 #endif
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(crunch_stream_err, "checks remaining                           % 9ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr + __libcrunch_aborted_init));
+	fprintf(crunch_stream_err, "       remaining                           % 9ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr + __libcrunch_aborted_init));
 #else
-	fprintf(crunch_stream_err, "checks remaining                           % 9ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
+	fprintf(crunch_stream_err, "       remaining                           % 9ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
 #endif	
 	fprintf(crunch_stream_err, "----------------------------------------------------\n");
 	fprintf(crunch_stream_err, "   of which did lazy heap type assignment: % 9ld\n", __libcrunch_lazy_heap_type_assignment);
 	fprintf(crunch_stream_err, "----------------------------------------------------\n");
-	fprintf(crunch_stream_err, "checks failed inside allocation functions: % 9ld\n", __libcrunch_failed_in_alloc);
-	fprintf(crunch_stream_err, "checks failed otherwise:                   % 9ld\n", __libcrunch_failed);
-	fprintf(crunch_stream_err, "   of which user suppression list matched: % 9ld\n", __libcrunch_failed_and_suppressed);
-	fprintf(crunch_stream_err, "checks nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
+	fprintf(crunch_stream_err, "       failed inside allocation functions: % 9ld\n", __libcrunch_failed_in_alloc);
+	fprintf(crunch_stream_err, "       failed otherwise:                   % 9ld\n", __libcrunch_failed);
+	fprintf(crunch_stream_err, "                 of which user suppressed: % 9ld\n", __libcrunch_failed_and_suppressed);
+	fprintf(crunch_stream_err, "       nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
 	fprintf(crunch_stream_err, "----------------------------------------------------\n");
 	fprintf(crunch_stream_err, "   of which hit __is_a cache:              % 9ld\n", __libcrunch_is_a_hit_cache);
 	fprintf(crunch_stream_err, "----------------------------------------------------\n");
+	fprintf(crunch_stream_err, "out-of-bounds pointers created:            % 9ld\n", __libcrunch_created_invalid_pointer);
+	fprintf(crunch_stream_err, "accesses trapped and emulated:             % 9ld\n", 0ul /* FIXME */);
+	fprintf(crunch_stream_err, "calls to __fetch_bounds:                   % 9ld\n", __libcrunch_fetch_bounds_called /* FIXME: remove */);
 	fprintf(crunch_stream_err, "====================================================\n");
 	if (!verbose)
 	{

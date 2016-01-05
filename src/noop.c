@@ -10,6 +10,7 @@ unsigned long int __libcrunch_aborted_typestr = 0;
 unsigned long int __libcrunch_is_a_hit_cache = 0;
 unsigned long int __libcrunch_created_invalid_pointer = 0;
 unsigned long int __libcrunch_checked_pointer_adjustments = 0;
+unsigned long int __libcrunch_fetch_bounds_called = 0;
 
 /* We really want to fit in 64 bits on x86-64. */
 struct __libcrunch_bounds_s
