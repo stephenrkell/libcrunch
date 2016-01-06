@@ -11,16 +11,16 @@ int main(void)
 		char *plugh;
 	} cs[2] = { { 101, "a" }, { 102, "b" } };
 	
-	char *a = &as[43];
+	char *a = &as[41];
 	printf("Got a: %p\n", a);
 
-	char *b = &as[-1];
+	char *b = &as[1];
 	printf("Got b: %p\n", b);
 
-	char *c = &as[a - b]; // difference 44
+	char *c = &as[a - b]; // difference 40
 	printf("Got c: %p\n", c);
 
-	char *d = &as[as[10]];
+	char *d = &bs[as[2]]; // value 'b' a.k.a. 98
 	printf("Got d: %p\n", d);
 	
 	char **e = &cs[0].plugh;

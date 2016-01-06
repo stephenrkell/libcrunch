@@ -73,3 +73,17 @@ test/fail-voidptrptr-strict/fail-voidptrptr-strict
 test/function-refines/function-refines
 test/pointer-degree/pointer-degree
 test/voidptrptr/voidptrptr
+test/abort-bounds-type-backin/abort-bounds-type-backin
+test/bounds-actuals/bounds-actuals
+test/bounds-diff/bounds-diff
+test/bounds-simple/bounds-simple
+test/fail-bounds-type-backin/fail-bounds-type-backin
+test/fail-bounds-type-oneprev/fail-bounds-type-oneprev
+test/fail-bounds-type-simple/fail-bounds-type-simple
+test/fail-bounds-type-trapped/fail-bounds-type-trapped
+test/noquery-bounds-itersimple/noquery-bounds-itersimple
+test/noquery-bounds-multidim/noquery-bounds-multidim
+test/noquery-bounds-nofetch/noquery-bounds-nofetch
+test/trap-bounds-oneprev/fail-bounds-oneprev
+test/trap-bounds-oneprev/trap-bounds-oneprev
+test/trap-bounds-toint/trap-bounds-toint

@@ -38,8 +38,9 @@ class CrunchXCC(CrunchCC):
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
-            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr" \
                 ]
+            # temporary HACK: disable trumptr (pure bounds)
+            #"--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr" \
 #            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))

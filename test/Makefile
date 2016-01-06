@@ -98,6 +98,26 @@ checkrun-noquery-%:
 	if $(MAKE) cleanrun-noquery-$* 1>$$out 2>$$err && \
            ! grep '^queries handled.* [1-9]+[0-9]*$$' $$err; then true; else false; fi
 
+# Bounds cases might not report passed type checks
+checkrun-bounds-%:
+	@echo "case is bounds-$*" && \
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	$(MAKE) cleanrun-bounds-$* 1>$$out 2>$$err && \
+		. ./checks.sh && tail -n26 "$$err" | \
+		    match "out-of-bounds pointers created" '0' >/dev/null || \
+		(tail -n26 $$err; false)
+
+# Trap bounds cases should report OOB pointers
+checkrun-trap-bounds-%:
+	@echo "case is trap-bounds-$*" && \
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	$(MAKE) cleanrun-trap-bounds-$* 1>$$out 2>$$err && \
+		. ./checks.sh && tail -n26 "$$err" | \
+		    match "out-of-bounds pointers created" '[1-9][0-9]*' >/dev/null || \
+		(tail -n26 $$err; false)
+
 # Most test cases should output a libcrunch summary in which 
 # -- zero or more checks passed (trivially or by lazy typing)
 # -- zero checks aborted
