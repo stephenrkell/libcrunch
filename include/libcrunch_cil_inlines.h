@@ -1,6 +1,8 @@
 #ifndef LIBCRUNCH_CIL_INLINES_H_
 #define LIBCRUNCH_CIL_INLINES_H_
 
+// #define LIBCRUNCH_WORDSIZE_BOUNDS 1 /* HACK temporary */
+
 /* NO -- assume uniqtype is already defined, e.g. by -include */
 // #include "uniqtype.h"
 
@@ -57,7 +59,6 @@ int __can_hold_pointer_internal(const void *obj, const void *value) PURE;
 __libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, struct uniqtype *u) PURE;
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds);
-// NOTE that __check_derive_ptr is entirely inline, in terms of __fetch_bounds
 
 /* Utilities */
 // FIXME: is it okay that this is weak? I think we don't use it anyway
@@ -601,13 +602,18 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_
 	return in->base == (void*) -1;
 }
 */
+#define _CLEAR_UPPER_32(i) \
+(((unsigned long) (i)) & ((1ul<<32)-1ul))
+#define _CLEAR_LOWER_32(i) \
+(((unsigned long) (i)) & ~((1ul<<32)-1ul))
+
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit)
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return (__libcrunch_bounds_t) {
-			((unsigned long) base) >> 32,
-			((unsigned long) limit) >> 32
+			((unsigned long) _CLEAR_UPPER_32(base)),
+			((unsigned long) _CLEAR_UPPER_32(limit))
 	};
 #else
 	return (__libcrunch_bounds_t) { base, limit };
@@ -624,16 +630,11 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	 * Let's play it safe and make them obj += 2GB.
 	 * Note that in extreme cases, this will actually not permit
 	 * some accesses which the intention of "max bounds" is to include. */
-	return __make_bounds(((unsigned long) obj) - 1ul<<31, ((unsigned long) obj) + 1ul<<31);
+	return __make_bounds(((unsigned long) ptr) - 1ul<<31, ((unsigned long) ptr) + 1ul<<31);
 #else
 	return (__libcrunch_bounds_t) { (unsigned long) 0, (unsigned long) -1 };
 #endif
 }
-
-#define _CLEAR_UPPER_32(i) \
-(((unsigned long) (i)) & ((1ul<<32)-1ul))
-#define _CLEAR_LOWER_32(i) \
-(((unsigned long) (i)) & ~((1ul<<32)-1ul))
 
 extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_base)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom);
 extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_base)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom)
@@ -662,7 +663,7 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 	 * Otherwise, the limit is 4GB higher.
 	 * (base <= derivedfrom < limit)
 	 */
-	if (likely(_CLEAR_UPPER_32(derivedfrom) < limit))
+	if (likely(_CLEAR_UPPER_32(derivedfrom) < p_bounds->limit))
 	{
 		return (void*) (_CLEAR_LOWER_32(derivedfrom) + p_bounds->limit);
 	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) + 0x100000000ul + p_bounds->limit);
@@ -760,8 +761,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	return __libcrunch_make_invalid_bounds(ptr);
 #endif
 }
-extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
-extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
+extern inline void *(__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
+extern inline void *(__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	/* PRECONDITIONS (a.k.a. things we don't need to check here): 
@@ -807,7 +808,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	
 	unsigned long base = (unsigned long) __libcrunch_get_base(&bounds, derivedfrom);
 	unsigned long limit = (unsigned long) __libcrunch_get_limit(&bounds, derivedfrom);
-	unsigned long addr = (unsigned long) *p_derived;
+	unsigned long addr = (unsigned long) derived;
 	
 	// too low?
 	//if (unlikely(addr < base)) { goto out_fail; }
@@ -823,19 +824,18 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __check_derive_ptr)
 	// "one past"?
 	if (addr == limit)
 	{
-		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
+		return __libcrunch_trap(derived, LIBCRUNCH_TRAP_ONE_PAST);
 	}
 	
 	/* That's it! */
 out:
-	return 1;
+	return (void*) derived;
 out_fail:
 	/* Don't fail here; print a warning and return a trapped pointer */
-	__libcrunch_bounds_error(*p_derived, derivedfrom, bounds);
-	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
-	return 1;
+	__libcrunch_bounds_error(derived, derivedfrom, bounds);
+	return __libcrunch_trap(derived, LIBCRUNCH_TRAP_INVALID);
 #else
-	return 1;
+	return (void*) derived;
 #endif
 }
 

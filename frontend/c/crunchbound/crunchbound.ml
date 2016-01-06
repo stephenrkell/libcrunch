@@ -515,7 +515,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              *)
       | _ -> MustFetch
 
-let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun inlineAssertFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
+let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
     output_string stderr ("Making local bounds check for indexing expression " ^ 
         (expToString (Lval(localHost, offsetFromList prevOffsets))) ^ 
         " by index expression " ^ (expToString (intExp)) ^ "\n");
@@ -573,13 +573,12 @@ match ptrE with
     | _ -> true
 
 
-let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun makeBoundsFun detrapInlineFun inlineAssertFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
+let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun makeBoundsFun detrapInlineFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
      * then copy from the temporary to the actual target. *)
     let loc = instrLoc currentInst in
     let exprTmpVar = Cil.makeTempVar ~name:"__cil_adjexpr_" enclosingFunction (typeOf ptrExp) in
-    let checkTmpVar = Cil.makeTempVar ~name:"__cil_adjcheck_" enclosingFunction intType in 
     let rec simplifyPtrExprs someE = (
       (* Try to see through AddrOf and Mems to get down to a local lval if possible. 
        * Here we are applying the equivalences from the CIL documentation.
@@ -694,11 +693,11 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       (* first enqueue an assignment of the whole expression to exprTmpVar *)
       Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
       (* next enqueue the check call *)
-      Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
+      Call( Some((Var(exprTmpVar), NoOffset)), (* return value dest *)
             (Lval(Var(checkDerivePtrInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
             [ 
               (* const void **p_derived *)
-              CastE( voidPtrPtrType, mkAddrOf (Var(exprTmpVar), NoOffset))
+              Lval(Var(exprTmpVar), NoOffset)
             ;
               (* const void *derivedfrom *)
               ptrExp
@@ -729,19 +728,6 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
               mkAddrOf (Var(pointeeUniqtypeVar), NoOffset)
               )
             ; makeSizeOfPointeeType ptrExp
-            ],
-            loc
-      );
-      (* then enqueue the assertion about its result *)
-      Call( None,
-            (Lval(Var(inlineAssertFun.svar),NoOffset)),
-            [
-              (* arg is the check result *)
-              Lval(Var(checkTmpVar), NoOffset);
-              Const(CStr("__check_derive_ptr(" ^ exprTmpVar.vname ^ ", " ^ "" ^ ")"));
-              Const(CStr( loc.file ));
-              Const(CInt64(Int64.of_int (if loc.line == -1 then 0 else loc.line), IUInt, None));
-              Const(CStr( enclosingFunction.svar.vname ))
             ],
             loc
       )
@@ -931,7 +917,6 @@ class crunchBoundVisitor = fun enclosingFile ->
                             false, []))
   
   (* Will fill these in during initializer *) 
-  val mutable inlineAssertFun = emptyFunction "__inline_assert"
   val mutable fetchBoundsInlineFun = emptyFunction "__fetch_bounds"
   val mutable makeBoundsInlineFun = emptyFunction "__make_bounds"
   val mutable makeInvalidBoundsInlineFun = emptyFunction "__libcrunch_make_invalid_bounds"
@@ -952,16 +937,6 @@ class crunchBoundVisitor = fun enclosingFile ->
     in
     let boundsPtrType = TPtr(boundsType, [])
     in
-
-    inlineAssertFun <-  findOrCreateExternalFunctionInFile
-                            enclosingFile "__inline_assert" (TFun(voidType, 
-                            Some [ ("cond", intType, []);
-                                   ("assertion", charConstPtrType, []);
-                                   ("file", charConstPtrType, []);
-                                   ("line", uintType, []);
-                                   ("function", charConstPtrType, [])
-                            ], false, [])) 
-    ;
 
     fetchBoundsInlineFun <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__fetch_bounds" (TFun(boundsType, 
@@ -991,8 +966,8 @@ class crunchBoundVisitor = fun enclosingFile ->
     ;
 
     checkDerivePtrInlineFun <- findOrCreateExternalFunctionInFile
-                            enclosingFile "__check_derive_ptr" (TFun(intType, 
-                            Some [ ("p_derived", voidPtrPtrType, []);
+                            enclosingFile "__check_derive_ptr" (TFun(voidPtrType, 
+                            Some [ ("derived", voidConstPtrType, []);
                                    ("derivedfrom", voidConstPtrType, []); 
                                    ("opt_derivedfrom_bounds", boundsPtrType, []); 
                                    ("t", uniqtypePtrType, []); 
@@ -1435,7 +1410,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         let checkInstrs = checkInLocalBounds 
                                             enclosingFile theFunc
                                             detrapInlineFun checkLocalBoundsInlineFun 
-                                            inlineAssertFun uniqtypeGlobals 
+                                            uniqtypeGlobals 
                                             (* localHost *) origHost
                                             prevOffsetList
                                             (* intExp *) intExp
@@ -1460,7 +1435,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 in
                                 let (tempVar, checkInstrs) = hoistAndCheckAdjustment 
                                     enclosingFile theFunc
-                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun uniqtypeGlobals 
                                     ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) lvalToBoundsFun
@@ -1589,7 +1564,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     output_string stderr ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
                     let tempVar, checkInstrs = hoistAndCheckAdjustment enclosingFile f
-                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun inlineAssertFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)
