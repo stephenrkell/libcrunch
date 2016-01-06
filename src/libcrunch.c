@@ -268,7 +268,9 @@ static _Bool should_report_failure_at(void *site)
 
 static void print_exit_summary(void)
 {
-	if (__libcrunch_begun == 0) return;
+	if (__libcrunch_begun == 0 
+		&& __libcrunch_fetch_bounds_called == 0 /* FIXME: replace with __fetch_bounds_internal failure counter */
+		&& __libcrunch_created_invalid_pointer == 0) return;
 	
 	if (repeat_suppression_count > 0)
 	{
@@ -1884,6 +1886,8 @@ abort_returning_max_bounds:
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds)
 {
+	__libcrunch_check_init();
+	
 	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld; lb %p; ub %p)",
 		__builtin_return_address(0), derived, derivedfrom, 
 		(char*) derived - (char*) derivedfrom, 
