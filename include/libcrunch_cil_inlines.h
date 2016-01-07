@@ -59,6 +59,8 @@ int __can_hold_pointer_internal(const void *obj, const void *value) PURE;
 __libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, struct uniqtype *u) PURE;
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds);
+void * __check_derive_ptr_internal(const void *derived, const void *derivedfrom, 
+		__libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t) PURE;
 
 /* Utilities */
 // FIXME: is it okay that this is weak? I think we don't use it anyway
@@ -672,6 +674,13 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 #endif
 }
 
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_get_size)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_get_size)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom)
+{
+	return (char*) __libcrunch_get_limit(p_bounds, derivedfrom)
+			 - (char*) __libcrunch_get_base(p_bounds, derivedfrom);
+}
+
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr)
 {
@@ -761,8 +770,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	return __libcrunch_make_invalid_bounds(ptr);
 #endif
 }
-extern inline void *(__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
-extern inline void *(__attribute__((always_inline,gnu_inline)) __check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *opt_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
+extern inline void *(__attribute__((pure,always_inline,gnu_inline)) __check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
+extern inline void *(__attribute__((pure,always_inline,gnu_inline)) __check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	/* PRECONDITIONS (a.k.a. things we don't need to check here): 
@@ -771,69 +780,47 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __check_derive_pt
 	 * - the byte-address derived is a multiple of t->pos_maxoff away from derivedfrom
 	   ... AFTER it is converted back from a trap value
 	 */
+
+	/* To make this go fast, we need to keep it to the minimum. We use the Austin et al's
+	 * "unsigned subtraction" hack here (p292, Fig. 3). They write it as:
+	 
+        if ((unsigned)(addr-base) > size - sizeof (<type>)) FlagSpatialError();
 	
-	// FIXME: what if *p_derived is a trap? 
-	// i.e. we just did pointer arithmetic on one?
-	// Then we should de-trap it at the same time we de-trap derivedfrom, I think
-	
-	// deriving a null pointer or MAP_FAILED is okay, I suppose? don't allow it, for now
-	// if (!derived || derived == (void*) -1) goto out;
-	
-	/* If we have derived-from bounds, we can handle it inline. Note that if derivedfrom
-	 * is really a trapvalue, its bounds should still be the actual object bounds. 
+	 * but for us it's more complicated because of trap values and invalid bounds.
+	 * We need to make sure that invalid bounds and trap pointers *always* hit
+	 * the slow path, i.e. that
 	 * 
-	 * ALSO note that we should always have a derivedfrom bounds *object*, because our
-	 * instrumentation makes sure that pointer adjustments are local-to-local operations.
-	 * If we load a pointer from the heap, then adjust it, it happens in two steps,
-	 * and the latter is local-to-local. 
-	 * What we might not have is valid derivedfrom bounds *information*. If the object
-	 * has not been filled yet, it's our job to do it. */
-	// assert(opt_derivedfrom_bounds);
-	__libcrunch_bounds_t bounds;
-	if (opt_derivedfrom_bounds && !__libcrunch_bounds_invalid(*opt_derivedfrom_bounds, derivedfrom))
-	{
-		bounds = *opt_derivedfrom_bounds;
-	}
-	else
-	{
-		bounds = __fetch_bounds(derivedfrom, t, t_sz);
-		if (opt_derivedfrom_bounds) *opt_derivedfrom_bounds = bounds;
-	}
-	
-	if (unlikely(__libcrunch_is_trap_ptr(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST)))
-	{
-		/* de-trap derivedfrom */
-		derivedfrom = __libcrunch_untrap(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST);
-	}
-	
-	unsigned long base = (unsigned long) __libcrunch_get_base(&bounds, derivedfrom);
-	unsigned long limit = (unsigned long) __libcrunch_get_limit(&bounds, derivedfrom);
-	unsigned long addr = (unsigned long) derived;
-	
+	 *       addr - base_invalid  > size_invalid - t_sz
+	 * and
+	 *       addr_trap - base     > size        - t_sz
+	 * 
+	 * ... which, it turns out, is mostly quite easy. For trap pointers
+	 * it's trivial: the trap addr is *much* higher than the (non-trapped) base,
+	 * so for any sensible object size (less than 2^56 bytes) we hit the ">" case.
+	 * (or, in the case of kernel pointers, is *lower*, so hits the underflow case).
+	 * 
+	 * For invalid bounds, we must ensure that either
+	 * - base is higher than addr, or
+	 * - addr - base > size.      (i.e. base is *far* below addr).
+	 * Doing this fast for the 64-bit bounds is not easy.
+	 * Ideally we want it to hold for the *unadjusted* (raw) base/limit values.
+	 */
 	// too low?
 	//if (unlikely(addr < base)) { goto out_fail; }
 	// NOTE: support for one-prev pointers as trap values goes here
 	// too high?
 	//if (unlikely(addr > limit)) { goto out_fail; }
-	
-	// FIXME: experiment with Austin et al's "unsigned subtraction" hack here
-	// which is (p292, Fig. 3)
-	//if ((unsigned)(addr-base) > size - sizeof (<type>)) FlagSpatialError();
-	if (addr - base > limit - base - t_sz) goto out_fail;
 
-	// "one past"?
-	if (addr == limit)
-	{
-		return __libcrunch_trap(derived, LIBCRUNCH_TRAP_ONE_PAST);
-	}
+	unsigned long addr = (unsigned long) derived;
+	unsigned long base = (unsigned long) __libcrunch_get_base(derivedfrom_bounds, derivedfrom);
+	unsigned long limit = (unsigned long) __libcrunch_get_limit(derivedfrom_bounds, derivedfrom);
+	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
 	
-	/* That's it! */
-out:
-	return (void*) derived;
-out_fail:
-	/* Don't fail here; print a warning and return a trapped pointer */
-	__libcrunch_bounds_error(derived, derivedfrom, bounds);
-	return __libcrunch_trap(derived, LIBCRUNCH_TRAP_INVALID);
+	if (unlikely(addr - base > size - t_sz)) goto slow_path;
+	else return (void*) derived;
+	
+slow_path:
+	return __check_derive_ptr_internal(derived, derivedfrom, derivedfrom_bounds, t);
 #else
 	return (void*) derived;
 #endif

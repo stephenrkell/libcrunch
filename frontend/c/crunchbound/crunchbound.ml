@@ -573,7 +573,7 @@ match ptrE with
     | _ -> true
 
 
-let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun makeBoundsFun detrapInlineFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
+let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun makeBoundsFun makeInvalidBoundsFun detrapInlineFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
      * then copy from the temporary to the actual target. *)
@@ -623,44 +623,33 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
      * that we don't have bounds for). *)
     let boundsForAdjustedExpr = boundsExprForExpr simplifiedPtrExp currentFuncAddressTakenLocalNames lvalToBoundsFun 
     in
-    let haveBoundsForAdjustedExpr = match boundsForAdjustedExpr with
-        MustFetch -> false
-      | _ -> true
-    in
-    let maybeExprTmpBoundsVar = if haveBoundsForAdjustedExpr
-        (* This will *create* the bounds var, since it certainly doesn't exist already. *)
-        then Some(match lvalToBoundsFun (Var(exprTmpVar), NoOffset) with
+    let exprTmpBoundsVar = begin match lvalToBoundsFun (Var(exprTmpVar), NoOffset) with
             (Var(bvi), NoOffset) -> bvi
-          | lv -> failwith ("unexpected lval: " ^ (lvalToString lv)))
-        else None
+          | lv -> failwith ("unexpected lval: " ^ (lvalToString lv))
+    end
     in
       (exprTmpVar, 
             (* if we just created local bounds for the temporary, initialise them *)
             (
                 (* We either copy the bounds, if they're local, 
-                 * or we emit a make_bounds Call to initialise them. 
-                 * Note that we never emit a fetch call. *)
-                if haveBoundsForAdjustedExpr
-                then
-                let tempBoundsLocal = begin match maybeExprTmpBoundsVar with
-                    Some(bvi) -> bvi
-                  | None -> failwith "no local bounds when we should have them"
-                end
-                in
-                begin match boundsForAdjustedExpr with
+                 * or we emit a make_bounds Call to initialise them,
+                 * or we emit a make_invalid_bounds Call to dummy-initialise them.
+                 * Note that we never emit a fetch call; we're lazy about fetching. *)
+                match boundsForAdjustedExpr with
                     BoundsBaseLimitRvals(baseExpr, limitExpr) ->
-                        [makeCallToMakeBounds (Some(Var(tempBoundsLocal), NoOffset))
+                        [makeCallToMakeBounds (Some(Var(exprTmpBoundsVar), NoOffset))
                             baseExpr limitExpr loc makeBoundsFun]
                   | BoundsLval(blv) ->  
-                        let tempBoundsLocal = begin match maybeExprTmpBoundsVar with
-                            Some(bvi) -> bvi
-                          | None -> failwith "no local bounds when we should have them"
-                        end
-                        in
-                        [Set( (Var(tempBoundsLocal), NoOffset), Lval(blv), loc )]
-                  | MustFetch -> []
-                end
-                else []
+                         [Set( (Var(exprTmpBoundsVar), NoOffset), Lval(blv), loc )]
+                  | MustFetch -> 
+                        [Call( Some(Var(exprTmpBoundsVar), NoOffset),
+                               (Lval(Var(makeInvalidBoundsFun.svar),NoOffset)),
+                               [
+                                   (*  const void *ptr *)
+                                   simplifiedPtrExp
+                               ],
+                               loc
+                        )]
             )
             @
             [
@@ -702,21 +691,17 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
               (* const void *derivedfrom *)
               ptrExp
             ;
-              (* __libcrunch_bounds_t *opt_derivedfrom_bounds *)
+              (* __libcrunch_bounds_t *derivedfrom_bounds *)
               ( match boundsForAdjustedExpr with
                     BoundsLval(lv) -> mkAddrOf lv
-                  | BoundsBaseLimitRvals(_, _) -> 
-                        (* We just created a variable and stored these bounds to it, 
-                         * so just pass that temporary's address. (Although we created
+                  | _ -> 
+                        (* We just created a variable and stored some bounds to it
+                         * (invalid if we're MustFetch, valid if we have the rvals).
+                         * So just pass that temporary's address. (Although we created
                          * it to store the *derived* pointer's bounds, by definition
                          * these must be the same as the derived-from bounds, and that's
-                         * what we initialised it with.) *)
-                        begin
-                        match maybeExprTmpBoundsVar with
-                            Some(bvi) -> mkAddrOf (Var(bvi), NoOffset)
-                          | None -> failwith "no local bounds when we should have them (arg expr)"
-                        end
-                  | _ -> nullPtr
+                         * what we initialised it with if we init'd it at all.) *)
+                        mkAddrOf (Var(exprTmpBoundsVar), NoOffset)
               )
               (* struct uniqtype *t *)  (* the pointed-*TO* type of the pointer *)
             ; (let pointeeUniqtypeVar = 
@@ -828,7 +813,7 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
  * 
  * This means we might be better off with a four-argument __check_derive_ptr:
  * 
- * __check_derive_ptr(derived_ptr, derived_from_ptr, &opt_derived_from_ptr_bounds, t)
+ * __check_derive_ptr(derived_ptr, derived_from_ptr, &derived_from_ptr_bounds, t)
  * 
  * where we use the final argument, t, the type of the derived ptr,
  * if we have no bounds to derive from -- we go and look it up.
@@ -969,7 +954,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             enclosingFile "__check_derive_ptr" (TFun(voidPtrType, 
                             Some [ ("derived", voidConstPtrType, []);
                                    ("derivedfrom", voidConstPtrType, []); 
-                                   ("opt_derivedfrom_bounds", boundsPtrType, []); 
+                                   ("derivedfrom_bounds", boundsPtrType, []); 
                                    ("t", uniqtypePtrType, []); 
                                    ("t_sz", ulongType, [])
                                  ], 
@@ -1435,7 +1420,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 in
                                 let (tempVar, checkInstrs) = hoistAndCheckAdjustment 
                                     enclosingFile theFunc
-                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun makeBoundsInlineFun makeInvalidBoundsInlineFun detrapInlineFun uniqtypeGlobals 
                                     ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) lvalToBoundsFun
@@ -1564,7 +1549,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     output_string stderr ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
                     let tempVar, checkInstrs = hoistAndCheckAdjustment enclosingFile f
-                                    checkDerivePtrInlineFun makeBoundsInlineFun detrapInlineFun uniqtypeGlobals 
+                                    checkDerivePtrInlineFun makeBoundsInlineFun makeInvalidBoundsInlineFun detrapInlineFun uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)

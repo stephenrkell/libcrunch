@@ -54,4 +54,8 @@ extern struct __libcrunch_is_a_cache_s /* __thread */
  __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
 void __libcrunch_uncache_is_a(const void *allocptr, size_t size);
 void __libcrunch_uncache_all(const void *allocptr, size_t size);
+
+void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom, 
+		__libcrunch_bounds_t bounds, const void *addr);
+
 #endif

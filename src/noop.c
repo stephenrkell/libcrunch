@@ -74,3 +74,15 @@ void __libcrunch_bounds_error(const void *derived, const void *derivedfrom,
 		__libcrunch_bounds_t bounds)
 {
 }
+struct uniqtype;
+struct __libcrunch_bounds_s;
+typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
+void * __check_derive_ptr_internal(
+		const void *derived, 
+		const void *derivedfrom, 
+		__libcrunch_bounds_t *opt_derivedfrom_bounds, 
+		struct uniqtype *t
+)
+{
+	return (void*) derived;
+}
