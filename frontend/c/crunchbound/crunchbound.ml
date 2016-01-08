@@ -54,7 +54,7 @@ let instrLoc (maybeInst : Cil.instr option) =
 let varinfoIsLocal vi currentFuncAddressTakenLocalNames = not vi.vglob && 
     ( let isAT = (List.mem vi.vname currentFuncAddressTakenLocalNames)
       in
-        (if isAT then output_string stderr ("Local var " ^ vi.vname ^ " would count as local " ^ 
+        (if isAT then debug_print 0 ("Local var " ^ vi.vname ^ " would count as local " ^ 
         "but is address-taken\n") else ())
         ;
         not isAT
@@ -84,7 +84,7 @@ let boundsTAsNumber maybeBoundsT gs =
       | _ -> failwith "not a bounds type (asNumber)"
 
 let boundsTTimesN maybeBoundsT (n : int64) gs =
-    output_string stderr ((Int64.to_string n) ^ " times bounds type " ^ 
+    debug_print 0 ((Int64.to_string n) ^ " times bounds type " ^ 
         (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " is: "); flush stderr;
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
@@ -106,12 +106,12 @@ let boundsTTimesN maybeBoundsT (n : int64) gs =
             )
       | _ -> failwith "not a bounds type (*)"
     in
-    output_string stderr ((match prod with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+    debug_print 0 ((match prod with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         "\n"); flush stderr; 
     prod
 
 let boundsTPlusN maybeBoundsT (n : int64) gs =
-    output_string stderr ((Int64.to_string n) ^ " plus bounds type " ^ 
+    debug_print 0 ((Int64.to_string n) ^ " plus bounds type " ^ 
         (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " is: "); flush stderr;
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
@@ -134,7 +134,7 @@ let boundsTPlusN maybeBoundsT (n : int64) gs =
             ))
       | _ -> failwith "not a bounds type (+)"
     in
-    output_string stderr ((match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+    debug_print 0 ((match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         "\n");
     sum
 
@@ -154,7 +154,7 @@ let boundsTPlusBoundsT maybeBoundsT1 maybeBoundsT2 gs =
             boundsTPlusN maybeBoundsT1 m gs
       | _ -> failwith "not a bounds type (T plus T)"
     in
-    output_string stderr ("Sum of bounds types " ^ 
+    debug_print 0 ("Sum of bounds types " ^ 
         (match maybeBoundsT1 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " and " ^ 
         (match maybeBoundsT2 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
@@ -194,23 +194,23 @@ let rec boundsTForT (t : Cil.typ) gs =
       | TEnum(ei, attrs) -> None
       | TBuiltin_va_list(attrs) -> None
     in
-    output_string stderr ("Bounds type for " ^ 
+    debug_print 0 ("Bounds type for " ^ 
         (typToString t) ^ 
         " is " ^ (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "none") ^ 
         "\n");
     maybeBoundsT
 
 let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (host : Cil.lhost) (prevOffsets : Cil.offset) gs = 
-    output_string stderr ("Hello from boundsIndexExprForOffset\n");
+    debug_print 0 ("Hello from boundsIndexExprForOffset\n");
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
     in
     let indexExpr = match offs with
         Field(fi, nextOffset) -> 
-            output_string stderr ("Hit Field case\n");
+            debug_print 0 ("Hit Field case\n");
             let compTypeBeingIndexed = Cil.typeOf (Lval(host, prevOffsets))
             in
             let rec addEarlierFields = fun acc -> fun someFis -> (
-                output_string stderr ("In addEarlierFields\n");
+                debug_print 0 ("In addEarlierFields\n");
                 match someFis with
                     [] -> acc
                   | someFi :: more -> 
@@ -222,7 +222,7 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
             in
             let earlierFields = addEarlierFields [] fi.fcomp.cfields
             in
-            output_string stderr ("Found " ^ (string_of_int (List.length earlierFields)) ^ "\n");
+            debug_print 0 ("Found " ^ (string_of_int (List.length earlierFields)) ^ "\n");
             (* Add up all the boundsTs for *earlier* fields in the struct. *)
             let fieldOffsetAsBoundsT = List.fold_left 
                 (fun x -> fun y -> boundsTPlusBoundsT x y gs) 
@@ -231,12 +231,12 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
             in
             let fieldOffset = boundsTAsNumber fieldOffsetAsBoundsT gs
             in
-            output_string stderr ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
+            debug_print 0 ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
             boundsIndexExprForOffset
                 (BinOp(PlusA, startIndexExpr, makeIntegerConstant fieldOffset, intType))
                 nextOffset host (offsetAppend prevOffsets (Field(fi, NoOffset))) gs
       | Index(intExp, nextOffset) -> 
-            output_string stderr ("Hit Index case\n");
+            debug_print 0 ("Hit Index case\n");
             (* We're indexing into an array at intExp (which we've already 
              * checked is in bounds).
              *
@@ -251,7 +251,7 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
              *)
             let offsetUpToHere = offsetAppend prevOffsets (Index(intExp, NoOffset))
             in
-            output_string stderr ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
+            debug_print 0 ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
             let zeroIndexExpr = boundsIndexExprForOffset startIndexExpr nextOffset
                 host offsetUpToHere gs
             in
@@ -266,7 +266,7 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
             ), intType))
       | NoOffset -> startIndexExpr
     in
-    output_string stderr ("Bounds index expression for indexing " ^ 
+    debug_print 0 ("Bounds index expression for indexing " ^ 
         (lvalToString (host, prevOffsets)) ^ " giving " ^ 
         (lvalToString (host, offsetFromList ((offsetToList prevOffsets) @ (offsetToList offs)))) ^ 
         " is " ^ (expToString indexExpr) ^ "\n");
@@ -301,17 +301,17 @@ let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Ci
      newLocalVi
 
 let boundsLvalForLocalLval (boundsLocals : Cil.varinfo VarinfoMap.t ref) enclosingFunction enclosingFile ((lh, loff) : lval) : lval =
-    output_string stderr "Hello from boundsLvalForLocalLval";
+    debug_print 0 "Hello from boundsLvalForLocalLval";
     let gs = enclosingFile.globals
     in
     match lh with
         Var(local_vi) -> 
-            output_string stderr "Hello from Var case";
+            debug_print 0 "Hello from Var case";
             let boundsVi = getOrCreateBoundsLocal local_vi enclosingFunction enclosingFile boundsLocals 
             in 
             let indexExpr = boundsIndexExprForOffset zero loff (Var(local_vi)) NoOffset gs
             in
-            output_string stderr ("Bounds index expr is `" ^ (expToString indexExpr) ^ "'\n");
+            debug_print 0 ("Bounds index expr is `" ^ (expToString indexExpr) ^ "'\n");
             let offs = (
                 match Cil.typeSig (Cil.typeOf (Lval(Var(boundsVi), NoOffset))) with
                     TSArray(_) -> Index(indexExpr, NoOffset)
@@ -349,7 +349,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
           | Index(intExp, rest) -> offsetContainsField rest
     in
     let handleAddrOfVarOrField someHost someOffset = 
-        output_string stderr "Handling AddrOf(var or field)...\n";
+        debug_print 0 "Handling AddrOf(var or field)...\n";
         let rec splitLeadingIndexesAndReverse revAccIndexes offlist = match offlist with
             [] -> (revAccIndexes, [])
           | Field(fi, ign)     :: more -> 
@@ -375,7 +375,10 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
         in *)
         let rec multiplyAccumulateArrayBounds acc t = 
             match t with
-              | TArray(at, None, attrs) -> failwith "accumulating array bounds through unbounded array type"
+              | TArray(at, None, attrs) -> 
+                    (* failwith ("accumulating array bounds through unbounded array type: " ^ (typToString t)) *)
+                    (* this can happen -- see notes below about AddrOf/StartOf localarr/globlarr. *)
+                    raise Not_found
               | TArray(at, Some(boundExpr), attrs) -> begin
                     match constInt64ValueOfExpr boundExpr with
                             Some n -> multiplyAccumulateArrayBounds (Int64.mul acc n) at
@@ -416,7 +419,11 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
             let (sourceBoundsLval : lval) = lvalToBoundsFun (Var(someVi), someOffset)
             in
             BoundsLval(sourceBoundsLval)
-      | AddrOf(Var(someVi), someOffset)  -> handleAddrOfVarOrField (Var(someVi)) someOffset
+      | AddrOf(Var(someVi), someOffset)  -> (
+        debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 1)\n");
+        try handleAddrOfVarOrField (Var(someVi)) someOffset
+        with Not_found -> MustFetch
+        )
         (* - we're taking the address of a local variable, global variable or subobject.
                 => bounds are implied by the address value and the type of the object.
            - or we're taking the address of a subobject or array element 
@@ -430,11 +437,57 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
           - the bound is the accumulated array size times the element size
 
           NOTE that by definition, here the host is *not* local, because it's address-taken..
-          The offset may be NoOffset
+          The offset may be NoOffset.
+          
+          NOTE also that someOffset might be out-of-bounds! That's okay; 
+          the bounds we make will reflect that. HMM, but will the *pointer* we make
+          be trapped?
         *)
-      | StartOf(Var(someVi), someOffset) -> handleAddrOfVarOrField (Var(someVi)) (offsetFromList (
-            (offsetToList someOffset) @ [Index(zero, NoOffset)]
-        ))
+      | StartOf(Var(someVi), someOffset) -> (
+            (* This is similar but not identical to the above. 
+             * In particular, since the variable is an array, 
+             * we can't just use its type to get its bounds. 
+             * Instead, 
+             *  - we might not have an the array size in the type
+             *     e.g. extern char *ss[];
+             *  - we might have one but not *trust* it...
+             * 
+             * ... the latter is because casts to pointers-to-sized-arrays
+             * can happen. In that case, the user could manufacture a
+             * bound just by doing, say
+             * 
+             *    char ( *ptr )[42] = (char ( * )[42]) p;
+             *    p[41];
+             * 
+             * So what to do?
+             * And might we also get this problem with AddrOf?
+             * Several cases:
+             *     &localarr[41]   -- localarr is a var, so use var type -- *we trust it*, it's local
+             *     &localp[41]     -- localp   is a ptr, so use ptr *bounds* to get bounds
+             *     &globlarr[41]   -- globlarr is a var; might not have a bound, but if so we can trust it (check at link time)
+             *     &globlp[41]     -- globalp  is a ptr for which we don't have bounds
+             * 
+             * -- the cast problem only happens in the ptr case. 
+             * And in the ptr case we are already tracking bounds (for the ptr).
+             * If we did a cast, we also created a local temporary.
+             * HMM. Time to write two test cases:
+             *    - one that we trap the "manufactured bounds" case;
+             *    - another that container_of works as expected.
+             * 
+             * Another question: does CIL generate AddrOf(Var(arrayVar), Index(someIndex))?
+             * Yes, I think it can.
+             * So the localarr and globlarr cases fall under "AddrOf", not "StartOf".
+             * 
+             * So, short answer: both this case and the one above need to handle the 
+             * "no array bound available" case. We handle untrustworthy bounds by
+             * other means (CHECK).
+             *)
+            debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 2)\n");
+            try handleAddrOfVarOrField (Var(someVi)) (offsetFromList (
+               (offsetToList someOffset) @ [Index(zero, NoOffset)]
+            ))
+            with Not_found -> MustFetch
+        )
       | AddrOf(Mem(memExp), someOffset) 
         when offsetContainsField someOffset ->
             (* We're taking the address of a field inside a heap object, possibly then
@@ -442,8 +495,10 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              * The type of the field always gives us the bound. 
              * This works much like the variable-subobject case. 
              * Note that offsets never deref! So we're always staying within
-             * the same object. *)
-            handleAddrOfVarOrField (Mem(memExp)) someOffset
+             * the same object. *) (
+              debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 3)\n");
+              handleAddrOfVarOrField (Mem(memExp)) someOffset
+            )
             (* ELSE
              * - If the offset is empty or only indexes, 
              *   it's an unconstrained expression -- say (&( *p)) or (&( p[0])) or (&( p[j][k])).
@@ -453,10 +508,12 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              *      (We're not taking the address of p, but of a thing it points to.)
              *)
       | StartOf(Mem(memExp), someOffset) 
-        when offsetContainsField someOffset ->
+        when offsetContainsField someOffset -> (
+             debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 4)\n");
              handleAddrOfVarOrField (Mem(memExp)) (offsetFromList (
-            (offsetToList someOffset) @ [Index(zero, NoOffset)]
-        ))
+               (offsetToList someOffset) @ [Index(zero, NoOffset)]
+             ))
+        )
       | AddrOf(Mem(Lval(Var(lvi), varOff)) (* what about nested lvals in here? *), addrOff)
         when varinfoIsLocal lvi currentFuncAddressTakenLocalNames ->
             (* We're dereferencing a local pointer and then taking the address of 
@@ -516,7 +573,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
       | _ -> MustFetch
 
 let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
-    output_string stderr ("Making local bounds check for indexing expression " ^ 
+    debug_print 0 ("Making local bounds check for indexing expression " ^ 
         (expToString (Lval(localHost, offsetFromList prevOffsets))) ^ 
         " by index expression " ^ (expToString (intExp)) ^ "\n");
     (* To avoid leaking bad pointers when writing to a shared location, 
@@ -749,25 +806,25 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
      * do we copy bounds, 
      *       make them ourselves, 
      *    or fetch them? *)
-    output_string stderr "Making bounds write instructions...\n";
+    debug_print 0 "Making bounds write instructions...\n";
     let doFetch = fun () -> (
         let isNull = isStaticallyNullPtr writtenE
         in
-        output_string stderr ("Is this pointer statically null? " ^ (if isNull then "true" else "false") ^ "\n");
+        debug_print 0 ("Is this pointer statically null? " ^ (if isNull then "true" else "false") ^ "\n");
         if isNull then (
             (* Make null bounds *)
-            output_string stderr "Making null bounds\n";
+            debug_print 0 "Making null bounds\n";
             makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) zero one loc makeBoundsFun
         ) else (
-            output_string stderr "Falling back on __fetch_bounds\n";
+            debug_print 0 "Falling back on __fetch_bounds\n";
             let result = makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
             in
-            output_string stderr "Made __fetch_bounds call\n";
+            debug_print 0 "Made __fetch_bounds call\n";
             result
         )
     )
     in
-    output_string stderr ("Matching writtenE: " ^ expToString writtenE ^ "\n");
+    debug_print 0 ("Matching writtenE: " ^ expToString writtenE ^ "\n");
     (* We only get called if we definitely want to update the bounds for 
      * justWrittenLval.
      * It follows that justWrittenLval is a pointer
@@ -996,9 +1053,9 @@ class crunchBoundVisitor = fun enclosingFile ->
       let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
         with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
       in
-      (output_string stderr ("CIL dump of function `" ^ f.svar.vname ^ "': ");
+      (debug_print 0 ("CIL dump of function `" ^ f.svar.vname ^ "': ");
        Cil.dumpBlock (new plainCilPrinterClass) stderr 0 f.sbody;
-       output_string stderr "\n");
+       debug_print 0 "\n");
       (* Do our own scan for AddrOf and StartOf. 
        * The CIL one is not trustworthy, because any array subexpression
        * has internally been tripped via a StartOf (perhaps now rewritten? FIXME)
@@ -1007,7 +1064,7 @@ class crunchBoundVisitor = fun enclosingFile ->
       in
       let _ = visitCilBlock (new addressTakenVisitor tempAddressTakenLocalNames) f.sbody
       in
-      output_string stderr ("Address-taken locals in `" ^ f.svar.vname ^ "' : [" ^ (
+      debug_print 0 ("Address-taken locals in `" ^ f.svar.vname ^ "' : [" ^ (
         List.fold_left (fun l -> fun r -> l ^ (if l = "" then "" else ", ") ^ r) "" !tempAddressTakenLocalNames
       ^ "]\n"));
       currentFuncAddressTakenLocalNames := !tempAddressTakenLocalNames
@@ -1070,7 +1127,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 in
                 match boundsT with
                     Some(bt) -> 
-                        output_string stderr ("Creating bounds for local " ^ 
+                        debug_print 0 ("Creating bounds for local " ^ 
                             vi.vname ^ "; bounds have type " ^ (typToString bt) ^ "\n");
                         let created = getOrCreateBoundsLocal vi f enclosingFile boundsLocals
                         in
@@ -1225,25 +1282,25 @@ class crunchBoundVisitor = fun enclosingFile ->
                      *)
                     if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
                     then (
-                        output_string stderr ("Saw write to a non-void pointer lval: " ^ (
+                        debug_print 0 ("Saw write to a non-void pointer lval: " ^ (
                             lvalToString (lhost, loff)
                         ) ^ "\n")
                         ;
                         if hostIsLocal lhost !currentFuncAddressTakenLocalNames
                         then (
                             (* Queue some instructions to write the bounds. *)
-                            output_string stderr "Local, so updating its bounds.\n"
+                            debug_print 0 "Local, so updating its bounds.\n"
                             ;
                             [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e lvalToBoundsFun !currentInst]
                             )
                         else (
-                            output_string stderr "Host is not local\n";
+                            debug_print 0 "Host is not local\n";
                             []
                         )
                     )
                     else []
                 in begin
-                output_string stderr "Queueing some instructions\n";
+                debug_print 0 "Queueing some instructions\n";
                 [outerI] @ instrsToAppend
                 end
           | Call(olv, e, es, l) -> begin
@@ -1256,13 +1313,13 @@ class crunchBoundVisitor = fun enclosingFile ->
                         None -> [outerI]
                       | Some(lhost, loff) -> 
                         if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff))) then (
-                            output_string stderr ("Saw call writing to a non-void pointer lval: " ^ (
+                            debug_print 0 ("Saw call writing to a non-void pointer lval: " ^ (
                                 lvalToString (lhost, loff)
                             ) ^ "\n")
                             ;
                             if hostIsLocal lhost !currentFuncAddressTakenLocalNames
                             then begin
-                                output_string stderr "Local, so updating its bounds.\n"
+                                debug_print 0 "Local, so updating its bounds.\n"
                                 ;
                                 (* Queue some instructions to write the bounds. *)
                                [outerI] @ [
@@ -1270,7 +1327,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 ]
                             end
                             else (
-                                output_string stderr "Host is not local\n";
+                                debug_print 0 "Host is not local\n";
                                 [outerI]
                             )
                         )
@@ -1438,8 +1495,8 @@ class crunchBoundVisitor = fun enclosingFile ->
         )
 
   method vexpr (outerE: exp) : exp visitAction = 
-    output_string stderr (("Visiting expression: " ^ (expToString outerE)) ^ "\n");
-    output_string stderr (("CIL form: " ^ (expToCilString outerE)) ^ "\n");
+    debug_print 0 (("Visiting expression: " ^ (expToString outerE)) ^ "\n");
+    debug_print 0 (("CIL form: " ^ (expToCilString outerE)) ^ "\n");
     match !currentFunc with
         None -> (* expression outside function *) SkipChildren
       | Some(f) -> 
@@ -1537,16 +1594,16 @@ class crunchBoundVisitor = fun enclosingFile ->
               |  _ -> None
           end in match maybeAdjustment with
             None -> begin
-                output_string stderr ("Leaving expression alone because it does no pointer arithmetic: " ^ (expToString e) ^ "\n");
+                debug_print 0 ("Leaving expression alone because it does no pointer arithmetic: " ^ (expToString e) ^ "\n");
                 e
             end
           | Some(ptrExp, intExp) -> 
                 if isStaticallyZero intExp then begin
-                    output_string stderr ("Leaving expression alone because its adjustment is always zero: " ^ (expToString e) ^ "\n");
+                    debug_print 0 ("Leaving expression alone because its adjustment is always zero: " ^ (expToString e) ^ "\n");
                     e
                 end
                 else begin
-                    output_string stderr ("Not top-level, so rewrite to use temporary\n");
+                    debug_print 0 ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
                     let tempVar, checkInstrs = hoistAndCheckAdjustment enclosingFile f
                                     checkDerivePtrInlineFun makeBoundsInlineFun makeInvalidBoundsInlineFun detrapInlineFun uniqtypeGlobals 
