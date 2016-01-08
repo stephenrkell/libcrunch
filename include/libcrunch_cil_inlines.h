@@ -21,8 +21,10 @@ struct __libcrunch_bounds_s
 	unsigned long base:32;
 	unsigned long limit:32;
 #else
+	/* A <base, size> representation has certain advantages over <base, limit>. 
+	 * In particular, our fast-path test uses the size, not the limit. */
 	unsigned long base;
-	unsigned long limit;
+	unsigned long size;
 #endif
 };
 typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
@@ -618,7 +620,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 			((unsigned long) _CLEAR_UPPER_32(limit))
 	};
 #else
-	return (__libcrunch_bounds_t) { base, limit };
+	return (__libcrunch_bounds_t) { base, (char*) limit - (char*) base };
 #endif
 }
 
@@ -634,7 +636,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	 * some accesses which the intention of "max bounds" is to include. */
 	return __make_bounds(((unsigned long) ptr) - 1ul<<31, ((unsigned long) ptr) + 1ul<<31);
 #else
-	return (__libcrunch_bounds_t) { (unsigned long) 0, (unsigned long) -1 };
+	return __make_bounds((unsigned long) 0, (unsigned long) -1);
 #endif
 }
 
@@ -670,15 +672,14 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 		return (void*) (_CLEAR_LOWER_32(derivedfrom) + p_bounds->limit);
 	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) + 0x100000000ul + p_bounds->limit);
 #else
-	return (void*) p_bounds->limit;
+	return (char*) p_bounds->base + p_bounds->size;
 #endif
 }
 
 extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_get_size)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom);
 extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_get_size)(__libcrunch_bounds_t *p_bounds, const void *derivedfrom)
 {
-	return (char*) __libcrunch_get_limit(p_bounds, derivedfrom)
-			 - (char*) __libcrunch_get_base(p_bounds, derivedfrom);
+	return p_bounds->size;
 }
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr);
@@ -709,7 +710,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 		   return (__libcrunch_bounds_t) { p_low - 2, p_low - 1 };
 	} else return (__libcrunch_bounds_t) { p_low - 3, p_low - 2 };
 #else
-	return __make_bounds((unsigned long) -1l, 0ul);
+	return __make_bounds((unsigned long) -1l, /* limit */ (unsigned long) -1l);
 #endif
 }
 
@@ -729,7 +730,17 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bound
 	return (base > ptr_l && base < limit)
 			|| (limit < ptr_l && limit > base);
 #else
-	return bounds.limit <= bounds.base;
+	return bounds.size == 0;
+#endif
+}
+
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid_bounds_equal)(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2);
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid_bounds_equal)(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2)
+{
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	return bounds1.base == bounds2.base && bounds1.limit == bounds2.limit;
+#else
+	return bounds1.size == bounds2.size && bounds1.base == bounds2.base;
 #endif
 }
 
@@ -815,12 +826,24 @@ extern inline void *(__attribute__((pure,always_inline,gnu_inline)) __check_deri
 	unsigned long base = (unsigned long) __libcrunch_get_base(derivedfrom_bounds, derivedfrom);
 	unsigned long limit = (unsigned long) __libcrunch_get_limit(derivedfrom_bounds, derivedfrom);
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
+	__libcrunch_bounds_t pre_bounds;
 	
 	if (unlikely(addr - base > size - t_sz)) goto slow_path;
-	else return (void*) derived;
+	// tell the compiler this means our bounds are definitely valid
+	if (__libcrunch_bounds_invalid(*derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
+	// also tell it that derivedfrom is not a trap pointer
+	if (__libcrunch_is_trap_ptr(derivedfrom)) __builtin_unreachable();
+	return (void*) derived;
 	
 slow_path:
-	return __check_derive_ptr_internal(derived, derivedfrom, derivedfrom_bounds, t);
+	// abort();     // <-- this makes things go much faster!
+	pre_bounds = *derivedfrom_bounds;
+	void *retval = __check_derive_ptr_internal(derived, derivedfrom, derivedfrom_bounds, t);
+	if (__libcrunch_bounds_invalid(*derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
+	if (retval == derived 
+			&& !__libcrunch_bounds_invalid(pre_bounds, derivedfrom)
+			&& !__libcrunch_valid_bounds_equal(*derivedfrom_bounds, pre_bounds)) __builtin_unreachable();
+	return retval;
 #else
 	return (void*) derived;
 #endif
