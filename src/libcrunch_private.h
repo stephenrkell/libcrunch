@@ -44,14 +44,6 @@ extern unsigned long __libcrunch_is_a_hit_cache;
 extern unsigned long __libcrunch_created_invalid_pointer;
 extern unsigned long __libcrunch_fetch_bounds_called;
 
-unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
-#ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE
-#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 2
-#endif
-extern const unsigned short __libcrunch_is_a_cache_size;
-extern unsigned short __libcrunch_is_a_cache_next_victim;
-extern struct __libcrunch_is_a_cache_s /* __thread */
- __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
 void __libcrunch_uncache_is_a(const void *allocptr, size_t size);
 void __libcrunch_uncache_all(const void *allocptr, size_t size);
 

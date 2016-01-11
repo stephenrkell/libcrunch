@@ -739,11 +739,11 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       (* first enqueue an assignment of the whole expression to exprTmpVar *)
       Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
       (* next enqueue the check call *)
-      Call( Some((Var(exprTmpVar), NoOffset)), (* return value dest *)
+      Call( (* Some((Var(exprTmpVar), NoOffset)) *) None, (* return value dest *)
             (Lval(Var(checkDerivePtrInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
             [ 
               (* const void **p_derived *)
-              Lval(Var(exprTmpVar), NoOffset)
+              mkAddrOf (Var(exprTmpVar), NoOffset)
             ;
               (* const void *derivedfrom *)
               ptrExp
@@ -775,7 +775,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       )
     ])
 
-let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst = 
+let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval derivedFromE lvalToBoundsFun currentInst = 
     let loc = instrLoc currentInst in
     (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
     let ptrT = exprConcreteType (Lval(justWrittenLval))
@@ -791,6 +791,8 @@ let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddres
             [
                 (* const void *ptr *)
                 Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
+            ;   (* const void *derived_ptr *)
+                Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
             ;   (* struct uniqtype *t *)
                 mkAddrOf (Var(uniqtypeGlobal), NoOffset)
             ;   (* what's the size of that thing? *)
@@ -800,7 +802,7 @@ let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddres
         )
 
 
-let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE (lvalToBoundsFun : lval -> lval) currentInst =
+let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE derivedFromE (lvalToBoundsFun : lval -> lval) currentInst =
     let loc = instrLoc currentInst in
     (* Here we do the case analysis: 
      * do we copy bounds, 
@@ -817,7 +819,7 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
             makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) zero one loc makeBoundsFun
         ) else (
             debug_print 0 "Falling back on __fetch_bounds\n";
-            let result = makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval lvalToBoundsFun currentInst
+            let result = makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval derivedFromE lvalToBoundsFun currentInst
             in
             debug_print 0 "Made __fetch_bounds call\n";
             result
@@ -962,7 +964,7 @@ class crunchBoundVisitor = fun enclosingFile ->
   val mutable fetchBoundsInlineFun = emptyFunction "__fetch_bounds"
   val mutable makeBoundsInlineFun = emptyFunction "__make_bounds"
   val mutable makeInvalidBoundsInlineFun = emptyFunction "__libcrunch_make_invalid_bounds"
-  val mutable checkDerivePtrInlineFun = emptyFunction "__check_derive_ptr"
+  val mutable checkDerivePtrInlineFun = emptyFunction "__full_check_derive_ptr"
   val mutable detrapInlineFun = emptyFunction "__libcrunch_detrap"
   val mutable checkLocalBoundsInlineFun = emptyFunction "__check_local_bounds"
   
@@ -984,6 +986,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             enclosingFile "__fetch_bounds" (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
+                                   ("derived_ptr", voidConstPtrType, []);
                                    ("t", voidConstPtrType, []);
                                    ("t_sz", ulongType, [])
                                  ], 
@@ -1008,8 +1011,8 @@ class crunchBoundVisitor = fun enclosingFile ->
     ;
 
     checkDerivePtrInlineFun <- findOrCreateExternalFunctionInFile
-                            enclosingFile "__check_derive_ptr" (TFun(voidPtrType, 
-                            Some [ ("derived", voidConstPtrType, []);
+                            enclosingFile "__full_check_derive_ptr" (TFun(voidPtrType, 
+                            Some [ ("p_derived", voidConstPtrPtrType, []);
                                    ("derivedfrom", voidConstPtrType, []); 
                                    ("derivedfrom_bounds", boundsPtrType, []); 
                                    ("t", uniqtypePtrType, []); 
@@ -1291,7 +1294,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             (* Queue some instructions to write the bounds. *)
                             debug_print 0 "Local, so updating its bounds.\n"
                             ;
-                            [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e lvalToBoundsFun !currentInst]
+                            [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
                             )
                         else (
                             debug_print 0 "Host is not local\n";
@@ -1323,7 +1326,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 ;
                                 (* Queue some instructions to write the bounds. *)
                                [outerI] @ [
-                                makeBoundsFetchInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) lvalToBoundsFun !currentInst
+                                makeBoundsFetchInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) (lhost, loff) lvalToBoundsFun !currentInst
                                 ]
                             end
                             else (

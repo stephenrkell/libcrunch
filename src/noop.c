@@ -1,8 +1,13 @@
-static const int __libcrunch_is_initialized = 1;
+#define _GNU_SOURCE
+#include <stdint.h>
+#include <stdio.h>
+#include "libcrunch_private.h"
 
-unsigned int __libcrunch_is_a_cache_validity; // all zeroes
-unsigned short __libcrunch_is_a_cache_next_victim;
-const unsigned short __libcrunch_is_a_cache_size; // zero
+_Bool __libcrunch_is_initialized = 1;
+
+struct __libcrunch_cache __libcrunch_is_a_cache; // all zeroes
+struct __libcrunch_cache __libcrunch_fake_bounds_cache; // all zeroes
+
 unsigned long int __libcrunch_begun = 0;
 unsigned long int __libcrunch_failed = 0;
 unsigned long int __libcrunch_succeeded = 0;
@@ -11,14 +16,6 @@ unsigned long int __libcrunch_is_a_hit_cache = 0;
 unsigned long int __libcrunch_created_invalid_pointer = 0;
 unsigned long int __libcrunch_checked_pointer_adjustments = 0;
 unsigned long int __libcrunch_fetch_bounds_called = 0;
-
-/* We really want to fit in 64 bits on x86-64. */
-struct __libcrunch_bounds_s
-{
-	void *base;
-	void *limit;
-};
-typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
 
 void __libcrunch_scan_lazy_typenames(void *blah) {}
 
@@ -65,15 +62,16 @@ int __can_hold_pointer_internal(const void *obj, const void *target)
         return 1;
 }
 
-__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *t)
+__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived, struct uniqtype *t)
 {
-        return (__libcrunch_bounds_t) { (void*) 0, (void*) -1 };
+        return (__libcrunch_bounds_t) { (unsigned long) 0, (unsigned long) -1 };
 }
 
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds)
 {
 }
+
 struct uniqtype;
 struct __libcrunch_bounds_s;
 typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;

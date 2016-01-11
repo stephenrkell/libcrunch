@@ -234,10 +234,17 @@ unsigned long __libcrunch_succeeded;
 unsigned long __libcrunch_created_invalid_pointer;
 unsigned long __libcrunch_fetch_bounds_called;
 
-struct __libcrunch_is_a_cache_s /* __thread */ __libcrunch_is_a_cache[LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
-unsigned int /* __thread */ __libcrunch_is_a_cache_validity;
-unsigned short __libcrunch_is_a_cache_next_victim;
-const unsigned short __libcrunch_is_a_cache_size = LIBCRUNCH_MAX_IS_A_CACHE_SIZE;
+struct __libcrunch_cache /* __thread */ __libcrunch_is_a_cache = {
+	.size = LIBCRUNCH_MAX_IS_A_CACHE_SIZE
+};
+/* We maintain a *separate* cache of "fake bounds" that remember ranges 
+ * over which we've let arithmetic go ahead because we had no type info
+ * for the allocation. Without this, many programs will repeatedly report
+ * failures getting bounds. We keep it separate to avoid interference with
+ * the main cache. */
+struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache = {
+	.size = LIBCRUNCH_MAX_IS_A_CACHE_SIZE
+};
 
 static unsigned long repeat_suppression_count;
 // enum check
@@ -537,38 +544,73 @@ static void clear_alloc_site_metadata(const void *alloc_start)
 }
 
 static void cache_is_a(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	_Bool result, unsigned short period)
+	_Bool result, unsigned short period, const void *alloc_base)
 {
-	unsigned pos = __libcrunch_is_a_cache_next_victim;
-	__libcrunch_is_a_cache[pos] = (struct __libcrunch_is_a_cache_s) {
+	unsigned pos = __libcrunch_is_a_cache.next_victim;
+	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
 		.uniqtype = (unsigned long long) t,
 		.result = result,
-		.period = period
+		.period = period,
+		.alloc_base = alloc_base
 	};
-	__libcrunch_is_a_cache_validity |= 1u<<pos;
+	__libcrunch_is_a_cache.validity |= 1u<<pos;
 	// make sure this entry is not the next victim
-	__libcrunch_is_a_cache_next_victim = (pos + 1) % __libcrunch_is_a_cache_size;
+	__libcrunch_is_a_cache.next_victim = (pos + 1) % __libcrunch_is_a_cache.size;
 }
 
+static void cache_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
+	_Bool result, unsigned short period, const void *alloc_base)
+{
+	unsigned pos = __libcrunch_is_a_cache.next_victim;
+	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
+		.obj_base = obj_base,
+		.obj_limit = obj_limit,
+		.uniqtype = (unsigned long long) t,
+		.result = 1 /* FIXME */,
+		.period = period,
+		.alloc_base = alloc_base
+	};
+	__libcrunch_is_a_cache.validity |= 1u<<pos;
+	// make sure this entry is not the next victim
+	__libcrunch_is_a_cache.next_victim = (pos + 1) % __libcrunch_is_a_cache.size;
+}
+
+static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
+	_Bool result, unsigned short period, const void *alloc_base)
+{
+	unsigned pos = __libcrunch_fake_bounds_cache.next_victim;
+	__libcrunch_fake_bounds_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
+		.obj_base = obj_base,
+		.obj_limit = obj_limit,
+		.uniqtype = (unsigned long long) t,
+		.result = 1 /* FIXME */,
+		.period = period,
+		.alloc_base = alloc_base
+	};
+	__libcrunch_fake_bounds_cache.validity |= 1u<<pos;
+	// make sure this entry is not the next victim
+	__libcrunch_fake_bounds_cache.next_victim = (pos + 1) % __libcrunch_fake_bounds_cache.size;
+}
+/* FIXME: rewrite these */
 void __libcrunch_uncache_all(const void *allocptr, size_t size)
 {
 	__libcrunch_uncache_is_a(allocptr, size);
 }
 void __libcrunch_uncache_is_a(const void *allocptr, size_t size)
 {
-	for (unsigned i = 0; i < __libcrunch_is_a_cache_size; ++i)
+	for (unsigned i = 0; i < __libcrunch_is_a_cache.size; ++i)
 	{
-		if (__libcrunch_is_a_cache_validity & (1u << i))
+		if (__libcrunch_is_a_cache.validity & (1u << i))
 		{
 			/* Uncache any object beginning anywhere within the passed-in range. */
-			if ((char*) __libcrunch_is_a_cache[i].obj_base >= (char*) allocptr
-					 && (char*) __libcrunch_is_a_cache[i].obj_base < (char*) allocptr + size)
+			if ((char*) __libcrunch_is_a_cache.entries[i].obj_base >= (char*) allocptr
+					 && (char*) __libcrunch_is_a_cache.entries[i].obj_base < (char*) allocptr + size)
 			{
 				// unset validity and make this the next victim
-				__libcrunch_is_a_cache_validity &= ~(1u<<i);
-				__libcrunch_is_a_cache_next_victim = i;
+				__libcrunch_is_a_cache.validity &= ~(1u<<i);
+				__libcrunch_is_a_cache.next_victim = i;
 			}
 		}
 	}
@@ -620,7 +662,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	else
 	{
 		/* HMM. Is this right? What about regularity *not* at top-level? */
-		range_limit = (char*) obj + 1;
+		range_limit = (char*) obj + (test_uniqtype ? test_uniqtype->pos_maxoff : 1);
 		range_base = (char*) obj;
 	}
 	
@@ -642,7 +684,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	{
 		/* populate cache */
 		if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 1,
-			period);
+			period, alloc_start);
 
 		++__libcrunch_succeeded;
 		return 1;
@@ -662,14 +704,14 @@ int __is_a_internal(const void *obj, const void *arg)
 			// update the heap chunk's info to say that its type is (strictly) our test_uniqtype
 			ins->alloc_site_flag = 1;
 			ins->alloc_site = (uintptr_t) test_uniqtype;
-			if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 1, period);
+			if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 1, period, alloc_start);
 		
 			return 1;
 		}
 	}
 	
 	// if we got here, the check failed
-	if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 0, period);
+	if (is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 0, period, alloc_start);
 	if (__currently_allocating || __currently_freeing)
 	{
 		++__libcrunch_failed_in_alloc;
@@ -1740,7 +1782,7 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 	assert(0);
 }
 
-__libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t)
+__libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derived, struct uniqtype *t)
 {
 	/* We might not be initialized yet (recall that __libcrunch_global_init is 
 	 * not a constructor, because it's not safe to call super-early). */
@@ -1764,11 +1806,29 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 	
 	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
 	{
+		/* Don't waste time trying to look up this alloc site again. 
+		 * This will only actually take effect if we compile with DNDEBUG,
+		 * since it reduces our debugging ability somewhat.
+		 * FIXME: this is an abstraction violation w.r.t. liballocs,
+		 * since it makes other clients' calls to get_alloc_site fail.
+		 * Better to taint the alloc site somehow, so we can skip the
+		 * check. */
 		clear_alloc_site_metadata(alloc_start);
+		
+		if (!(alloc_start && alloc_size_bytes)) goto abort_returning_max_bounds;
+	}
+	else if (__builtin_expect(err != NULL, 0))
+	{
+		goto abort_returning_max_bounds; // liballocs has already counted this abort
 	}
 	
-	/* Because we're fetch_bounds, not a check per se, we must *always* succeed! */
-	if (__builtin_expect(err != NULL, 0)) goto abort_returning_max_bounds; // liballocs has already counted this abort
+	/* If we didn't get alloc site information, we might still have 
+	 * start and size info. This can be enough for bounds checks. */
+	if (alloc_start && alloc_size_bytes && !alloc_uniqtype)
+	{
+		/* Pretend it's a char allocation */
+		alloc_uniqtype = &__uniqtype__signed_char;
+	}
 	
 	if (t == &__uniqtype__signed_char
 			|| t == &__uniqtype__unsigned_char)
@@ -1846,17 +1906,19 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 		if (arg.innermost_containing_array_t)
 		{
 			// bounds are the whole array
-			// FIXME: cache
+			const char *lower = alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset;
+			const char *upper = (arg.innermost_containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
+					alloc_start + alloc_size_bytes
+					: alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset
+						+ (arg.innermost_containing_array_t->array_len * t->pos_maxoff);
+			cache_bounds(lower, upper, t, 1, alloc_uniqtype->pos_maxoff, alloc_start);
 			return __make_bounds(
-				(unsigned long) alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset, 
-				(arg.innermost_containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
-					(unsigned long) alloc_start + alloc_size_bytes
-					: (unsigned long) alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset
-						+ (arg.innermost_containing_array_t->array_len * t->pos_maxoff)
+				(unsigned long) lower,
+				(unsigned long) upper
 			);
 		}
 		// bounds are just this object
-		// FIXME: cache
+		cache_bounds(obj, (char*) obj + t->pos_maxoff, t, 1, alloc_uniqtype->pos_maxoff, alloc_start);
 		return __make_bounds((unsigned long) obj, (unsigned long) obj + t->pos_maxoff);
 	}
 	else
@@ -1867,22 +1929,38 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, struct uniqtype *t
 		goto return_min_bounds;
 	}
 
-	//if (is_cacheable) cache_bounds(obj, test_uniqtype, 1,
-	//		alloc_period, n_pos, n_neg);
-
 return_min_bounds:
-	// FIXME: cache?
+	if (is_cacheable) cache_bounds(obj, (char*) obj + 1, NULL, 0, 1, alloc_start);
 	return __make_bounds((unsigned long) obj, (unsigned long) obj + 1);
 
 return_alloc_bounds:
-	// FIXME: cache
+	if (is_cacheable) cache_bounds((char*) alloc_start - alloc_uniqtype->neg_maxoff, 
+		(char*) alloc_start + alloc_size_bytes, 
+		alloc_uniqtype, 
+		alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1, 
+		alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1,
+		alloc_start);
 	return __make_bounds(
 		(unsigned long) alloc_start - alloc_uniqtype->neg_maxoff,
 		(unsigned long) alloc_start + alloc_size_bytes
 	);
 
 abort_returning_max_bounds: 
-	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p\n", obj);
+	/* HACK: to avoid repeated slow-path queries for uninstrumented/unindexed 
+	 * allocations, we cache a range of bytes here. 
+	 * PROBLEM: if we currently need *bigger* bounds, we need some way to extend
+	 * them, since we won't hit this path again. Otherwise we'll get bounds errors.
+	 * Need to record that the bound are synthetic... use NULL alloc_base. */
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define MAX(x, y) (((x) < (y)) ? (y) : (x))
+	cache_fake_bounds(
+		MIN((char*) obj, (char*) derived), 
+		MAX((char*) obj, (char*) derived) + (t ? t->pos_maxoff : 0), 
+		t, 1, (t ? t->pos_maxoff : 1), NULL /* no alloc start */
+	);
+	
+	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)\n", 
+			obj, derived, __liballocs_errstring(err), alloc_site);
 	return __libcrunch_max_bounds(obj);
 }
 
@@ -1894,12 +1972,6 @@ void * __check_derive_ptr_internal(
 )
 {
 	unsigned long t_sz = t->pos_maxoff;
-	/* This is the "full" version of __check_derive_ptr. 
-	 * The inline path just passes the common correct cases. */
-	
-	// FIXME: what if *p_derived is a trap? 
-	// i.e. we just did pointer arithmetic on one?
-	// Then we should de-trap it at the same time we de-trap derivedfrom, I think
 	
 	// deriving a null pointer or MAP_FAILED is okay, I suppose? don't allow it, for now
 	// if (!derived || derived == (void*) -1) goto out;
@@ -1921,18 +1993,19 @@ void * __check_derive_ptr_internal(
 	}
 	else
 	{
-		bounds = __fetch_bounds(derivedfrom, t, t_sz);
+		bounds = __fetch_bounds(derivedfrom, derived, t, t_sz);
 		if (derivedfrom_bounds) *derivedfrom_bounds = bounds;
 	}
 	
-	if (unlikely(__libcrunch_is_trap_ptr(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST)))
+	if (unlikely(__libcrunch_ptr_trap_bits(derivedfrom) == LIBCRUNCH_TRAP_ONE_PAST))
 	{
 		/* de-trap derivedfrom */
 		derivedfrom = __libcrunch_untrap(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST);
 	}
 	
-	unsigned long base = (unsigned long) __libcrunch_get_base(&bounds, derivedfrom);
-	unsigned long limit = (unsigned long) __libcrunch_get_limit(&bounds, derivedfrom);
+	unsigned long base = (unsigned long) __libcrunch_get_base(bounds, derivedfrom);
+	unsigned long limit = (unsigned long) __libcrunch_get_limit(bounds, derivedfrom);
+	unsigned long size = (unsigned long) __libcrunch_get_size(bounds, derivedfrom);
 	unsigned long addr = (unsigned long) derived;
 	
 	// too low?
@@ -1941,21 +2014,81 @@ void * __check_derive_ptr_internal(
 	// too high?
 	//if (unlikely(addr > limit)) { goto out_fail; }
 	
-	// FIXME: experiment with Austin et al's "unsigned subtraction" hack here
+	// We use Austin et al's "unsigned subtraction" hack here
 	// which is (p292, Fig. 3)
 	//if ((unsigned)(addr-base) > size - sizeof (<type>)) FlagSpatialError();
-	if (addr - base > limit - base - t_sz) goto out_fail;
+	if (addr - base > size) goto out_fail;
 
 	// "one past"?
 	if (addr == limit)
 	{
 		return __libcrunch_trap(derived, LIBCRUNCH_TRAP_ONE_PAST);
 	}
+	/* PROBLEM: if we're working with fake bounds, we might actually
+	 * be trying to create a legitimate pointer. If we hit the (arbitrary)
+	 * end of the fake bounds, we'll issue the trapped pointer and it will
+	 * get hit. We could just deal with this in the segfault handler, but 
+	 * ideally we'd instead never issue trapped pointers from fake bounds. 
+	 * No amount of slack that we add to the fake bounds can guarantee this,
+	 * however. We either have to test explicitly for fake bounds, which
+	 * slows down our somewhat-fast path, or try to get a "rarely need
+	 * segfault handler" probabilistic solution. Actually I think that
+	 * explicitly testing for fake bounds is probably necessary. Do it
+	 * when we call __fetch_bounds. Then get rid of the failure hack.
+	 * 
+	 * Note that we intend to re-inline the trap pointer handling. That
+	 * makes things even more tricky. Can we make __fetch_bounds return
+	 * a pointer to the cache entry? Split __fetch_bounds into
+	 * __fetch_bounds_from_cache and __fetch_bounds_from_liballocs?
+	 * 
+	 * Okay, so on the secondary-and-slower paths we have 
+	 * 
+	 *    primary check
+	 *    do we have local bounds? then do straight trap-pointer-or-fail
+	 *    --------- inline path stops here?
+	 *    else check the cache...
+	 *       if we hit the ordinary cache, straight trap-pointer-or-fail
+	 *                                        and write out the hit bounds
+	 *    --------- or here?
+	 *       if we hit the fake bounds cache, widen the fake bounds (never trap)
+	 *                                        and write out max bounds
+	 *    else if we miss the cache, 
+	 *       fall back to liballocs
+	 *            -- may create fake bounds here; again, write max bounds to local
+	 * 
+	 *    trap pointer checking (de-trap)? NO, we don't need to do that
+	 *    trap pointer creation (maybe from local bounds)
+	 *    cached bounds retrieval   
+	 *     -- fake bounds handling, if we hit the fake bounds cache
+	 *    invalid bounds handling a.k.a. liballocs bound lookup
+	 */
 	
 	/* That's it! */
 out:
 	return (void*) derived;
 out_fail:
+	/* We might be failing because we locally cached some fake bounds that
+	 * were not wide enough. Look in the cache. 
+	 * AH. How do these get into localbounds? We were supposed to be returning
+	 * max-bounds. But I suppose they can get in there.... */
+	{
+		__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(derivedfrom, derived,
+			t, t_sz);
+		if (!__libcrunch_bounds_invalid(from_cache, derivedfrom))
+		{
+			unsigned long new_base = (unsigned long) __libcrunch_get_base(from_cache, derivedfrom);
+			unsigned long new_limit = (unsigned long) __libcrunch_get_limit(from_cache, derivedfrom);
+			if (addr - new_base <= new_limit - new_base - t_sz) 
+			{
+				/* Okay, looks like we widened some fake the bounds. */
+				debug_printf(1, "libcrunch: allowing derivation of %p (from %p) owing to cached fake bounds.\n", derived, derivedfrom);
+				// FIXME: this violates our "valid bounds don't change" assumption
+				//*derivedfrom_bounds = /* from_cache */
+				//	__libcrunch_max_bounds(derivedfrom);
+				return (void*) derived;
+			}
+		}
+	}
 	/* Don't fail here; print a warning and return a trapped pointer */
 	__libcrunch_bounds_error_at(derived, derivedfrom, bounds, 
 		__builtin_return_address(0));
@@ -1970,8 +2103,8 @@ void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom,
 	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld; lb %p; ub %p)",
 		addr, derived, derivedfrom, 
 		(char*) derived - (char*) derivedfrom, 
-		__libcrunch_get_base(&bounds, derivedfrom), 
-		__libcrunch_get_limit(&bounds, derivedfrom));
+		__libcrunch_get_base(bounds, derivedfrom), 
+		__libcrunch_get_limit(bounds, derivedfrom));
 	++__libcrunch_created_invalid_pointer;
 }
 
