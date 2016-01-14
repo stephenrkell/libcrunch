@@ -16,6 +16,7 @@ unsigned long int __libcrunch_is_a_hit_cache = 0;
 unsigned long int __libcrunch_created_invalid_pointer = 0;
 unsigned long int __libcrunch_checked_pointer_adjustments = 0;
 unsigned long int __libcrunch_fetch_bounds_called = 0;
+unsigned long int __libcrunch_fetch_bounds_missed_cache = 0;
 
 void __libcrunch_scan_lazy_typenames(void *blah) {}
 
@@ -64,7 +65,7 @@ int __can_hold_pointer_internal(const void *obj, const void *target)
 
 __libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived, struct uniqtype *t)
 {
-        return (__libcrunch_bounds_t) { (unsigned long) 0, (unsigned long) -1 };
+        return __libcrunch_make_invalid_bounds(ptr);
 }
 
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
@@ -83,4 +84,9 @@ void * __check_derive_ptr_internal(
 )
 {
 	return (void*) derived;
+}
+
+__libcrunch_bounds_t __fetch_bounds_ool(const void *ptr, const void *derived_ptr, struct uniqtype *t)
+{
+	return __libcrunch_make_invalid_bounds(ptr);
 }

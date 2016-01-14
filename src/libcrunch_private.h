@@ -43,6 +43,7 @@ extern unsigned long __libcrunch_succeeded;
 extern unsigned long __libcrunch_is_a_hit_cache;
 extern unsigned long __libcrunch_created_invalid_pointer;
 extern unsigned long __libcrunch_fetch_bounds_called;
+extern unsigned long __libcrunch_fetch_bounds_missed_cache;
 
 void __libcrunch_uncache_is_a(const void *allocptr, size_t size);
 void __libcrunch_uncache_all(const void *allocptr, size_t size);

@@ -233,6 +233,7 @@ unsigned long __libcrunch_failed_and_suppressed;
 unsigned long __libcrunch_succeeded;
 unsigned long __libcrunch_created_invalid_pointer;
 unsigned long __libcrunch_fetch_bounds_called;
+unsigned long __libcrunch_fetch_bounds_missed_cache;
 
 struct __libcrunch_cache /* __thread */ __libcrunch_is_a_cache = {
 	.size = LIBCRUNCH_MAX_IS_A_CACHE_SIZE
@@ -318,6 +319,7 @@ static void print_exit_summary(void)
 	fprintf(crunch_stream_err, "out-of-bounds pointers created:            % 9ld\n", __libcrunch_created_invalid_pointer);
 	fprintf(crunch_stream_err, "accesses trapped and emulated:             % 9ld\n", 0ul /* FIXME */);
 	fprintf(crunch_stream_err, "calls to __fetch_bounds:                   % 9ld\n", __libcrunch_fetch_bounds_called /* FIXME: remove */);
+	fprintf(crunch_stream_err, "   of which missed cache:                  % 9ld\n", __libcrunch_fetch_bounds_missed_cache);
 	fprintf(crunch_stream_err, "====================================================\n");
 	if (!verbose)
 	{
@@ -550,10 +552,9 @@ static void cache_is_a(const void *obj_base, const void *obj_limit, const struct
 	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
-		.uniqtype = (unsigned long long) t,
-		.result = result,
+		.uniqtype = (void*) t,
 		.period = period,
-		.alloc_base = alloc_base
+		.result = result,
 	};
 	__libcrunch_is_a_cache.validity |= 1u<<pos;
 	// make sure this entry is not the next victim
@@ -567,10 +568,9 @@ static void cache_bounds(const void *obj_base, const void *obj_limit, const stru
 	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
-		.uniqtype = (unsigned long long) t,
-		.result = 1 /* FIXME */,
+		.uniqtype = (void*) t,
 		.period = period,
-		.alloc_base = alloc_base
+		.result = 1 /* FIXME */,
 	};
 	__libcrunch_is_a_cache.validity |= 1u<<pos;
 	// make sure this entry is not the next victim
@@ -584,10 +584,9 @@ static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const
 	__libcrunch_fake_bounds_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
-		.uniqtype = (unsigned long long) t,
-		.result = 1 /* FIXME */,
+		.uniqtype = (void*) t,
 		.period = period,
-		.alloc_base = alloc_base
+		.result = 1 /* FIXME */,
 	};
 	__libcrunch_fake_bounds_cache.validity |= 1u<<pos;
 	// make sure this entry is not the next victim
@@ -1918,8 +1917,9 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 			);
 		}
 		// bounds are just this object
-		cache_bounds(obj, (char*) obj + t->pos_maxoff, t, 1, alloc_uniqtype->pos_maxoff, alloc_start);
-		return __make_bounds((unsigned long) obj, (unsigned long) obj + t->pos_maxoff);
+		char *limit = (char*) obj + (t->pos_maxoff > 0 ? t->pos_maxoff : 1);
+		cache_bounds(obj, limit, t, 1, alloc_uniqtype->pos_maxoff, alloc_start);
+		return __make_bounds((unsigned long) obj, (unsigned long) limit);
 	}
 	else
 	{
@@ -1934,16 +1934,25 @@ return_min_bounds:
 	return __make_bounds((unsigned long) obj, (unsigned long) obj + 1);
 
 return_alloc_bounds:
-	if (is_cacheable) cache_bounds((char*) alloc_start - alloc_uniqtype->neg_maxoff, 
-		(char*) alloc_start + alloc_size_bytes, 
-		alloc_uniqtype, 
-		alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1, 
-		alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1,
-		alloc_start);
-	return __make_bounds(
-		(unsigned long) alloc_start - alloc_uniqtype->neg_maxoff,
-		(unsigned long) alloc_start + alloc_size_bytes
-	);
+	{
+		char *base = (char*) alloc_start - alloc_uniqtype->neg_maxoff;
+		char *limit = (char*) alloc_start + alloc_size_bytes;
+		unsigned long size = limit - base;
+		
+		/* CHECK: do the bounds include the derived-from pointer? If not, we abort. */
+		if ((unsigned long) obj - (unsigned long) base > size) goto abort_returning_max_bounds;
+			
+		if (is_cacheable) cache_bounds(base, 
+			limit, 
+			alloc_uniqtype, 
+			alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1, 
+			alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1,
+			alloc_start);
+		return __make_bounds(
+			(unsigned long) base,
+			(unsigned long) limit
+		);
+	}
 
 abort_returning_max_bounds: 
 	/* HACK: to avoid repeated slow-path queries for uninstrumented/unindexed 
@@ -1960,7 +1969,7 @@ abort_returning_max_bounds:
 	);
 	
 	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)\n", 
-			obj, derived, __liballocs_errstring(err), alloc_site);
+			obj, derived, err ? __liballocs_errstring(err) : "(found object did not include queried pointer)", alloc_site);
 	return __libcrunch_max_bounds(obj);
 }
 
@@ -2113,4 +2122,11 @@ void __libcrunch_bounds_error(const void *derived, const void *derivedfrom,
 {
 	__libcrunch_bounds_error_at(derived, derivedfrom, bounds, 
 		__builtin_return_address(0));
+}
+
+__libcrunch_bounds_t 
+(__attribute__((pure)) __fetch_bounds_ool)
+(const void *ptr, const void *derived_ptr, struct uniqtype *t)
+{
+	return __fetch_bounds(ptr, derived_ptr, t, t->pos_maxoff);
 }

@@ -12,14 +12,14 @@
 struct __libcrunch_bounds_s
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	/* We store only the lower 32 bits of the base and limit. 
+	/* We store only the lower 32 bits of the base.
 	 * We infer the upper 32 bits from those of the derivedfrom ptr,
 	 * and from the inequality
-	 *    base <= ptr < limit
+	 *    base <= ptr < base + size
 	 * ... see __libcrunch_get_base and __libcrunch_get_limit.
 	 */
 	unsigned long base:32;
-	unsigned long limit:32;
+	unsigned long size:32;
 #else
 	/* A <base, size> representation has certain advantages over <base, limit>. 
 	 * In particular, our fast-path test uses the size, not the limit. */
@@ -81,6 +81,7 @@ extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
 extern unsigned long __libcrunch_checked_pointer_adjustments __attribute__((weak));
 extern unsigned long __libcrunch_created_invalid_pointer __attribute__((weak));
 extern unsigned long __libcrunch_fetch_bounds_called __attribute__((weak));
+extern unsigned long __libcrunch_fetch_bounds_missed_cache __attribute__((weak));
 
 /* tentative cache entry redesign to integrate bounds and types:
  * 
@@ -98,15 +99,14 @@ struct __libcrunch_cache_entry_s
 {
 	const void *obj_base;
 	const void *obj_limit;
-	unsigned long long uniqtype:((8 * sizeof(void*))-1);
-	unsigned result:1;
-	unsigned short period;
+	struct uniqtype *uniqtype;
+	unsigned period;
+	unsigned short result;
 	/* TODO: do inline uniqtype cache word check? */
-	const void *alloc_base;
-};
+} __attribute__((aligned(64)));
 
 #ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE
-#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 4
+#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 8
 #endif
 struct __libcrunch_cache
 {
@@ -288,10 +288,10 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 	{
 		if (cache->validity & (1<<i))
 		{
-			unsigned long long cache_uniqtype = cache->entries[i].uniqtype;
+			struct uniqtype *cache_uniqtype = cache->entries[i].uniqtype;
 			/* We test whether the difference is divisible by the period and within the bounds */
 			signed long long diff = (char*) obj - (char*) cache->entries[i].obj_base;
-			if ((void*) cache_uniqtype == t
+			if (cache_uniqtype == t
 					&& (char*) obj >= (char*)cache->entries[i].obj_base
 					&& (char*) obj < (char*)cache->entries[i].obj_limit
 					&& 
@@ -325,7 +325,6 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 	{
 		if (cache->validity & (1<<i))
 		{
-			unsigned long long cache_uniqtype = cache->entries[i].uniqtype;
 			/* We test whether the difference is divisible by the period and within the bounds */
 			signed long long diff = (char*) obj - (char*) cache->entries[i].obj_base;
 			if ((char*) obj >= (char*)cache->entries[i].obj_base
@@ -622,6 +621,9 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 	return 
 			(val & ~LIBCRUNCH_TRAP_TAG_MASK)
 			| (((signed long) any_ptr) < 0 ? LIBCRUNCH_TRAP_TAG_MASK : 0);
+	// TODO: experiment with "shift left, shift right" logic here.
+	// This means leaving one bit between address bits and the trap bits,
+	// so that we avoid shifting out all the should-be-all-0-or-all-1 bits.
 #else
 	return any_ptr;
 #endif
@@ -639,6 +641,8 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 	 * Signed-right-shift the addr, giving us all 0s or all 1s, then XOR.
 	 * FIXME: are these two instructions really worth it? Skip kernel-mode support? */
 #ifndef LIBCRUNCH_NO_KERNEL_POINTERS
+	/* Shift the top bit all the way down, with sign extension; we get all 1s or all 0s.
+	 * XOR that with the bits we have. */
 	bits ^= (unsigned long)(((signed long) addr) >> (sizeof (long) * 8 - 1));
 #endif
 	/* We only want the lower bits. */
@@ -683,7 +687,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return (__libcrunch_bounds_t) {
 			((unsigned long) _CLEAR_UPPER_32(base)),
-			((unsigned long) _CLEAR_UPPER_32(limit))
+			limit - base
 	};
 #else
 	return (__libcrunch_bounds_t) { base, (char*) limit - (char*) base };
@@ -700,7 +704,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	 * Let's play it safe and make them obj += 2GB.
 	 * Note that in extreme cases, this will actually not permit
 	 * some accesses which the intention of "max bounds" is to include. */
-	return __make_bounds(((unsigned long) ptr) - 1ul<<31, ((unsigned long) ptr) + 1ul<<31 - 1);
+	return __make_bounds(((unsigned long) ptr) - 1ul<<31, ((unsigned long) ptr) - 1 + 1ul<<31);
 #else
 	return __make_bounds((unsigned long) 0, (unsigned long) -1);
 #endif
@@ -728,15 +732,8 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_limit)(__libcrunch_bounds_t bounds, const void *derivedfrom)
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	/* The bounds are storing only the lower bits of the limit.
-	 * If derivedfrom's lower 32 < those bits, they are shared with the limit.
-	 * Otherwise, the limit is 4GB higher.
-	 * (base <= derivedfrom < limit)
-	 */
-	if (likely(_CLEAR_UPPER_32(derivedfrom) < bounds.limit))
-	{
-		return (void*) (_CLEAR_LOWER_32(derivedfrom) + bounds.limit);
-	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) + 0x100000000ul + bounds.limit);
+	return (char*) __libcrunch_get_base(bounds, derivedfrom)
+		 + __libcrunch_get_size(bounds, derivedfrom);
 #else
 	return (char*) bounds.base + bounds.size;
 #endif
@@ -751,30 +748,11 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr)
 {
+	/* Regardless of representation, to make invalid bounds we choose the ptr 
+	 * itself as the base, and 0 as the size. This *always* fails the Austin
+	 * check, because addr - base == 0, i.e. NOT (addr - base < size). */
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	/* Bounds/ptr orderings:
-	 * low               high
-	 *      B  P  L               normal
-	 *      B  L  P               > 4 GB a.k.a. invalid
-	 *      P  B  L               > 4 GB a.k.a. invalid
-	 *      P  L  B               base is lower
-	 *      L  B  P               limit is higher
-	 *      L  P  B               > 4 GB
-	 * 
-	 * so, in short
-	 *   try      p-2, p-1
-	 *   and if   p == 0, we're okay because we get   P B L  which is also invalid
-	 *   but if   p == 1  we also go for P B L, so try p-3, p-2
-	 * 
-	 * This means we can recognise invalid bounds as numbers just above p,
-	 * or, for low p, high positive numbers.
-	 */
-	unsigned p_low = (unsigned) _CLEAR_UPPER_32(ptr);
-	
-	if (likely(p_low != 1))
-	{
-		   return (__libcrunch_bounds_t) { p_low - 2, p_low - 1 };
-	} else return (__libcrunch_bounds_t) { p_low - 3, p_low - 2 };
+	return (__libcrunch_bounds_t) { .base =  _CLEAR_UPPER_32(ptr), .size = 0 };
 #else
 	/* remember! must fail the Austin test, which is 
 	 *      addr - base < size
@@ -788,17 +766,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bound
 extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, const void *ptr)
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	/* Bounds are invalid if
-	 * base is above ptr_l but below limit, or
-	 * limit is below ptr but above base.
-	 * 
-	 * These bounds are invalid because they denote an object bigger than 4GB.
-	 */
-	unsigned base = bounds.base;
-	unsigned limit = bounds.limit;
-	unsigned ptr_l = (unsigned) _CLEAR_UPPER_32(ptr);
-	return (base > ptr_l && base < limit)
-			|| (limit < ptr_l && limit > base);
+	return bounds.size == 0;
 #else
 	return bounds.size == 0;
 #endif
@@ -808,40 +776,30 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid
 extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid_bounds_equal)(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2)
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	return bounds1.base == bounds2.base && bounds1.limit == bounds2.limit;
+	return bounds1.base == bounds2.base && bounds1.size == bounds2.size;
 #else
-	return bounds1.size == bounds2.size && bounds1.base == bounds2.base;
+	return bounds1.base == bounds2.base && bounds1.size == bounds2.size;
 #endif
 }
-
 #undef _CLEAR_LOWER_32
 #undef _CLEAR_UPPER_32
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz)
+
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t, unsigned long t_sz);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t, unsigned long t_sz)
 {
 	/* We understand trap ptrs */
 	const void *testptr;
 	if (unlikely(__libcrunch_ptr_trap_bits(ptr) == LIBCRUNCH_TRAP_ONE_PAST))
 	{
-		testptr = (const char*) ptr - /* t->pos_maxoff */ t_sz;
+		testptr = ((const char*) __libcrunch_untrap(ptr, LIBCRUNCH_TRAP_ONE_PAST)) - /* t->pos_maxoff */ t_sz;
 	} else testptr = ptr;
-	/* If we hit the cache, we can return an answer inline. */
+	const void *derived = (const void *) __libcrunch_detrap(derived_ptr_maybetrapped);
+	
+	/* If we hit the is-a cache, we can return an answer inline. */
 	struct __libcrunch_cache_entry_s *hit = __libcrunch_cache_lookup_notype(
 			&__libcrunch_is_a_cache, testptr, /* t->pos_maxoff */ t_sz);
 	if (hit)
 	{
-		if (unlikely(!hit->alloc_base))
-		{
-			/* We hit an entry with no alloc base. This means it's a "fake" entry that
-			 * we use to suppress repeated failures for unknown allocations. Bump up the
-			 * limit to that it includes the derived pointer. */
-			char *limit_from_derived = (char*) derived_ptr
-				 + (hit->uniqtype ? ((struct uniqtype *)(unsigned long) hit->uniqtype)->pos_maxoff : 1);
-			if (limit_from_derived > (char*) hit->obj_limit)
-			{
-				hit->obj_limit = limit_from_derived;
-			}
-		}
 		/* Is ptr actually a t? If not, we're in trouble!
 		 * Maybe it's one-past and we just de-trapped it? 
 		 * NO, we handle that in caller. */
@@ -860,17 +818,23 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	{
 		/* We hit an entry with no alloc base. This means it's a "fake" entry that
 		 * we use to suppress repeated failures for unknown allocations. Bump up the
-		 * limit to that it includes the derived pointer. */
-		char *limit_from_derived = (char*) derived_ptr
+		 * cached limit to that it includes the derived pointer. 
+		 * 
+		 * ALWAYS return max bounds! These will only propagate with the pointer we're
+		 * checking, so don't have a global effect (whereas the cache does). */
+		char *limit_from_derived = (char*) derived
 			 + (hit->uniqtype ? ((struct uniqtype *)(unsigned long) hit->uniqtype)->pos_maxoff : 1);
 		if (limit_from_derived > (char*) hit->obj_limit)
 		{
 			hit->obj_limit = limit_from_derived;
 		}
-		return __make_bounds((unsigned long) hit->obj_base, (unsigned long) hit->obj_limit);
+		return __libcrunch_max_bounds(derived);
 	}
 	return __libcrunch_make_invalid_bounds(ptr);
 }
+
+extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
+/* In libcrunch.c. */
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz)
@@ -882,6 +846,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	);
 	if (!__libcrunch_bounds_invalid(from_cache, ptr)) return from_cache;
 	/* Else if libcrunch is linked in, we can delegate to it. */
+	++__libcrunch_fetch_bounds_missed_cache;
 	return __fetch_bounds_internal(ptr, derived_ptr, t);
 #else
 	return __libcrunch_make_invalid_bounds(ptr);
@@ -914,6 +879,8 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	 * - addr - base > size.      (i.e. base is *far* below addr).
 	 * Doing this fast for the 64-bit bounds is not easy.
 	 * Ideally we want it to hold for the *unadjusted* (raw) base/limit values.
+	 * And it does! because denorm bases are by definition *higher* (in 32bit-space)
+	 * than the actual base.
 	 */
 	// too low?
 	//if (unlikely(addr < base)) { goto out_fail; }
@@ -922,6 +889,9 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	//if (unlikely(addr > limit)) { goto out_fail; }
 
 	unsigned long addr = (unsigned long) derived;
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	/* FIXME: use denorm base directly. HMM. Actually, is that really faster? TEST. */
+#endif
 	unsigned long base = (unsigned long) __libcrunch_get_base(derivedfrom_bounds, derivedfrom);
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
 	
@@ -937,22 +907,114 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	// abort();     // <-- this makes things go much faster!
-	__libcrunch_bounds_t pre_bounds = *p_derivedfrom_bounds;
-	/* FIXME: re-inline the trap-handling parts... what's left? invalid bounds case? YES */
+	/* We're a secondary check. We assume the primary check has already happened, and failed. */
+	/* We are *not* pure, although our out-of-line call *is*. */
+	/* Primary might have failed because our local bounds are invalid. */
+	/* Primary might have failed because we need to trap the derived pointer. */
+	/* Primary might have failed because the derived-from pointer is trapped. */
+	/* Primary might have failed because we have fake bounds and they need widening.
+	 *     HMM. Actually this doesn't happen, because *local* fake bounds are max-bounds.
+	 *     We only widen fake bounds if we lack local bounds, hit the cache, then find derived is OOB. */
+	unsigned long addr = (unsigned long) *p_derived;
+	unsigned long base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
+	unsigned long size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
+	if (!(addr - base >= size)) __builtin_unreachable();
 
+	/* Handle lack of bounds first. We do this out of line. 
+	 * In that path is the code for cache lookup, fake bounds
+	 * handling and calling liballocs. 
+	 * PROBLEM: to maximise our use of purity, we don't want to pass 
+	 * both *p_derived and derivedfrom.
+	 * -- not much solution that I can see, because of fake bounds creation
+	 * PROBLEM: either of these pointers might currently be trapped.
+	 * -- AH, fetch_bounds deals with this.
+	 * */
+	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom))
+	{
+		__libcrunch_bounds_t new_bounds = __fetch_bounds_ool(derivedfrom, *p_derived, t);
+		// tell the compiler that we always get back valid bounds
+		if (__libcrunch_bounds_invalid(new_bounds, derivedfrom)) __builtin_unreachable();
+
+		/* Update our base and size, since they were dummy values (<arbitrary> and 0) before. */
+		base = (unsigned long) __libcrunch_get_base(new_bounds, derivedfrom);
+		size = __libcrunch_get_size(new_bounds, derivedfrom);
+		/* Update the caller's locally cached bounds */
+		*p_derivedfrom_bounds = new_bounds;
+		/* Do the primary check again. It might pass now. */
+		if (addr - base < size) return 1;
+	}
 	
-	/* FIXME: return bounds, not derived, after we re-inline the trap handling.
-	 * This is so that the out-of-line path can be marked pure. */
-	void *new_derived = __check_derive_ptr_internal(*p_derived, derivedfrom, p_derivedfrom_bounds, t);
-	// tell the compiler that we always get back valid bounds
-	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
-	// tell the compiler that if we had valid bounds before, they won't have changed
-	// ... UNLESS the check failed? hmm.. when might that happen (FIXME)?
-	if (/*new_derived == *p_derived
-			&& */!__libcrunch_bounds_invalid(pre_bounds, derivedfrom)
-			&& !__libcrunch_valid_bounds_equal(*p_derivedfrom_bounds, pre_bounds)) __builtin_unreachable();
-	return (new_derived == *p_derived) ? (*p_derived = new_derived, 1)
-	                                   : (*p_derived = new_derived, 0);
+	// new approach:
+	// unconditionally de-trap addr and, if wordsize, derivedfrom;
+	// ensure valid bounds
+	// recompute base and size, from the new bounds
+	// -- this is a no-op unless either we're wordsize (=> untrapped derivedfrom gives new base)
+	//                                  or we fetched bounds
+	// do the primary check again
+	// -- write now-untrapped addr back, if derivedfrom was trapped
+	// do the trap-derived
+	// else report an error
+	
+	/* Which case to handle first? Do the trap cases. 
+	 * (1) trapping when hitting the limit.
+	 * (2) adjusting an already-trapped pointer;
+	 */
+	if (addr - base == size)
+	{
+		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
+		return 1;
+	}
+	
+	if (__libcrunch_ptr_trap_bits(*p_derived) == LIBCRUNCH_TRAP_ONE_PAST)
+	{
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+		void *untrapped_derivedfrom = __libcrunch_untrap(derivedfrom, LIBCRUNCH_TRAP_ONE_PAST);
+		/* Re-calculate the actual base.
+		 * This is necessary in the 64-bit bounds case only, where
+		 * we use the derived-from pointer to supply the higher-order bits. 
+		 * If it's trapped, these were wrong during our earlier (Austin) check.
+		 * (Otherwise it doesn't matter that our derivedfrom pointer is trapped, 
+		 * because we don't use its value; we have bounds info which is never trapped.)
+		 */
+		base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, 
+			untrapped_derivedfrom);
+#endif
+		/* If derivedfrom is trapped, addr is also currently trapped. */
+		addr = (unsigned long) __libcrunch_untrap((const void*) addr, LIBCRUNCH_TRAP_ONE_PAST);
+		/* Now try again. */
+		if (likely(addr - base < size))
+		{
+			/* Okay, write the *untrapped* derived pointer. */
+			*p_derived = (const void*) addr;
+			return 1;
+		}
+	}
+	/* Note that we NEVER create trapped pointers from fake bounds. 
+	 * The reason is that in fake cases, the local bounds are always max_bounds. */
+
+	/* CARE. What if our adjustment is at distance 0? Then it also needs
+	 * to be trapped. BUT we've already handled that case! 
+	 * in "addr - base == size", above, UNLESS we're wordsize-bounds. */
+	if (addr - base == size)
+	{
+		/* This should mean we're hitting the limit, which here
+		 * should also be the derived-from ptr. */
+#ifndef NDEBUG
+		/* assert */ if (!(*p_derived == (char*) base + size)) abort();
+		/* assert */ if (!(*p_derived == derivedfrom)) abort();
+#else
+		/* assert */ if (!(*p_derived == (char*) base + size)) __builtin_unreachable();
+		/* assert */ if (!(*p_derived == derivedfrom)) __builtin_unreachable();
+#endif
+		*p_derived = derivedfrom /* __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST) */;
+		return 1;
+	}
+	// else the derived-from pointer is definitely out-of-bounds, but we fall through
+
+	/* Handle the error. */
+	__libcrunch_bounds_error(*p_derived, derivedfrom, *p_derivedfrom_bounds);
+	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
+	return 0;
 #else
 	return 1;
 #endif
