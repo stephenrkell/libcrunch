@@ -1284,22 +1284,43 @@ class crunchBoundVisitor = fun enclosingFile ->
                      *          -- if it's selecting a subobject via a pointer we have bounds for.
                      *)
                     if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
+                        && hostIsLocal lhost !currentFuncAddressTakenLocalNames
                     then (
-                        debug_print 0 ("Saw write to a non-void pointer lval: " ^ (
+                        debug_print 0 ("Saw write to a local non-void pointer lval: " ^ (
                             lvalToString (lhost, loff)
-                        ) ^ "\n")
+                        ) ^ ", so updating its bounds\n")
                         ;
-                        if hostIsLocal lhost !currentFuncAddressTakenLocalNames
-                        then (
-                            (* Queue some instructions to write the bounds. *)
-                            debug_print 0 "Local, so updating its bounds.\n"
-                            ;
-                            [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
-                            )
-                        else (
-                            debug_print 0 "Host is not local\n";
-                            []
-                        )
+                        [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
+                    )
+                    else if isPointerType (Cil.typeOf (Lval(lhost, loff)))
+                        && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames)
+                    then (
+                        debug_print 0 ("Saw write to a non-local pointer lval: " ^ (
+                            lvalToString (lhost, loff)
+                        ) ^ ", so calling out the bounds-store hook (FIXME)\n")
+                        ;
+                        [
+                            (* Again, depending on the written expression, 
+                             * we can fetch, copy or create the bounds. 
+                             * If it's fetch, 
+                             * we don't actually do the fetch -- we pass invalid bounds,
+                             * and we let the inline function do the fetch. In
+                             * most configurations, we actually won't do the fetch
+                             * in that case.
+                             * PERHAPS we can optimise: if the dest already stores
+                             * bounds that contain the overwritten value, we assume
+                             * that those bounds are good for the new value?
+                             * YES, I think this is sane. It might break if we're changing the
+                             * type of the pointer stored at the target location.
+                             * This means that storage allocations should clear the
+                             * relevant bounds areas. Hmm. If we succeed in this being
+                             * unnecessary for most allocations (only the hot ones), this
+                             * will be very reasonable.
+                             * HMM. Might be too clever; "just fetch" is sane if fetches
+                             * are cheap.
+                             *)
+                            (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
+                        ]
                     )
                     else []
                 in begin
