@@ -90,3 +90,10 @@ __libcrunch_bounds_t __fetch_bounds_ool(const void *ptr, const void *derived_ptr
 {
 	return __libcrunch_make_invalid_bounds(ptr);
 }
+
+void **__libcrunch_bounds_bases_region_00;
+void **__libcrunch_bounds_bases_region_2a;
+void **__libcrunch_bounds_bases_region_7a;
+unsigned long *__libcrunch_bounds_sizes_region_00;
+unsigned long *__libcrunch_bounds_sizes_region_2a;
+unsigned long *__libcrunch_bounds_sizes_region_7a;

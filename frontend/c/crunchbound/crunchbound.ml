@@ -398,7 +398,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
             ulongType)
         in
         BoundsBaseLimitRvals(baseExpr, limitExpr)
-    in    
+    in
     match e with
         Lval(Var(someVi), someOffset) when hostIsLocal (Var(someVi)) currentFuncAddressTakenLocalNames -> 
             (* - it's an also-local pointer (perhaps a subobject of a local struct/array)
@@ -967,6 +967,7 @@ class crunchBoundVisitor = fun enclosingFile ->
   val mutable checkDerivePtrInlineFun = emptyFunction "__full_check_derive_ptr"
   val mutable detrapInlineFun = emptyFunction "__libcrunch_detrap"
   val mutable checkLocalBoundsInlineFun = emptyFunction "__check_local_bounds"
+  val mutable storePointerNonLocalInlineFun = emptyFunction "__store_pointer_nonlocal"
   
   initializer
     (* according to the docs for pushGlobal, non-types go at the end of globals --
@@ -1029,6 +1030,14 @@ class crunchBoundVisitor = fun enclosingFile ->
                             enclosingFile "__libcrunch_check_local_bounds" (TFun(intType, 
                             Some [ ("ptr", intType, []);
                                    ("limit", intType, [])
+                            ], 
+                            false, [])) 
+    ;
+    storePointerNonLocalInlineFun <- findOrCreateExternalFunctionInFile
+                            enclosingFile "__store_pointer_nonlocal" (TFun(voidType, 
+                            Some [ ("dest", voidPtrPtrType, []);
+                                   ("val", voidPtrType, []);
+                                   ("val_bounds", boundsType, [])
                             ], 
                             false, [])) 
 
@@ -1251,6 +1260,9 @@ class crunchBoundVisitor = fun enclosingFile ->
   
   method vinst (outerI: instr) : instr list visitAction = begin
     currentInst := Some(outerI); (* used from vexpr *)
+    let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
+      with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+    in
     let isWithCachedBoundsUpdates = begin
         let f = match !currentFunc with
             Some(af) -> af
@@ -1292,34 +1304,79 @@ class crunchBoundVisitor = fun enclosingFile ->
                         ;
                         [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
                     )
-                    else if isPointerType (Cil.typeOf (Lval(lhost, loff)))
+                    else if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
                         && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames)
                     then (
                         debug_print 0 ("Saw write to a non-local pointer lval: " ^ (
                             lvalToString (lhost, loff)
                         ) ^ ", so calling out the bounds-store hook (FIXME)\n")
                         ;
-                        [
-                            (* Again, depending on the written expression, 
-                             * we can fetch, copy or create the bounds. 
-                             * If it's fetch, 
-                             * we don't actually do the fetch -- we pass invalid bounds,
-                             * and we let the inline function do the fetch. In
-                             * most configurations, we actually won't do the fetch
-                             * in that case.
-                             * PERHAPS we can optimise: if the dest already stores
-                             * bounds that contain the overwritten value, we assume
-                             * that those bounds are good for the new value?
-                             * YES, I think this is sane. It might break if we're changing the
-                             * type of the pointer stored at the target location.
-                             * This means that storage allocations should clear the
-                             * relevant bounds areas. Hmm. If we succeed in this being
-                             * unnecessary for most allocations (only the hot ones), this
-                             * will be very reasonable.
-                             * HMM. Might be too clever; "just fetch" is sane if fetches
-                             * are cheap.
-                             *)
-                            (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
+                        (* Again, depending on the written expression, 
+                         * we can fetch, copy or create the bounds. 
+                         * If it's fetch, 
+                         * we don't actually do the fetch -- we pass invalid bounds,
+                         * and we let the inline function do the fetch. In
+                         * most configurations, we actually won't do the fetch
+                         * in that case.
+                         * PERHAPS we can optimise: if the dest already stores
+                         * bounds that contain the overwritten value, we assume
+                         * that those bounds are good for the new value?
+                         * YES, I think this is sane. It might break if we're changing the
+                         * type of the pointer stored at the target location.
+                         * This means that storage allocations should clear the
+                         * relevant bounds areas. Hmm. If we succeed in this being
+                         * unnecessary for most allocations (only the hot ones), this
+                         * will be very reasonable.
+                         * HMM. Might be too clever; "just fetch" is sane if fetches
+                         * are cheap.
+                         *)
+                        (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
+                        let be = boundsExprForExpr e !currentFuncAddressTakenLocalNames lvalToBoundsFun
+                        in
+                        (* What do we do if we have to fetch the bounds of the stored value?
+                         * This means that we don't *locally* know the bounds of the stored
+                         * value. And the value need have no relationship to the pointer
+                         * currently stored at the address. And the value we're storing is
+                         * probably *local*, i.e. coming from a temporary. So the right 
+                         * solution is probably to be eager about fetching bounds, if we're
+                         * storing bounds. Is this an optional mode? HMM, yes, we can do this.
+                         * If we turn makeInvalidBoundsFun into a make-invalid-or-fetch-fast?
+                         * THEN must distinguish makeInvalid from receiveArg
+                         *)
+                        let (boundsExpr, preInstrs) = match be with
+                                BoundsLval(blv) -> (Lval(blv), [])
+                              | BoundsBaseLimitRvals(eb, el)
+                                 -> let bTemp = Cil.makeTempVar f ~name:"__cil_boundsrv_" boundsType
+                                    in
+                                    let blv = (Var(bTemp), NoOffset)
+                                    in
+                                    (Lval(blv), 
+                                     [makeCallToMakeBounds (Some(blv)) eb el (instrLoc !currentInst) makeBoundsInlineFun]
+                                    )
+                              | MustFetch -> (* FIXME: be eager, then this won't happen. *)
+                                    let bTemp = Cil.makeTempVar f ~name:"__cil_boundsrv_" boundsType
+                                    in
+                                    (Lval(Var(bTemp), NoOffset), 
+                                     [Call( Some(Var(bTemp), NoOffset),
+                                       (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                       [
+                                           (*  const void *ptr *)
+                                           e
+                                       ],
+                                       (instrLoc !currentInst)
+                                    )]
+                                    )
+                        in
+                        preInstrs @ [
+                            Call( None, 
+                                  Lval(Var(storePointerNonLocalInlineFun.svar), NoOffset), 
+                                  [ 
+                                    mkAddrOf (lhost, loff) ;
+                                    e ;
+                                    boundsExpr
+                                  ],
+                                  instrLoc !currentInst
+                            )
                         ]
                     )
                     else []
@@ -1343,11 +1400,21 @@ class crunchBoundVisitor = fun enclosingFile ->
                             ;
                             if hostIsLocal lhost !currentFuncAddressTakenLocalNames
                             then begin
-                                debug_print 0 "Local, so updating its bounds.\n"
+                                debug_print 0 "Local, so updating (read: invalidating) its bounds.\n"
                                 ;
-                                (* Queue some instructions to write the bounds. *)
+                                (* Queue some instructions to write the bounds. 
+                                 * ACTUALLY just write invalid bounds for now. 
+                                 * TODO: we'll add bounds-passing shortly. *)
                                [outerI] @ [
-                                makeBoundsFetchInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) (lhost, loff) lvalToBoundsFun !currentInst
+                                (* makeBoundsFetchInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) (lhost, loff) lvalToBoundsFun !currentInst *)
+                                Call( Some(lvalToBoundsFun (lhost, loff)),
+                                (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                [
+                                    (*  const void *ptr *)
+                                    Lval(lhost, loff)
+                                ],
+                                (instrLoc !currentInst)
+                                )
                                 ]
                             end
                             else (
