@@ -275,7 +275,15 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
 let makeBoundsLocal vi bt enclosingFunction enclosingFile = 
     Cil.makeTempVar enclosingFunction ~name:("__cil_localbound_" ^ vi.vname ^ "_") bt
 
-let makeSizeOfPointeeType ptrExp = SizeOf(Cil.typeOf (Lval(Mem(ptrExp), NoOffset)))
+let makeSizeOfPointeeType ptrExp = 
+    let pointeeT = Cil.typeOf (Lval(Mem(ptrExp), NoOffset))
+    in
+    let rec decayPointeeArrayT pt = match pt with
+      | TArray(at, _, _) -> decayPointeeArrayT at
+      | TNamed(ti, attrs) -> decayPointeeArrayT ti.ttype
+      | _ -> pt
+    in
+    SizeOf(decayPointeeArrayT pointeeT)
 
 let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Cil.varinfo VarinfoMap.t ref) = 
     debug_print 0 ("Ensuring we have bounds local for " ^ vi.vname ^ "\n");
@@ -340,9 +348,12 @@ let makeCallToMakeBounds outputLval baseExpr limitExpr loc makeBoundsFun =
 type bounds_expr = 
     BoundsLval of lval
   | BoundsBaseLimitRvals of (Cil.exp * Cil.exp)
-  | MustFetch
+  | MustFetch of Cil.exp option
+
 
 let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun = 
+    if isStaticallyNullPtr e then BoundsBaseLimitRvals(zero, one)
+    else
     let rec offsetContainsField offs = match offs with
             NoOffset -> false
           | Field(fi, _) -> true
@@ -422,7 +433,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
       | AddrOf(Var(someVi), someOffset)  -> (
         debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 1)\n");
         try handleAddrOfVarOrField (Var(someVi)) someOffset
-        with Not_found -> MustFetch
+        with Not_found -> MustFetch(None)
         )
         (* - we're taking the address of a local variable, global variable or subobject.
                 => bounds are implied by the address value and the type of the object.
@@ -486,7 +497,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
             try handleAddrOfVarOrField (Var(someVi)) (offsetFromList (
                (offsetToList someOffset) @ [Index(zero, NoOffset)]
             ))
-            with Not_found -> MustFetch
+            with Not_found -> MustFetch(None)
         )
       | AddrOf(Mem(memExp), someOffset) 
         when offsetContainsField someOffset ->
@@ -570,7 +581,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              * we do the write. PROBLEM: we've split this across a function call,
              * __check_derive_ptr. HMM. Perhaps this transformation hasn't happened yet?
              *)
-      | _ -> MustFetch
+      | _ -> MustFetch(None)
 
 let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
     debug_print 0 ("Making local bounds check for indexing expression " ^ 
@@ -636,6 +647,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
      * then copy from the temporary to the actual target. *)
     let loc = instrLoc currentInst in
     let exprTmpVar = Cil.makeTempVar ~name:"__cil_adjexpr_" enclosingFunction (typeOf ptrExp) in
+    let checkResultVar = Cil.makeTempVar ~name:"__cil_boundscheck_" enclosingFunction boolType in
     let rec simplifyPtrExprs someE = (
       (* Try to see through AddrOf and Mems to get down to a local lval if possible. 
        * Here we are applying the equivalences from the CIL documentation.
@@ -698,7 +710,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
                             baseExpr limitExpr loc makeBoundsFun]
                   | BoundsLval(blv) ->  
                          [Set( (Var(exprTmpBoundsVar), NoOffset), Lval(blv), loc )]
-                  | MustFetch -> 
+                  | MustFetch(_) -> 
                         [Call( Some(Var(exprTmpBoundsVar), NoOffset),
                                (Lval(Var(makeInvalidBoundsFun.svar),NoOffset)),
                                [
@@ -739,7 +751,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       (* first enqueue an assignment of the whole expression to exprTmpVar *)
       Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
       (* next enqueue the check call *)
-      Call( (* Some((Var(exprTmpVar), NoOffset)) *) None, (* return value dest *)
+      Call( (* Some((Var(exprTmpVar), NoOffset)) *) (* None *) Some(Var(checkResultVar), NoOffset), (* return value dest *)
             (Lval(Var(checkDerivePtrInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
             [ 
               (* const void **p_derived *)
@@ -775,58 +787,13 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       )
     ])
 
-let makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval derivedFromE lvalToBoundsFun currentInst = 
-    let loc = instrLoc currentInst in
-    (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
-    let ptrT = exprConcreteType (Lval(justWrittenLval))
-    in
-    let ts = match ptrT with 
-        TSPtr(targetTs, _) -> targetTs
-      | _ -> failwith "fetching bounds for a non-pointer"
-    in
-    let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
-    in
-    Call( Some(lvalToBoundsFun justWrittenLval),
-            (Lval(Var(fetchBoundsFun.svar),NoOffset)),
-            [
-                (* const void *ptr *)
-                Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
-            ;   (* const void *derived_ptr *)
-                Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
-            ;   (* struct uniqtype *t *)
-                mkAddrOf (Var(uniqtypeGlobal), NoOffset)
-            ;   (* what's the size of that thing? *)
-                makeSizeOfPointeeType (Lval(justWrittenLval))
-            ],
-            loc
-        )
-
-
-let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE derivedFromE (lvalToBoundsFun : lval -> lval) currentInst =
+let makeBoundsWriteInstruction ~doFetch enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun makeInvalidBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE derivedFromE (lvalToBoundsFun : lval -> lval) currentInst =
     let loc = instrLoc currentInst in
     (* Here we do the case analysis: 
      * do we copy bounds, 
      *       make them ourselves, 
      *    or fetch them? *)
-    debug_print 0 "Making bounds write instructions...\n";
-    let doFetch = fun () -> (
-        let isNull = isStaticallyNullPtr writtenE
-        in
-        debug_print 0 ("Is this pointer statically null? " ^ (if isNull then "true" else "false") ^ "\n");
-        if isNull then (
-            (* Make null bounds *)
-            debug_print 0 "Making null bounds\n";
-            makeCallToMakeBounds (Some(lvalToBoundsFun justWrittenLval)) zero one loc makeBoundsFun
-        ) else (
-            debug_print 0 "Falling back on __fetch_bounds\n";
-            let result = makeBoundsFetchInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun uniqtypeGlobals justWrittenLval derivedFromE lvalToBoundsFun currentInst
-            in
-            debug_print 0 "Made __fetch_bounds call\n";
-            result
-        )
-    )
-    in
-    debug_print 0 ("Matching writtenE: " ^ expToString writtenE ^ "\n");
+    debug_print 0 ("Making bounds write instructions... matching writtenE: " ^ expToString writtenE ^ "\n");
     (* We only get called if we definitely want to update the bounds for 
      * justWrittenLval.
      * It follows that justWrittenLval is a pointer
@@ -843,7 +810,39 @@ let makeBoundsWriteInstruction enclosingFile  enclosingFunction currentFuncAddre
             Set(destBoundsLval, Lval(sourceBoundsLval), loc)
       | BoundsBaseLimitRvals(baseExpr, limitExpr) ->
             makeCallToMakeBounds (Some(destBoundsLval)) baseExpr limitExpr loc makeBoundsFun
-      | MustFetch -> doFetch ()
+      | MustFetch(_) -> 
+            if doFetch then
+                (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
+                let ptrT = exprConcreteType (Lval(justWrittenLval))
+                in
+                let ts = match ptrT with 
+                    TSPtr(targetTs, _) -> targetTs
+                  | _ -> failwith "fetching bounds for a non-pointer"
+                in
+                let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
+                in
+                Call( Some(lvalToBoundsFun justWrittenLval),
+                        (Lval(Var(fetchBoundsFun.svar),NoOffset)),
+                        [
+                            (* const void *ptr *)
+                            Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
+                        ;   (* const void *derived_ptr *)
+                            Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
+                        ;   (* struct uniqtype *t *)
+                            mkAddrOf (Var(uniqtypeGlobal), NoOffset)
+                        ;   (* what's the size of that thing? *)
+                            makeSizeOfPointeeType (Lval(justWrittenLval))
+                        ],
+                        loc
+                    )
+            else Call( Some(lvalToBoundsFun justWrittenLval),
+                   (Lval(Var(makeInvalidBoundsFun.svar),NoOffset)),
+                   [
+                       (*  const void *ptr *)
+                       Lval(justWrittenLval)
+                   ],
+                   loc
+            )
     end
 
 (* How do we deal with Stephen D's "unspecified values" problem?
@@ -948,7 +947,7 @@ class addressTakenVisitor = fun seenAddressTakenLocalNames -> object(self) inher
     end
 end (* class *)
 
-class crunchBoundVisitor = fun enclosingFile -> 
+class crunchBoundBasicVisitor = fun enclosingFile -> 
                                object(self)
   inherit nopCilVisitor
   val assertFailFunDec = findOrCreateExternalFunctionInFile enclosingFile "__assert_fail" (TFun(voidType, 
@@ -965,6 +964,7 @@ class crunchBoundVisitor = fun enclosingFile ->
   val mutable makeBoundsInlineFun = emptyFunction "__make_bounds"
   val mutable makeInvalidBoundsInlineFun = emptyFunction "__libcrunch_make_invalid_bounds"
   val mutable checkDerivePtrInlineFun = emptyFunction "__full_check_derive_ptr"
+  val mutable primaryCheckDerivePtrInlineFun = emptyFunction "__primary_check_derive_ptr"
   val mutable detrapInlineFun = emptyFunction "__libcrunch_detrap"
   val mutable checkLocalBoundsInlineFun = emptyFunction "__check_local_bounds"
   val mutable storePointerNonLocalInlineFun = emptyFunction "__store_pointer_nonlocal"
@@ -1010,7 +1010,16 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  ], 
                             false, []))
     ;
-
+    primaryCheckDerivePtrInlineFun <- findOrCreateExternalFunctionInFile
+                            enclosingFile "__primary_check_derive_ptr" (TFun(voidPtrType, 
+                            Some [ ("p_derived", voidConstPtrPtrType, []);
+                                   ("derivedfrom", voidConstPtrType, []); 
+                                   ("derivedfrom_bounds", boundsPtrType, []); 
+                                   ("t", uniqtypePtrType, []); 
+                                   ("t_sz", ulongType, [])
+                                 ], 
+                            false, [])) 
+    ;
     checkDerivePtrInlineFun <- findOrCreateExternalFunctionInFile
                             enclosingFile "__full_check_derive_ptr" (TFun(voidPtrType, 
                             Some [ ("p_derived", voidConstPtrPtrType, []);
@@ -1046,7 +1055,16 @@ class crunchBoundVisitor = fun enclosingFile ->
   val currentLval : lval option ref = ref None
   val currentBlock : block option ref = ref None
   val currentFuncAddressTakenLocalNames : string list ref = ref []
-  
+end
+
+let instrIsCheck checkDeriveFun instr = match instr with
+    Call(_, Lval(Var(funvar), NoOffset), _, _) when funvar == checkDeriveFun -> true
+  | _ -> false
+
+class crunchBoundVisitor = fun enclosingFile -> 
+                               object(self)
+  inherit (crunchBoundBasicVisitor enclosingFile)
+
   (* Remember the set of __uniqtype objects for which we've created a global
    * weak extern. *)
   val uniqtypeGlobals : Cil.global UniqtypeMap.t ref = ref UniqtypeMap.empty
@@ -1302,7 +1320,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             lvalToString (lhost, loff)
                         ) ^ ", so updating its bounds\n")
                         ;
-                        [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
+                        [makeBoundsWriteInstruction ~doFetch:false enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun makeInvalidBoundsInlineFun uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
                     )
                     else if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
                         && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames)
@@ -1353,7 +1371,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     (Lval(blv), 
                                      [makeCallToMakeBounds (Some(blv)) eb el (instrLoc !currentInst) makeBoundsInlineFun]
                                     )
-                              | MustFetch -> (* FIXME: be eager, then this won't happen. *)
+                              | MustFetch(_) -> (* FIXME: be eager, then this won't happen. *)
                                     let bTemp = Cil.makeTempVar f ~name:"__cil_boundsrv_" boundsType
                                     in
                                     (Lval(Var(bTemp), NoOffset), 
@@ -1406,7 +1424,6 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  * ACTUALLY just write invalid bounds for now. 
                                  * TODO: we'll add bounds-passing shortly. *)
                                [outerI] @ [
-                                (* makeBoundsFetchInstruction enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun uniqtypeGlobals (lhost, loff) (lhost, loff) lvalToBoundsFun !currentInst *)
                                 Call( Some(lvalToBoundsFun (lhost, loff)),
                                 (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
                                 [
@@ -1719,6 +1736,294 @@ class crunchBoundVisitor = fun enclosingFile ->
     ) (* end ChangeDoChildrenPost *)
 end
 
+class checkStatementLabelVisitor = fun labelPrefix -> 
+                                   fun checkDeriveFun ->
+                                object(self)
+  inherit nopCilVisitor
+
+  val mutable labelCounter = 0
+  
+  method vstmt (outerS : stmt) : stmt visitAction = 
+      (* We split statements of kind Instrs so that 
+       * if they're doing a pointer derivation check, 
+       * they *only* do that, and they have a unique label
+       * of a name generated from labelPrefix. *)
+      let mkLabelIdent = fun fragment -> 
+        let ident = "__crunchbound_" ^ fragment ^ "_" ^ (string_of_int labelCounter)
+        in
+        labelCounter <- labelCounter + 1;
+        ident
+      in
+      match outerS.skind with
+            |  Instr(is) -> ChangeDoChildrenPost(outerS, fun s ->
+                    match is with
+                        [] -> s
+                      | firstI :: moreIs ->
+                            (* Here we want a split so that check calls are in a separate run. *)
+                            let rec maybeSplitInstrs (rev_acc : instr list list) (cur : instr list) instrs = 
+                                match instrs with
+                                  [] -> List.rev (cur :: rev_acc)
+                                | x :: more when instrIsCheck checkDeriveFun x ->
+                                      (* accumulate a singleton, then start a new run of instrs *)
+                                      let new_singleton = [x]
+                                      in
+                                      let acc_with_cur = cur :: rev_acc
+                                      in
+                                      let new_rev_acc = new_singleton :: acc_with_cur
+                                      in
+                                      maybeSplitInstrs new_rev_acc [] more
+                                | x :: more -> (* it's some other instr *)
+                                      let new_cur = cur @ [x]
+                                      in
+                                      maybeSplitInstrs rev_acc new_cur more
+                            in
+                            let accRuns = maybeSplitInstrs [] [] is
+                            in
+                            (* Okay, now we have the runs, make a block. *)
+                            {
+                                labels = s.labels;
+                                skind = Block(mkBlock (List.map (fun accRun -> {
+                                        labels = (if List.length accRun = 1 
+                                            && instrIsCheck checkDeriveFun (List.hd accRun)
+                                            then
+                                                let loc = match List.hd accRun with
+                                                    Call(_, _, _, loc) -> loc
+                                                  | _ -> failwith "impossible: check not a call"
+                                                in
+                                                [Label(mkLabelIdent labelPrefix, loc, false)] 
+                                            else []
+                                        );
+                                        skind = Instr(accRun);
+                                        sid = 0;
+                                        succs = [];
+                                        preds = []
+                                    }) accRuns));
+                                sid = s.sid;
+                                succs = s.succs;
+                                preds = s.preds;
+                            }
+               ) (* end ChangeDoChildrenPost *)
+         (* |   Return(maybeE, loc)
+            |   Goto(stmtRef, loc)
+            |   Break(loc)
+            |   Continue(loc)
+            |   If(testExpr, blkTrue, blkFalse, loc)
+            |   Switch(testExpr, stmtBlock, stmtList, loc)
+            |   Loop(blk, loc, unusedContinueLabel, unusedBreakLabel)
+            |   Block(blk)
+            |   TryFinally(blkTry, blkFinally, loc)
+            |   TryExcept(blk, instrsWithExprs, loc)       
+      *)
+            | _ -> DoChildren
+end
+
+class primaryToSecondaryJumpVisitor = fun fullCheckFun
+                                    -> fun primaryCheckFun
+                                    -> fun findStmtByLabel
+                                    -> object(self)
+  inherit nopCilVisitor
+
+  method vstmt (outerS: stmt) : stmt visitAction = 
+       (* Either it's a single call to a check function, or it doesn't 
+        * include a check function at all. *)
+       match outerS.skind with
+           Instr(is) -> 
+               let isCheckStmt = List.length is = 1 && instrIsCheck fullCheckFun (List.hd is)
+               in 
+               if not isCheckStmt then DoChildren
+               else 
+                   let newStatements = [
+                    (* We do the check instr as usual, *except* calling the primary check function. *)
+                    { labels = outerS.labels;
+                      skind = Instr([match (List.hd is) with
+                            Call(out, _, [arg1; arg2; arg3; arg4; arg5], loc) ->
+                                Call(out, Lval(Var(primaryCheckFun), NoOffset), 
+                                    [Lval(mkMem arg1 NoOffset); arg2; Lval(mkMem arg3 NoOffset); arg5], loc)
+                          | _ -> failwith ("impossible: check is not a check (" ^ instToString (List.hd is) ^ ")")
+                      ]);
+                      sid = outerS.sid;
+                      succs = outerS.succs;
+                      preds = outerS.preds;
+                    };
+                    (* We're expecting that the check statement is labelled with a "full check" *)
+                    let secondaryCheckLabelIdent = match outerS.labels with
+                        [Label(ident, _, _)] ->
+                            debug_print 0 ("Found label ident: " ^ ident ^ "\n");
+                            let prefix = String.sub ident 0 (String.length "__crunchbound_primary_check")
+                            in
+                            let suffix = (
+                                if String.length ident > String.length ("__crunchbound_primary_check")
+                                then String.sub ident (String.length ("__crunchbound_primary_check")) (String.length ident - String.length ("__crunchbound_primary_check"))
+                                else "")
+                            in
+                            debug_print 0 ("Prefix, suffix: " ^ prefix ^ ", " ^ suffix ^ "\n");
+                            "__crunchbound_full_check" ^ suffix
+                      | _ -> failwith "check statement does not have a check label"
+                    in 
+                    (* We then test the return value of the call. *)
+                    let (checkVarinfo, loc) = match is with 
+                        [Call(Some(Var(vi), NoOffset), Lval(Var(funvar), NoOffset), args, loc)]
+                             when funvar == fullCheckFun
+                                -> (vi, loc)
+                      | _ -> failwith "check has no output var"
+                    in
+                    { labels = [];
+                      skind = If(UnOp(LNot, Lval(Var(checkVarinfo), NoOffset), intType), 
+                        mkBlock [{ labels = [];
+                          skind = Goto(findStmtByLabel secondaryCheckLabelIdent, loc);
+                          sid = 0; succs = []; preds = []
+                        }],
+                        mkBlock [],
+                        loc);
+                      sid = 0;
+                      succs = [];
+                      preds = [];
+                    }
+                ]
+                in
+                ChangeDoChildrenPost(outerS, fun s -> {s with labels = []; skind = Block(mkBlock newStatements)})
+         | _ -> DoChildren
+end
+
+class findStmtByNameVisitor = fun stmtName -> fun foundStmt -> object(self) inherit nopCilVisitor
+    method vstmt (stmt: stmt) : stmt visitAction = begin
+        if List.exists (fun l -> match l with
+            Label(x, _, _) -> x = stmtName
+          | _ -> false
+        ) stmt.labels
+        then (
+            foundStmt := Some(stmt);
+            SkipChildren
+        )
+        else DoChildren
+    end
+end (* class *)
+
+(* A visitor that makes a deep copy of a block. Based on Cil's copyFunctionVisitor, 
+ * but we don't want to copy variables. Unlike that visitor, we also need to rename labels. *)
+class copyBlockVisitor = fun (outputBlock : block option ref) -> fun labelPrefix -> object (self)
+  inherit nopCilVisitor
+
+  val toplevelBlock = ref None
+
+  (* Keep here a list of statements to be patched *)
+  val patches : stmt list ref = ref []
+  (* Keep a mapping from statements to their copies *)
+  val stmtmap : (int, stmt) Hashtbl.t = Hashtbl.create 113
+  val sid = ref 0 (* Will have to assign ids to statements *)
+
+  (* Replace statements. PROBLEM: goto targets are represented by a 
+   * stmt ref, which needs to point into the copy. *)
+  method vstmt (s: stmt) : stmt visitAction = 
+    s.sid <- !sid; sid := !sid + 1;
+    let prefixLabels ls = List.map (fun l -> match l with
+        Label(ident, loc, flag) -> Label(labelPrefix ^ ident, loc, flag)
+      | _ -> l) ls
+    in
+    let s' = {s with sid = s.sid; labels = prefixLabels s.labels} in
+    H.add stmtmap s.sid s'; (* Remember where we copied this *)
+    (* if we have a Goto or a Switch remember them to fixup at end *)
+    (match s'.skind with
+      (Goto _ | Switch _) -> patches := s' :: !patches
+    | _ -> ());
+    (* Do the children *)
+    ChangeDoChildrenPost (s', fun x -> x)
+
+  (* Copy blocks since they are mutable *)
+  method vblock (outerB: block) = 
+    if !toplevelBlock = None then
+        toplevelBlock := Some(outerB)
+    else ();
+    ChangeDoChildrenPost ({outerB with bstmts = outerB.bstmts}, fun b -> (
+        (* Do fixup and output if we're *finishing* with the top-level block.  *)
+        (match !toplevelBlock with
+            Some(b') when b' == outerB ->
+              let findStmt (i: int) = 
+                try Hashtbl.find stmtmap i 
+                with Not_found -> failwith "bug: cannot find the copy of stmt"
+              in
+              let patchstmt (s: stmt) = 
+                match s.skind with
+                  Goto (sr, l) -> 
+                    (* Make a copy of the reference *)
+                    let sr' = ref (findStmt !sr.sid) in
+                    s.skind <- Goto (sr',l)
+                | Switch (e, body, cases, l) -> 
+                    s.skind <- Switch (e, body, 
+                                       List.map (fun cs -> findStmt cs.sid) cases, l)
+                | _ -> ()
+              in
+              List.iter patchstmt !patches; 
+              outputBlock := Some(b)
+              | _ -> ()
+        ) ; b
+    ))
+
+  method vinst (i: instr) = 
+    let i' = match i with
+        Set(lv, e, loc) -> Set(lv, e, loc)
+      | Call(maybeLv, f, args, loc) -> Call(maybeLv, f, args, loc)
+      | Asm(attrs, instrs, locs, u, v, l) -> Asm(attrs, instrs, locs, u, v, l)
+    in
+    ChangeDoChildrenPost ([i'], fun x -> x)
+end
+
+class primarySecondarySplitVisitor = fun enclosingFile -> 
+                                     object(self)
+  inherit (crunchBoundBasicVisitor enclosingFile)
+  
+  method vfunc (f: fundec) : fundec visitAction = 
+      (* The idea here is to duplicate the function body in two.
+       * In the top half, we turn "full" checks into "primary only" checks.
+       * In the bottom half, we leave them be, but label them.
+       * After each top-half check we insert a test; if it fails, jump to the bottom-half label. 
+       * The top-half transformation entails splitting up
+       * a list of statements to include a test-and-maybe-jump in the middle.
+       * 
+       * First we visit the block with our special block visitor that rejigs
+       * the statements so that check instructions come in a statement by themselves.
+       *)
+      (* Now we can visit the statements *)
+      let copiedBlock = ref None
+      in
+      let secondaryBody = (
+          visitCilBlock (new copyBlockVisitor copiedBlock "__bottomhalf_") f.sbody;
+          match !copiedBlock with
+              Some(b) -> b
+            | None -> failwith "couldn't copy function body"
+      )
+      in
+      let findStmtByLabel = fun ident -> (
+          let found = ref None
+          in
+          (visitCilBlock (new findStmtByNameVisitor ident found) secondaryBody;
+          match !found with
+              None -> debug_print 0 ("Label not found: " ^ ident ^ "\n"); raise Not_found
+            | Some(stmt) -> ref stmt
+          )
+      )
+      in 
+      debug_print 0 "Blah 1\n";
+      let _ = visitCilBlock (new checkStatementLabelVisitor "primary_check" checkDerivePtrInlineFun.svar) f.sbody
+      in
+      debug_print 0 "Blah 2\n";
+      let _ = visitCilBlock (new checkStatementLabelVisitor "full_check" checkDerivePtrInlineFun.svar) secondaryBody
+      in
+      debug_print 0 "Blah 3\n";
+      let _ = visitCilBlock (new primaryToSecondaryJumpVisitor checkDerivePtrInlineFun.svar primaryCheckDerivePtrInlineFun.svar findStmtByLabel) f.sbody
+      in
+      (* Our new body is a Block containing both *)
+      f.sbody <- {
+        battrs = f.sbody.battrs;
+        bstmts = [
+            { labels = []; skind = Block(f.sbody);       sid = 0; succs = []; preds = [] };
+            { labels = []; skind = Block(secondaryBody); sid = 0; succs = []; preds = [] }
+        ]
+      };
+      DoChildren
+
+end
+
 let feature : Feature.t = 
   { fd_name = "crunchbound";
     fd_enabled = false;
@@ -1726,13 +2031,13 @@ let feature : Feature.t =
     fd_extraopt = [];
     fd_doit = 
     (function (fl: file) -> 
-      (* compute CFG as needed by scanForAdjustedLocalsVisitor *)
-      (* already done by vsimplemem (?) *)
-      (* Cfg.computeFileCFG fl; *)
-      let tpFunVisitor = new crunchBoundVisitor fl in
       debug_print 1 ("command line args are:\n"
        ^ (String.concat ", " (Array.to_list Sys.argv) ) );
-      visitCilFileSameGlobals tpFunVisitor fl);
+      let tpFunVisitor = new crunchBoundVisitor fl in
+      visitCilFileSameGlobals tpFunVisitor fl;
+      let splitVisitor = new primarySecondarySplitVisitor fl in
+      visitCilFileSameGlobals splitVisitor fl
+      );
     fd_post_check = true;
   } 
 

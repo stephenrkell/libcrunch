@@ -319,6 +319,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_
 extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache);
 extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache)
 {
+#ifdef DEBUG
 	unsigned visited_linear = 0u;
 	for (int i = 1; i < cache->size_plus_one; ++i)
 	{
@@ -346,6 +347,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_
 		visited_lru |= (1<<(i-1));
 	}
 	assert(visited_linear == visited_lru);
+#endif
 }
 
 extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_unlink )(struct __libcrunch_cache *cache, unsigned i);
@@ -417,8 +419,11 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	__libcrunch_check_cache_sanity(cache);
-	unsigned i;
-	for (i = 1; i < cache->size_plus_one; ++i)
+#ifdef LIBCRUNCH_CACHE_LINEAR
+	for (unsigned char i = 1; i < cache->size_plus_one; ++i)
+#else
+	for (unsigned char i = cache->head_mru; i != 0; i = cache->entries[i].next_mru)
+#endif
 	{
 		if (cache->validity & (1<<(i-1)))
 		{
@@ -450,7 +455,11 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	__libcrunch_check_cache_sanity(cache);
-	unsigned i;
+#ifdef LIBCRUNCH_CACHE_LINEAR
+	for (unsigned char i = 1; i < cache->size_plus_one; ++i)
+#else
+	for (unsigned char i = cache->head_mru; i != 0; i = cache->entries[i].next_mru)
+#endif
 	for (i = 1; i < cache->size_plus_one; ++i)
 	{
 		if (cache->validity & (1<<(i-1)))
@@ -1186,11 +1195,11 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 *         {4555,47ff}.
 	 * Okay, let's try it.
 	 */
-	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
-	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
+	//unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
+	//unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
 
-	*((void **)         base_stored_addr) = (void*) val_bounds.base;
-	*((unsigned long *) size_stored_addr) = val_bounds.size;
+	//*((void **)         base_stored_addr) = (void*) val_bounds.base;
+	//*((unsigned long *) size_stored_addr) = val_bounds.size;
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
 	 * any locals. Hm. I think it's already allowed to assume that. */

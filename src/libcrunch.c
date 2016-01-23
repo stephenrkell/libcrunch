@@ -632,15 +632,18 @@ static void cache_is_a(const void *obj_base, const void *obj_limit, const struct
 	_Bool result, unsigned short period, const void *alloc_base)
 {
 	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
+#ifdef LIBCRUNCH_CACHE_REPLACE_FIFO
 	unsigned pos = __libcrunch_is_a_cache.next_victim;
+#else
 	// "one plus the index of the least significant 0-bit" of validity
-// 	unsigned pos = __builtin_ffs(~(__libcrunch_is_a_cache.validity));
-// 	assert(pos <= __libcrunch_is_a_cache.size_plus_one);
-// 	if (pos == __libcrunch_is_a_cache.size_plus_one)
-// 	{
-// 		pos = __libcrunch_is_a_cache.tail_mru;
-// 		assert(pos != 0);
-// 	}
+	unsigned pos = __builtin_ffs(~(__libcrunch_is_a_cache.validity));
+	assert(pos <= __libcrunch_is_a_cache.size_plus_one);
+	if (pos == __libcrunch_is_a_cache.size_plus_one)
+	{
+		pos = __libcrunch_is_a_cache.tail_mru;
+		assert(pos != 0);
+	}
+#endif
 	// unsigned pos = __libcrunch_is_a_cache.next_victim;
 	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
@@ -661,15 +664,17 @@ static void cache_bounds(const void *obj_base, const void *obj_limit, const stru
 	_Bool result, unsigned short period, const void *alloc_base)
 {
 	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
+#ifdef LIBCRUNCH_CACHE_REPLACE_FIFO
 	unsigned pos = __libcrunch_is_a_cache.next_victim;
-	// unsigned pos = __builtin_ffs(~(__libcrunch_is_a_cache.validity));
-	// assert(pos <= __libcrunch_is_a_cache.size_plus_one);
-// 	if (pos == __libcrunch_is_a_cache.size_plus_one)
-// 	{
-// 		pos = __libcrunch_is_a_cache.tail_mru;
-// 		assert(pos != 0);
-// 	}
-	_Bool already_valid = __libcrunch_is_a_cache.validity & (1u<<(pos-1));
+#else
+	unsigned pos = __builtin_ffs(~(__libcrunch_is_a_cache.validity));
+	assert(pos <= __libcrunch_is_a_cache.size_plus_one);
+	if (pos == __libcrunch_is_a_cache.size_plus_one)
+	{
+		pos = __libcrunch_is_a_cache.tail_mru;
+		assert(pos != 0);
+	}
+#endif
 	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
@@ -690,14 +695,17 @@ static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const
 	_Bool result, unsigned short period, const void *alloc_base)
 {
 	assert((check_cache_sanity(&__libcrunch_fake_bounds_cache), 1));
+#ifdef LIBCRUNCH_CACHE_REPLACE_FIFO
 	unsigned pos = __libcrunch_fake_bounds_cache.next_victim;
-// 	unsigned pos = __builtin_ffs(~(__libcrunch_fake_bounds_cache.validity));
-// 	assert(pos <= __libcrunch_fake_bounds_cache.size_plus_one);
-// 	if (pos == __libcrunch_fake_bounds_cache.size_plus_one)
-// 	{
-// 		pos = __libcrunch_fake_bounds_cache.tail_mru;
-// 		assert(pos != 0);
-// 	}
+#else
+	unsigned pos = __builtin_ffs(~(__libcrunch_fake_bounds_cache.validity));
+	assert(pos <= __libcrunch_fake_bounds_cache.size_plus_one);
+	if (pos == __libcrunch_fake_bounds_cache.size_plus_one)
+	{
+		pos = __libcrunch_fake_bounds_cache.tail_mru;
+		assert(pos != 0);
+	}
+#endif
 	/* Create the new entry and put it at the head. */
 	__libcrunch_fake_bounds_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
