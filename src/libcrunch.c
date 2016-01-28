@@ -19,6 +19,7 @@
 #ifdef USE_REAL_LIBUNWIND
 #include <libunwind.h>
 #endif
+#include "maps.h"
 #include "libcrunch.h"
 #include "libcrunch_private.h"
 
@@ -198,10 +199,12 @@ static _Bool is_suppressed(const char *test_typestr, const void *test_site,
 
 static _Bool done_init;
 void __libcrunch_main_init(void) __attribute__((constructor(101)));
-// NOTE: runs *before* the constructor in preload.c
+// NOTE: runs *before* the constructor in liballocs/preload.c
 void __libcrunch_main_init(void)
 {
 	assert(!done_init);
+	
+	/* We check that */
 	
 	done_init = 1;
 }
@@ -385,10 +388,120 @@ unsigned long *__libcrunch_bounds_sizes_region_00;
 unsigned long *__libcrunch_bounds_sizes_region_2a;
 unsigned long *__libcrunch_bounds_sizes_region_7a;
 
+static void *first_2a_free;
+static void *first_30_free = (void*) 0x300000000000ul;
+
+static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, void *arg)
+{
+	/* Does this mapping fall within our shadowed ranges? This means
+	 *     0000..0555
+	 * or  2aaa..2fff
+	 * or  7aaa..7fff.
+	 */
+	
+#define is_in_range(range_start, range_lastbyte, mapping_start, mapping_lastbyte) \
+	((mapping_start) >= (range_start) && (mapping_lastbyte) <= (range_lastbyte))
+	
+	// we handle the 2aaa range specially since it's where we like to put mmaps
+	if (is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, ent->first, ent->second - 1))
+	{
+		if (!first_2a_free || (char*) ent->second > (char*) first_2a_free)
+		{
+			first_2a_free = (void*) ent->second;
+		}
+	}
+	
+	if (
+		   is_in_range(0x000000000000ul, 0x055555555554ul, ent->first, ent->second - 1)
+		|| is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, ent->first, ent->second - 1)
+		|| is_in_range(0x7aaaaaaab000ul, 0x7ffffffffffful, ent->first, ent->second - 1)
+		)
+	{
+		// okay -- we shadow these
+	}
+	else if (is_in_range(0xffffffff80000000ul, 0xfffffffffffffffful, ent->first, ent->second - 1))
+	{
+		// okay -- it's a kernel thingy
+	}
+	else abort();
+}
 /* This is a constructor, since it's important that it happens before
  * much stuff has been memory-mapped. Unlike the main libcrunch/liballocs
  * initialisation, we don't rely on any dynamic linker or libc state. */
 static void init_bounds(void) __attribute__((constructor));
+
+void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
+                  int *p_fd, off_t *p_offset, const void *caller)
+{
+	// make sure we're initialized
+	if (!__libcrunch_bounds_bases_region_00) init_bounds();
+	
+	/* We vet and perhaps tweak the mmap paramters.
+	 * Currently the main use of this is in providing libcrunch's
+	 * shadow space: we want to avoid creating mappings that aren't
+	 * shadowable. 
+	 * This means
+	 * - if the caller is "us", i.e. the object containing this code, 
+	 *    let it through unmolested;
+	 * - if the caller is ld.so, try to make the mapping land in a good zone;
+	 * - if the caller is user code, do the same. But if it's mapping something
+	 *    really huge, maybe we assume they know what they're doing?
+	 */
+	Dl_info our_info;
+	int success = dladdr(&__liballocs_is_initialized, &our_info);
+	if (!success)
+	{
+		debug_printf(1, "dladdr() seems not to work on our address %p\n", mmap);
+		return;
+	}
+	Dl_info caller_info;
+	success = dladdr(caller, &our_info);
+	if (!success) 
+	{
+		debug_printf(1, "dladdr() seems not to work on caller address %p\n", caller);
+		return;
+	}
+	
+	if (our_info.dli_fbase == caller_info.dli_fbase)
+	{
+		/* Try to give ourselves regions *outside* the 2a range, in the 3s and 4s. */
+		*p_addr = first_30_free;
+		first_30_free = (char*) first_30_free + *p_length;
+		return;
+	}
+	
+	if (!first_2a_free)
+	{
+		/* PROBLEM: we want to put it in the 2a range, but we haven't yet walked
+		 * the maps so we don't know where's free. Abort. */
+		abort();
+	}
+	
+	if (*p_addr && (*p_flags & MAP_FIXED))
+	{
+		/* This means the caller is really sure where they want it. 
+		 * I don't trust them, but go ahead. If they're in the 2a range, 
+		 * update our metadata. */
+		if (is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, (unsigned long) *p_addr,
+				(unsigned long) ((char*) *p_addr + *p_length - 1)))
+		{
+			if (!first_2a_free || (char*) *p_addr + *p_length > (char*) first_2a_free)
+			{
+				first_2a_free = (char*) *p_addr + *p_length;
+			}
+		}
+	}
+	
+	// try to give them the next free 2a
+	if (!*p_addr)
+	{
+		*p_addr = first_2a_free;
+		first_2a_free = (char*) first_2a_free + *p_length;
+	}
+	
+#undef is_in_range
+}
+
 static void init_bounds(void)
 {
 	// delay start-up here if the user asked for it
@@ -404,8 +517,17 @@ static void init_bounds(void)
 	 * or  2aaa..2fff
 	 * or  7aaa..7fff.
 	 * 
-	 * FIXME: CHECK this from /proc/maps at startup, and at mmap() calls.
+	 * First, CHECK this from /proc/maps at startup, and at mmap() calls.
 	 */
+	struct proc_entry entry;
+	char proc_buf[4096];
+	int ret;
+	ret = snprintf(proc_buf, sizeof proc_buf, "/proc/%d/maps", getpid());
+	if (!(ret > 0)) abort();
+	FILE *maps = fopen(proc_buf, "r");
+	if (!maps) abort();
+	char linebuf[8192];
+	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
 	
 	/* HMM. Stick with XOR top-three-bits thing for the base.
 	 * we need {0000,0555} -> {7000,7555}

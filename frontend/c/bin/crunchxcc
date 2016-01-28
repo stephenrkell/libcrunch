@@ -33,7 +33,9 @@ class CrunchXCC(CrunchCC):
         if len(sourceFiles) > 0 and allSourceFilesAreC:
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
+            # Add temporary HACK to strip line numbers after preprocess
             includeArgs = [ \
+            "--commPrintLn", \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \

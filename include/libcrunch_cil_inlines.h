@@ -1041,6 +1041,7 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	
 	// return (addr - base <= size - t_sz);
 	return addr - base < size;
+	//if (!(addr - base < size)) abort(); else return 1;
 #else
 	return 1;
 #endif
