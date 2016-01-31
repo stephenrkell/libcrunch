@@ -20,6 +20,8 @@
 #include <libunwind.h>
 #endif
 #include "maps.h"
+#include "relf.h"
+#include "systrap.h"
 #include "libcrunch.h"
 #include "libcrunch_private.h"
 
@@ -391,6 +393,19 @@ unsigned long *__libcrunch_bounds_sizes_region_7a;
 static void *first_2a_free;
 static void *first_30_free = (void*) 0x300000000000ul;
 
+static int trap_ldso_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, void *interpreter_fname_as_void)
+{
+	const char *interpreter_fname = (const char *) interpreter_fname_as_void;
+	if (ent->x == 'x' && 0 == strcmp(interpreter_fname, ent->rest))
+	{
+		/* It's an executable mapping in the ld.so, so trap it. */
+		trap_one_executable_region((unsigned char *) ent->first, (unsigned char *) ent->second,
+			interpreter_fname, ent->w == 'w', ent->r == 'r');
+	}
+	
+	return 0;
+}
+
 static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, void *arg)
 {
 	/* Does this mapping fall within our shadowed ranges? This means
@@ -429,12 +444,13 @@ static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, vo
  * much stuff has been memory-mapped. Unlike the main libcrunch/liballocs
  * initialisation, we don't rely on any dynamic linker or libc state. */
 static void init_bounds(void) __attribute__((constructor));
+extern int _etext;
 
 void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
                   int *p_fd, off_t *p_offset, const void *caller)
 {
-	// make sure we're initialized
-	if (!__libcrunch_bounds_bases_region_00) init_bounds();
+	// do nothing if we're not initialized
+	if (!__libcrunch_bounds_bases_region_00) return;
 	
 	/* We vet and perhaps tweak the mmap paramters.
 	 * Currently the main use of this is in providing libcrunch's
@@ -447,22 +463,10 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 	 * - if the caller is user code, do the same. But if it's mapping something
 	 *    really huge, maybe we assume they know what they're doing?
 	 */
-	Dl_info our_info;
-	int success = dladdr(&__liballocs_is_initialized, &our_info);
-	if (!success)
-	{
-		debug_printf(1, "dladdr() seems not to work on our address %p\n", mmap);
-		return;
-	}
-	Dl_info caller_info;
-	success = dladdr(caller, &our_info);
-	if (!success) 
-	{
-		debug_printf(1, "dladdr() seems not to work on caller address %p\n", caller);
-		return;
-	}
-	
-	if (our_info.dli_fbase == caller_info.dli_fbase)
+	void *our_load_address = get_highest_loaded_object_below(init_bounds);
+	unsigned long text_segment_size = &_etext; /* HACK: ABS symbol, so not relocated. */
+	if ((char*) caller >= (char*) our_load_address 
+		&& (char*) caller < (char*) our_load_address + text_segment_size)
 	{
 		/* Try to give ourselves regions *outside* the 2a range, in the 3s and 4s. */
 		*p_addr = first_30_free;
@@ -509,7 +513,36 @@ static void init_bounds(void)
 	{
 		sleep(10);
 	}
-
+	
+	/* Make sure we're trapping all syscalls within ld.so. */
+	replaced_syscalls[SYS_mmap] = mmap_replacement;
+	/* Get a hold of the ld.so's link map entry. How? We get it from the auxiliary
+	 * vector. */
+	const char *interpreter_fname = NULL;
+	ElfW(auxv_t) *auxv = get_auxv((const char **) environ, &interpreter_fname);
+	if (!auxv) abort();
+	ElfW(auxv_t) *auxv_at_base = auxv_lookup(auxv, AT_BASE);
+	if (!auxv_at_base) abort();
+	const void *interpreter_base = (const void *) auxv_at_base->a_un.a_val;
+	for (struct LINK_MAP_STRUCT_TAG *l = find_r_debug()->r_map; l; l = l->l_next)
+	{
+		if ((const void *) l->l_addr == interpreter_base)
+		{
+			interpreter_fname = realpath_quick(l->l_name);
+		}
+	}
+	if (!interpreter_fname) abort();
+	struct proc_entry entry;
+	char proc_buf[4096];
+	int ret;
+	ret = snprintf(proc_buf, sizeof proc_buf, "/proc/%d/maps", getpid());
+	if (!(ret > 0)) abort();
+	FILE *maps = fopen(proc_buf, "r");
+	if (!maps) abort();
+	char linebuf[8192];
+	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, trap_ldso_cb, interpreter_fname);
+	install_sigill_handler();
+	
 	/* Map out a big chunk of virtual address space. 
 	 * But one big chunk causes fragmentation. 
 	 * We assume user pointers are in
@@ -519,15 +552,10 @@ static void init_bounds(void)
 	 * 
 	 * First, CHECK this from /proc/maps at startup, and at mmap() calls.
 	 */
-	struct proc_entry entry;
-	char proc_buf[4096];
-	int ret;
-	ret = snprintf(proc_buf, sizeof proc_buf, "/proc/%d/maps", getpid());
-	if (!(ret > 0)) abort();
-	FILE *maps = fopen(proc_buf, "r");
-	if (!maps) abort();
-	char linebuf[8192];
+	rewind(maps);
 	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
+	if (!first_2a_free) first_2a_free = (void*) 0x2aaaaaaab000ul;
+	if (!first_30_free) first_30_free = (void*) 0x300000000000ul;
 	
 	/* HMM. Stick with XOR top-three-bits thing for the base.
 	 * we need {0000,0555} -> {7000,7555}
