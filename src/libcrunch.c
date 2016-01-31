@@ -464,9 +464,28 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 	 *    really huge, maybe we assume they know what they're doing?
 	 */
 	void *our_load_address = get_highest_loaded_object_below(init_bounds);
-	unsigned long text_segment_size = &_etext; /* HACK: ABS symbol, so not relocated. */
-	if ((char*) caller >= (char*) our_load_address 
-		&& (char*) caller < (char*) our_load_address + text_segment_size)
+	unsigned long text_segment_size = (unsigned long) &_etext; /* HACK: ABS symbol, so not relocated. */
+	_Bool we_are_caller = ((char*) caller >= (char*) our_load_address 
+		&& (char*) caller < (char*) our_load_address + text_segment_size);
+	
+	if (*p_addr && (*p_flags & MAP_FIXED))
+	{
+		/* This means the caller is really sure where they want it. 
+		 * We only really trust them if it's us, but go ahead either way. 
+		 * If they're in the 2a range, update our metadata. */
+		if (is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, (unsigned long) *p_addr,
+				(unsigned long) ((char*) *p_addr + *p_length - 1)))
+		{
+			if (!first_2a_free || (char*) *p_addr + *p_length > (char*) first_2a_free)
+			{
+				first_2a_free = (char*) *p_addr + *p_length;
+			}
+		}
+		
+		return;
+	}
+	
+	if (we_are_caller)
 	{
 		/* Try to give ourselves regions *outside* the 2a range, in the 3s and 4s. */
 		*p_addr = first_30_free;
@@ -480,23 +499,8 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 		 * the maps so we don't know where's free. Abort. */
 		abort();
 	}
-	
-	if (*p_addr && (*p_flags & MAP_FIXED))
-	{
-		/* This means the caller is really sure where they want it. 
-		 * I don't trust them, but go ahead. If they're in the 2a range, 
-		 * update our metadata. */
-		if (is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, (unsigned long) *p_addr,
-				(unsigned long) ((char*) *p_addr + *p_length - 1)))
-		{
-			if (!first_2a_free || (char*) *p_addr + *p_length > (char*) first_2a_free)
-			{
-				first_2a_free = (char*) *p_addr + *p_length;
-			}
-		}
-	}
-	
-	// try to give them the next free 2a
+
+	// try to give them the next free 2a. FIXME: randomize!
 	if (!*p_addr)
 	{
 		*p_addr = first_2a_free;
@@ -540,7 +544,7 @@ static void init_bounds(void)
 	FILE *maps = fopen(proc_buf, "r");
 	if (!maps) abort();
 	char linebuf[8192];
-	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, trap_ldso_cb, interpreter_fname);
+	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, trap_ldso_cb, (void*) interpreter_fname);
 	install_sigill_handler();
 	
 	/* Map out a big chunk of virtual address space. 
@@ -578,28 +582,28 @@ static void init_bounds(void)
 	__libcrunch_bounds_bases_region_00 = mmap(/* base */ (void*) 0x700000000000ul, 
 		/* size */ 0x755555556000ul - 0x700000000000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_bases_region_00 == (void*) -1) abort();
+	if (__libcrunch_bounds_bases_region_00 != (void*) 0x700000000000ul) abort();
 	__libcrunch_bounds_bases_region_2a = mmap(/* base */ (void*) 0x5aaaaaaab000ul, 
 		/* size */ 0x600000000000ul - 0x5aaaaaaab000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_bases_region_2a == (void*) -1) abort();
+	if (__libcrunch_bounds_bases_region_2a != (void*) 0x5aaaaaaab000ul) abort();
 	__libcrunch_bounds_bases_region_7a = mmap(/* base */ (void*) 0x0aaaaaaab000ul, 
 		/* size */ 0x100000000000ul - 0x0aaaaaaab000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_bases_region_7a == (void*) -1) abort();
+	if (__libcrunch_bounds_bases_region_7a != (void*) 0x0aaaaaaab000ul) abort();
 	
 	__libcrunch_bounds_sizes_region_00 = mmap(/* base */ (void*) 0x080000000000ul, 
 		/* size */ 0x0aaaaaaab000ul - 0x080000000000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_sizes_region_00 == (void*) -1) abort();
+	if (__libcrunch_bounds_sizes_region_00 != (void*) 0x080000000000ul) abort();
 	__libcrunch_bounds_sizes_region_2a = mmap(/* base */ (void*) 0x1d5555556000ul, 
-		/* size */ 0x22aaaaaab000 - 0x1d5555556000ul, PROT_READ|PROT_WRITE, 
+		/* size */ 0x22aaaaaab000ul - 0x1d5555556000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_sizes_region_2a == (void*) -1) abort();
+	if (__libcrunch_bounds_sizes_region_2a != (void*) 0x1d5555556000ul) abort();
 	__libcrunch_bounds_sizes_region_7a = mmap(/* base */ (void*) 0x455555556000ul, 
 		/* size */ 0x480000000000ul - 0x455555556000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_sizes_region_7a == (void*) -1) abort();
+	if (__libcrunch_bounds_sizes_region_7a != (void*) 0x455555556000ul) abort();
 
 	/* FIXME: also check we didn't/don't overlap any existing mappings. 
 	 * This is difficult. A bitmap for the l0index would do it. 

@@ -1196,11 +1196,11 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 *         {4555,47ff}.
 	 * Okay, let's try it.
 	 */
-	//unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
-	//unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
+	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
+	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
 
-	//*((void **)         base_stored_addr) = (void*) val_bounds.base;
-	//*((unsigned long *) size_stored_addr) = val_bounds.size;
+	*((void **)         base_stored_addr) = (void*) val_bounds.base;
+	*((unsigned long *) size_stored_addr) = val_bounds.size;
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
 	 * any locals. Hm. I think it's already allowed to assume that. */
