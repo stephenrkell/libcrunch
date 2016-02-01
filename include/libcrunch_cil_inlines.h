@@ -980,8 +980,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
 /* In libcrunch.c. */
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache_or_liballocs)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache_or_liballocs)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	++__libcrunch_fetch_bounds_called; // TEMP
@@ -1143,6 +1143,21 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 	return 1;
 #endif
 }
+
+/* Shadow-space and bounds stack are already optional. To save noise, make sure 
+ * noop-inlines also turns them off. */
+#ifdef LIBCRUNCH_NOOP_INLINES
+
+#ifndef LIBCRUNCH_NO_SHADOW_SPACE
+#define LIBCRUNCH_NO_SHADOW_SPACE
+#endif
+
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+#define LIBCRUNCH_NO_BOUNDS_STACK
+#endif
+
+#endif
+
 extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds);
 extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds)
 {
@@ -1196,15 +1211,108 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 *         {4555,47ff}.
 	 * Okay, let's try it.
 	 */
+#ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
 	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
 
 	*((void **)         base_stored_addr) = (void*) val_bounds.base;
-	*((unsigned long *) size_stored_addr) = val_bounds.size;
+	*((unsigned *) size_stored_addr) = val_bounds.size;
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
 	 * any locals. Hm. I think it's already allowed to assume that. */
+#endif
 }
+
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **fetched_from);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **fetched_from)
+{
+#ifndef LIBCRUNCH_NO_SHADOW_SPACE
+	if (fetched_from)
+	{
+		unsigned long fetched_from_addr = (unsigned long) fetched_from;
+		unsigned long base_stored_addr = fetched_from_addr ^ 0x700000000000ul;
+		unsigned long size_stored_addr = (fetched_from_addr >> 1) + 0x080000000000ul;
+
+		return (__libcrunch_bounds_t) {
+			.base = *((unsigned long *)         base_stored_addr),
+			.size = *((unsigned *) size_stored_addr)
+		};
+	}
+#endif
+	return __libcrunch_make_invalid_bounds(ptr);
+}
+
+extern __thread unsigned long *__bounds_sp;
+
+/* The bounds stack works as follows. 
+ * 
+ * - it is allocated *early*, i.e. in the shadow space initialiser, and 
+ *   grows downwards like a normal stack.
+ * 
+ * - to call, we push right-to-left and finally push the return address;
+ *   this means creating a label immediately after the call
+ * 
+ * - to detect whether the caller pushed any bounds, we look for our
+ *   current return address as the *first* thing to pop off the stack.
+ * 
+ * - if we get it, we proceed with the pop, otherwise we use invalid bounds.
+ * 
+ * - on return, we don't push the return bounds unless we know the caller
+ *   is going to pop them
+ * 
+ * - there's no special cleanup function.
+ */
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __pop_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
+extern inline void (__attribute__((always_inline,gnu_inline)) __pop_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __pop_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
+extern inline void (__attribute__((always_inline,gnu_inline)) __pop_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void);
+extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
 
 #ifdef __libcrunch_defined_unlikely
 #undef unlikely

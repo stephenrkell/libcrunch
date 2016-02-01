@@ -2289,7 +2289,11 @@ void * __check_derive_ptr_internal(
 	}
 	else
 	{
-		bounds = __fetch_bounds(derivedfrom, derived, t, t_sz);
+		/* CARE: we could accept a "fetched from" parameter and try the 
+		 * shadow space first. Since this is a slow path already, the
+		 * inline fast-paths have presumably already tried and failed
+		 * to fetch bounds this way, so we don't repeat the effort here. */
+		bounds = __fetch_bounds_from_cache_or_liballocs(derivedfrom, derived, t, t_sz);
 		if (derivedfrom_bounds) *derivedfrom_bounds = bounds;
 	}
 	
@@ -2415,5 +2419,5 @@ __libcrunch_bounds_t
 (__attribute__((pure)) __fetch_bounds_ool)
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
-	return __fetch_bounds(ptr, derived_ptr, t, t->pos_maxoff);
+	return __fetch_bounds_from_cache_or_liballocs(ptr, derived_ptr, t, t->pos_maxoff);
 }
