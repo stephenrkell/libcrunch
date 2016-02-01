@@ -1413,7 +1413,7 @@ class crunchBoundVisitor = fun enclosingFile ->
             INITIALIZATION OF A LOCAL WITH-BOUNDS POINTER MUST INITIALIZE ITS BOUNDS.
             If we're initializing from something non-local, 
             for an initial load from the heap, say, 
-            we use an invalid bounds value. (FIXME: do this laziness optimisation.)
+            we use an invalid bounds value.
             But if we're taking the address of a local array,
             we should write its bounds precisely and immediately.
             If we're taking the address of a field within some object, 
