@@ -74,6 +74,24 @@ checkall: $(patsubst %,checkrun-%,$(cases))
 
 # Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
 # Note that bounds errors never do this. HMM. Soon, type errors might not either.
+checkrun-fail-bounds-type-%:
+	@echo "expected-fail case is fail-bounds-type-$*" && \
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	$(MAKE) cleanrun-fail-bounds-type-$* 1>$$out 2>$$err && \
+		. ./checks.sh && tail -n26 "$$err" | \
+		    match "       failed otherwise" '[1-9][0-9]*' >/dev/null || \
+		(tail -n26 $$err; false)
+checkrun-fail-bounds-%:
+	@echo "expected-fail case is fail-bounds-$*" && \
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	$(MAKE) cleanrun-fail-bounds-$* 1>$$out 2>$$err && \
+		. ./checks.sh && tail -n26 "$$err" | \
+		    match "out-of-bounds pointers created" '[1-9][0-9]*' >/dev/null || \
+		(tail -n26 $$err; false)
+
+# Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
 checkrun-fail-%:
 	@echo "expected-fail case is fail-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
