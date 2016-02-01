@@ -46,6 +46,22 @@ open Cilallocs
 module E = Errormsg
 module H = Hashtbl
 
+type inlineFunctionsRecord = {
+ mutable fetchBounds : fundec; 
+ mutable makeBounds : fundec; 
+ mutable pushArgumentBounds : fundec; 
+ mutable popArgumentBounds : fundec; 
+ mutable pushResultBounds : fundec; 
+ mutable popResultBounds : fundec; 
+ mutable cleanupBoundsStack : fundec; 
+ mutable makeInvalidBounds : fundec; 
+ mutable checkDerivePtr : fundec; 
+ mutable primaryCheckDerivePtr : fundec; 
+ mutable detrap : fundec; 
+ mutable checkLocalBounds : fundec; 
+ mutable storePointerNonLocal : fundec
+}
+
 let instrLoc (maybeInst : Cil.instr option) =
    match maybeInst with 
    Some(i) -> Cil.get_instrLoc i
@@ -583,7 +599,7 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun =
              *)
       | _ -> MustFetch(None)
 
-let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLocalBoundsInlineFun uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
+let checkInLocalBounds enclosingFile enclosingFunction inlineFunctions uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
     debug_print 0 ("Making local bounds check for indexing expression " ^ 
         (expToString (Lval(localHost, offsetFromList prevOffsets))) ^ 
         " by index expression " ^ (expToString (intExp)) ^ "\n");
@@ -609,7 +625,7 @@ let checkInLocalBounds enclosingFile enclosingFunction detrapInlineFun checkLoca
         (* If we're trying to go out-of-bounds, do what? Rather than faff with CIL
          * blocks/statements, just call an inline function. *)
         Call( None,
-            (Lval(Var(checkLocalBoundsInlineFun.svar),NoOffset)),
+            (Lval(Var(inlineFunctions.checkLocalBounds.svar),NoOffset)),
             [
               (* index *)
               intExp;
@@ -641,7 +657,7 @@ match ptrE with
     | _ -> true
 
 
-let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInlineFun makeBoundsFun makeInvalidBoundsFun detrapInlineFun uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
+let hoistAndCheckAdjustment enclosingFile enclosingFunction inlineFunctions uniqtypeGlobals ptrExp intExp lvalToBoundsFun currentFuncAddressTakenLocalNames currentInst = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
      * then copy from the temporary to the actual target. *)
@@ -707,12 +723,12 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
                 match boundsForAdjustedExpr with
                     BoundsBaseLimitRvals(baseExpr, limitExpr) ->
                         [makeCallToMakeBounds (Some(Var(exprTmpBoundsVar), NoOffset))
-                            baseExpr limitExpr loc makeBoundsFun]
+                            baseExpr limitExpr loc inlineFunctions.makeBounds]
                   | BoundsLval(blv) ->  
                          [Set( (Var(exprTmpBoundsVar), NoOffset), Lval(blv), loc )]
                   | MustFetch(_) -> 
                         [Call( Some(Var(exprTmpBoundsVar), NoOffset),
-                               (Lval(Var(makeInvalidBoundsFun.svar),NoOffset)),
+                               (Lval(Var(inlineFunctions.makeInvalidBounds.svar),NoOffset)),
                                [
                                    (*  const void *ptr *)
                                    simplifiedPtrExp
@@ -752,7 +768,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
       (* next enqueue the check call *)
       Call( (* Some((Var(exprTmpVar), NoOffset)) *) (* None *) Some(Var(checkResultVar), NoOffset), (* return value dest *)
-            (Lval(Var(checkDerivePtrInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
+            (Lval(Var(inlineFunctions.checkDerivePtr.svar),NoOffset)),  (* lvalue of function to call *)
             [ 
               (* const void **p_derived *)
               mkAddrOf (Var(exprTmpVar), NoOffset)
@@ -787,7 +803,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction checkDerivePtrInline
       )
     ])
 
-let makeBoundsWriteInstruction ~doFetch enclosingFile enclosingFunction currentFuncAddressTakenLocalNames fetchBoundsFun makeBoundsFun makeInvalidBoundsFun uniqtypeGlobals (justWrittenLval : lval) writtenE derivedFromE (lvalToBoundsFun : lval -> lval) currentInst =
+let makeBoundsWriteInstruction ~doFetch enclosingFile enclosingFunction currentFuncAddressTakenLocalNames inlineFunctions uniqtypeGlobals (justWrittenLval : lval) writtenE derivedFromE (lvalToBoundsFun : lval -> lval) currentInst =
     let loc = instrLoc currentInst in
     (* Here we do the case analysis: 
      * do we copy bounds, 
@@ -809,7 +825,7 @@ let makeBoundsWriteInstruction ~doFetch enclosingFile enclosingFunction currentF
         BoundsLval(sourceBoundsLval) ->
             Set(destBoundsLval, Lval(sourceBoundsLval), loc)
       | BoundsBaseLimitRvals(baseExpr, limitExpr) ->
-            makeCallToMakeBounds (Some(destBoundsLval)) baseExpr limitExpr loc makeBoundsFun
+            makeCallToMakeBounds (Some(destBoundsLval)) baseExpr limitExpr loc inlineFunctions.makeBounds
       | MustFetch(_) -> 
             if doFetch then
                 (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
@@ -822,7 +838,7 @@ let makeBoundsWriteInstruction ~doFetch enclosingFile enclosingFunction currentF
                 let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
                 in
                 Call( Some(lvalToBoundsFun justWrittenLval),
-                        (Lval(Var(fetchBoundsFun.svar),NoOffset)),
+                        (Lval(Var(inlineFunctions.fetchBounds.svar),NoOffset)),
                         [
                             (* const void *ptr *)
                             Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
@@ -836,7 +852,7 @@ let makeBoundsWriteInstruction ~doFetch enclosingFile enclosingFunction currentF
                         loc
                     )
             else Call( Some(lvalToBoundsFun justWrittenLval),
-                   (Lval(Var(makeInvalidBoundsFun.svar),NoOffset)),
+                   (Lval(Var(inlineFunctions.makeInvalidBounds.svar),NoOffset)),
                    [
                        (*  const void *ptr *)
                        Lval(justWrittenLval)
@@ -947,6 +963,8 @@ class addressTakenVisitor = fun seenAddressTakenLocalNames -> object(self) inher
     end
 end (* class *)
 
+
+ 
 class crunchBoundBasicVisitor = fun enclosingFile -> 
                                object(self)
   inherit nopCilVisitor
@@ -960,14 +978,21 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
   
   (* Will fill these in during initializer *) 
-  val mutable fetchBoundsInlineFun = emptyFunction "__fetch_bounds"
-  val mutable makeBoundsInlineFun = emptyFunction "__make_bounds"
-  val mutable makeInvalidBoundsInlineFun = emptyFunction "__libcrunch_make_invalid_bounds"
-  val mutable checkDerivePtrInlineFun = emptyFunction "__full_check_derive_ptr"
-  val mutable primaryCheckDerivePtrInlineFun = emptyFunction "__primary_check_derive_ptr"
-  val mutable detrapInlineFun = emptyFunction "__libcrunch_detrap"
-  val mutable checkLocalBoundsInlineFun = emptyFunction "__check_local_bounds"
-  val mutable storePointerNonLocalInlineFun = emptyFunction "__store_pointer_nonlocal"
+  val mutable inlineFunctions = {
+     fetchBounds = emptyFunction "__fetch_bounds_inl";
+     makeBounds = emptyFunction "__make_bounds";
+     pushArgumentBounds = emptyFunction "__push_argument_bounds";
+     popArgumentBounds = emptyFunction "__pop_argument_bounds";
+     pushResultBounds = emptyFunction "__push_result_bounds";
+     popResultBounds = emptyFunction "__pop_result_bounds";
+     cleanupBoundsStack = emptyFunction "__cleanup_bounds_stack";
+     makeInvalidBounds = emptyFunction "__libcrunch_make_invalid_bounds";
+     checkDerivePtr = emptyFunction "__full_check_derive_ptr";
+     primaryCheckDerivePtr = emptyFunction "__primary_check_derive_ptr";
+     detrap = emptyFunction "__libcrunch_detrap";
+     checkLocalBounds = emptyFunction "__check_local_bounds";
+     storePointerNonLocal = emptyFunction "__store_pointer_nonlocal"
+  }
   
   initializer
     (* according to the docs for pushGlobal, non-types go at the end of globals --
@@ -983,8 +1008,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
     let boundsPtrType = TPtr(boundsType, [])
     in
 
-    fetchBoundsInlineFun <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__fetch_bounds" (TFun(boundsType, 
+    inlineFunctions.fetchBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__fetch_bounds_inl" (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
                                    ("derived_ptr", voidConstPtrType, []);
@@ -994,7 +1019,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
     ;
 
-    makeBoundsInlineFun <- findOrCreateExternalFunctionInFile 
+    inlineFunctions.makeBounds <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__make_bounds" (TFun(boundsType, 
                             Some [ 
                                    ("base", ulongType, []);
@@ -1003,14 +1028,57 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
     ;
 
-    makeInvalidBoundsInlineFun <- findOrCreateExternalFunctionInFile 
+    inlineFunctions.pushArgumentBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__push_argument_bounds" (TFun(voidType, 
+                            Some [ 
+                                   ("p_bounds", boundsPtrType, []);
+                                   ("n", ulongType, [])
+                                 ], 
+                            false, []))
+    ;
+
+    inlineFunctions.popArgumentBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__pop_argument_bounds" (TFun(voidType, 
+                            Some [ 
+                                   ("p_bounds", boundsPtrType, []);
+                                   ("n", ulongType, [])
+                                 ], 
+                            false, []))
+    ;
+    
+    inlineFunctions.pushResultBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__push_result_bounds" (TFun(voidType, 
+                            Some [ 
+                                   ("p_bounds", boundsPtrType, []);
+                                   ("n", ulongType, [])
+                                 ], 
+                            false, []))
+    ;
+    
+    inlineFunctions.popResultBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__pop_result_bounds" (TFun(voidType, 
+                            Some [ 
+                                   ("p_bounds", boundsPtrType, []);
+                                   ("n", ulongType, [])
+                                 ], 
+                            false, []))
+    ;
+    
+    inlineFunctions.cleanupBoundsStack <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__cleanup_bounds_tack" (TFun(voidType, 
+                            Some [ 
+                                 ], 
+                            false, []))
+    ;
+
+    inlineFunctions.makeInvalidBounds <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__libcrunch_make_invalid_bounds" (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, [])
                                  ], 
                             false, []))
     ;
-    primaryCheckDerivePtrInlineFun <- findOrCreateExternalFunctionInFile
+    inlineFunctions.primaryCheckDerivePtr <- findOrCreateExternalFunctionInFile
                             enclosingFile "__primary_check_derive_ptr" (TFun(voidPtrType, 
                             Some [ ("p_derived", voidConstPtrPtrType, []);
                                    ("derivedfrom", voidConstPtrType, []); 
@@ -1020,7 +1088,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                  ], 
                             false, [])) 
     ;
-    checkDerivePtrInlineFun <- findOrCreateExternalFunctionInFile
+    inlineFunctions.checkDerivePtr <- findOrCreateExternalFunctionInFile
                             enclosingFile "__full_check_derive_ptr" (TFun(voidPtrType, 
                             Some [ ("p_derived", voidConstPtrPtrType, []);
                                    ("derivedfrom", voidConstPtrType, []); 
@@ -1030,19 +1098,19 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                  ], 
                             false, [])) 
     ;
-    detrapInlineFun <- findOrCreateExternalFunctionInFile
+    inlineFunctions.detrap <- findOrCreateExternalFunctionInFile
                             enclosingFile "__libcrunch_detrap" (TFun(ulongType, 
                             Some [ ("ptr", voidPtrType, []) ], 
                             false, [])) 
     ;
-    checkLocalBoundsInlineFun <- findOrCreateExternalFunctionInFile
+    inlineFunctions.checkLocalBounds <- findOrCreateExternalFunctionInFile
                             enclosingFile "__libcrunch_check_local_bounds" (TFun(intType, 
                             Some [ ("ptr", intType, []);
                                    ("limit", intType, [])
                             ], 
                             false, [])) 
     ;
-    storePointerNonLocalInlineFun <- findOrCreateExternalFunctionInFile
+    inlineFunctions.storePointerNonLocal <- findOrCreateExternalFunctionInFile
                             enclosingFile "__store_pointer_nonlocal" (TFun(voidType, 
                             Some [ ("dest", voidPtrPtrType, []);
                                    ("val", voidPtrType, []);
@@ -1054,7 +1122,9 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
   val currentFunc : fundec option ref = ref None
   val currentLval : lval option ref = ref None
   val currentBlock : block option ref = ref None
-  val currentFuncAddressTakenLocalNames : string list ref = ref []
+  val currentFuncAddressTakenLocalNames : string list ref = ref [] 
+
+
 end
 
 let instrIsCheck checkDeriveFun instr = match instr with
@@ -1182,7 +1252,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     Some(Some(TComp(ci, attrs)), boundVi) when ci.cname = "__libcrunch_bounds_s" ->
                         (* singleton *)
                         Call( Some(Var(boundVi), NoOffset),
-                                (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                (Lval(Var(inlineFunctions.makeInvalidBounds.svar),NoOffset)),
                                 [
                                     (*  const void *ptr *)
                                     Lval(Var(origVi), NoOffset)
@@ -1247,7 +1317,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             in
                             Call( 
                                 Some(Var(boundVi), Index(indexExpr, NoOffset)),
-                                (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                (Lval(Var(inlineFunctions.makeInvalidBounds.svar),NoOffset)),
                                 [
                                     (* const void * ptr *)
                                     Lval(Var(origVi), pOffset)
@@ -1320,7 +1390,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             lvalToString (lhost, loff)
                         ) ^ ", so updating its bounds\n")
                         ;
-                        [makeBoundsWriteInstruction ~doFetch:false enclosingFile f !currentFuncAddressTakenLocalNames fetchBoundsInlineFun makeBoundsInlineFun makeInvalidBoundsInlineFun uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
+                        [makeBoundsWriteInstruction ~doFetch:false enclosingFile f !currentFuncAddressTakenLocalNames inlineFunctions uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) lvalToBoundsFun !currentInst]
                     )
                     else if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
                         && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames)
@@ -1369,14 +1439,14 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     let blv = (Var(bTemp), NoOffset)
                                     in
                                     (Lval(blv), 
-                                     [makeCallToMakeBounds (Some(blv)) eb el (instrLoc !currentInst) makeBoundsInlineFun]
+                                     [makeCallToMakeBounds (Some(blv)) eb el (instrLoc !currentInst) inlineFunctions.makeBounds]
                                     )
                               | MustFetch(_) -> (* FIXME: be eager, then this won't happen. *)
                                     let bTemp = Cil.makeTempVar f ~name:"__cil_boundsrv_" boundsType
                                     in
                                     (Lval(Var(bTemp), NoOffset), 
                                      [Call( Some(Var(bTemp), NoOffset),
-                                       (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                       (Lval(Var(inlineFunctions.makeInvalidBounds.svar),NoOffset)),
                                        [
                                            (*  const void *ptr *)
                                            e
@@ -1387,7 +1457,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                         in
                         preInstrs @ [
                             Call( None, 
-                                  Lval(Var(storePointerNonLocalInlineFun.svar), NoOffset), 
+                                  Lval(Var(inlineFunctions.storePointerNonLocal.svar), NoOffset), 
                                   [ 
                                     mkAddrOf (lhost, loff) ;
                                     e ;
@@ -1425,7 +1495,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  * TODO: we'll add bounds-passing shortly. *)
                                [outerI] @ [
                                 Call( Some(lvalToBoundsFun (lhost, loff)),
-                                (Lval(Var(makeInvalidBoundsInlineFun.svar),NoOffset)),
+                                (Lval(Var(inlineFunctions.makeInvalidBounds.svar),NoOffset)),
                                 [
                                     (*  const void *ptr *)
                                     Lval(lhost, loff)
@@ -1559,7 +1629,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                          * is safe. *)
                                         let checkInstrs = checkInLocalBounds 
                                             enclosingFile theFunc
-                                            detrapInlineFun checkLocalBoundsInlineFun 
+                                            inlineFunctions
                                             uniqtypeGlobals 
                                             (* localHost *) origHost
                                             prevOffsetList
@@ -1585,7 +1655,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 in
                                 let (tempVar, checkInstrs) = hoistAndCheckAdjustment 
                                     enclosingFile theFunc
-                                    checkDerivePtrInlineFun makeBoundsInlineFun makeInvalidBoundsInlineFun detrapInlineFun uniqtypeGlobals 
+                                    inlineFunctions uniqtypeGlobals 
                                     ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) lvalToBoundsFun
@@ -1645,7 +1715,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                         let tmpVarL = Cil.makeTempVar f ~name:"__cil_detrapL_" ulongType in
                         self#queueInstr [
                             Call( Some(Var(tmpVarL), NoOffset), 
-                                  Lval(Var(detrapInlineFun.svar), NoOffset), 
+                                  Lval(Var(inlineFunctions.detrap.svar), NoOffset), 
                                   [ e1 ],
                                   instrLoc !currentInst
                             )
@@ -1658,7 +1728,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     else (
                         let tmpVarR = Cil.makeTempVar f ~name:"__cil_detrapR_" ulongType in
                         self#queueInstr [Call( Some(Var(tmpVarR), NoOffset), 
-                                  Lval(Var(detrapInlineFun.svar), NoOffset),
+                                  Lval(Var(inlineFunctions.detrap.svar), NoOffset),
                                   [ e2 ],
                                   instrLoc !currentInst
                             );
@@ -1684,7 +1754,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 let tmpVar = Cil.makeTempVar ~name:"__cil_detrap_" f ulongType in
                     self#queueInstr [
                         Call( Some(Var(tmpVar), NoOffset), 
-                              Lval(Var(detrapInlineFun.svar), NoOffset), 
+                              Lval(Var(inlineFunctions.detrap.svar), NoOffset), 
                               [ subex ],
                               instrLoc !currentInst
                         )
@@ -1714,7 +1784,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     debug_print 0 ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
                     let tempVar, checkInstrs = hoistAndCheckAdjustment enclosingFile f
-                                    checkDerivePtrInlineFun makeBoundsInlineFun makeInvalidBoundsInlineFun detrapInlineFun uniqtypeGlobals 
+                                    inlineFunctions uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
                                     (* lvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)
@@ -2004,13 +2074,13 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       )
       in 
       debug_print 0 "Blah 1\n";
-      let _ = visitCilBlock (new checkStatementLabelVisitor "primary_check" checkDerivePtrInlineFun.svar) f.sbody
+      let _ = visitCilBlock (new checkStatementLabelVisitor "primary_check" inlineFunctions.checkDerivePtr.svar) f.sbody
       in
       debug_print 0 "Blah 2\n";
-      let _ = visitCilBlock (new checkStatementLabelVisitor "full_check" checkDerivePtrInlineFun.svar) secondaryBody
+      let _ = visitCilBlock (new checkStatementLabelVisitor "full_check" inlineFunctions.checkDerivePtr.svar) secondaryBody
       in
       debug_print 0 "Blah 3\n";
-      let _ = visitCilBlock (new primaryToSecondaryJumpVisitor checkDerivePtrInlineFun.svar primaryCheckDerivePtrInlineFun.svar findStmtByLabel) f.sbody
+      let _ = visitCilBlock (new primaryToSecondaryJumpVisitor inlineFunctions.checkDerivePtr.svar inlineFunctions.primaryCheckDerivePtr.svar findStmtByLabel) f.sbody
       in
       (* Our new body is a Block containing both *)
       f.sbody <- {
