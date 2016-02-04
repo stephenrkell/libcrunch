@@ -50,10 +50,14 @@ type helperFunctionsRecord = {
  mutable fetchBoundsInl : fundec; 
  mutable fetchBoundsOol : fundec; 
  mutable makeBounds : fundec; 
- mutable pushArgumentBounds : fundec; 
- mutable popArgumentBounds : fundec; 
- mutable pushResultBounds : fundec; 
- mutable popResultBounds : fundec; 
+ mutable pushLocalArgumentBounds : fundec; 
+ mutable pushArgumentBoundsBaseLimit : fundec; 
+ mutable fetchAndPushArgumentBounds : fundec; 
+ mutable peekArgumentBounds : fundec; 
+ mutable pushLocalResultBounds : fundec; 
+ mutable pushResultBoundsBaseLimit : fundec; 
+ mutable fetchAndPushResultBounds : fundec;
+ mutable peekResultBounds : fundec; 
  mutable cleanupBoundsStack : fundec; 
  mutable makeInvalidBounds : fundec; 
  mutable checkDerivePtr : fundec; 
@@ -1021,10 +1025,14 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      fetchBoundsInl = emptyFunction "__fetch_bounds_inl";
      fetchBoundsOol = emptyFunction "__fetch_bounds_ool";
      makeBounds = emptyFunction "__make_bounds";
-     pushArgumentBounds = emptyFunction "__push_argument_bounds";
-     popArgumentBounds = emptyFunction "__pop_argument_bounds";
-     pushResultBounds = emptyFunction "__push_result_bounds";
-     popResultBounds = emptyFunction "__pop_result_bounds";
+     pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
+     pushArgumentBoundsBaseLimit = emptyFunction "__push_argument_bounds_base_limit";
+     fetchAndPushArgumentBounds = emptyFunction "__fetch_and_push_argument_bounds";
+     peekArgumentBounds = emptyFunction "__peek_argument_bounds";
+     pushLocalResultBounds = emptyFunction "__push_local_result_bounds";
+     pushResultBoundsBaseLimit = emptyFunction "__push_result_bounds_base_limit";
+     fetchAndPushResultBounds = emptyFunction "__fetch_and_push_result_bounds";
+     peekResultBounds = emptyFunction "__peek_result_bounds";
      cleanupBoundsStack = emptyFunction "__cleanup_bounds_stack";
      makeInvalidBounds = emptyFunction "__libcrunch_make_invalid_bounds";
      checkDerivePtr = emptyFunction "__full_check_derive_ptr";
@@ -1075,35 +1083,72 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
     ;
 
-    helperFunctions.pushArgumentBounds <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__push_argument_bounds" (TFun(voidType, 
+    helperFunctions.pushLocalArgumentBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__push_local_argument_bounds" (TFun(voidType, 
                             Some [ 
-                                   ("p_bounds", boundsPtrType, []);
-                                   ("n", ulongType, [])
+                                   ("bounds", boundsType, []);
                                  ], 
                             false, []))
     ;
 
-    helperFunctions.popArgumentBounds <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__pop_argument_bounds" (TFun(voidType, 
+    helperFunctions.pushArgumentBoundsBaseLimit <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__push_argument_bounds_base_limit" (TFun(voidType, 
                             Some [ 
+                                   ("ptr", voidConstPtrType, []);
+                                   ("base", voidConstPtrType, []);
+                                   ("limit", voidConstPtrType, []);
+                                 ], 
+                            false, []))
+    ;
+
+    helperFunctions.fetchAndPushArgumentBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__fetch_and_push_argument_bounds" (TFun(voidType, 
+                            Some [ 
+                                   ("ptr", voidConstPtrType, []);
+                                   ("maybe_loaded_from", voidPtrPtrType, [])
+                                 ], 
+                            false, []))
+    ;
+
+    helperFunctions.peekArgumentBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__peek_argument_bounds" (TFun(voidType, 
+                            Some [ 
+                                   ("offset", ulongType, []);
                                    ("p_bounds", boundsPtrType, []);
-                                   ("n", ulongType, [])
+                                   ("ptr", voidConstPtrType, [])
                                  ], 
                             false, []))
     ;
     
-    helperFunctions.pushResultBounds <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__push_result_bounds" (TFun(voidType, 
+    helperFunctions.pushLocalResultBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__push_local_result_bounds" (TFun(voidType, 
                             Some [ 
-                                   ("p_bounds", boundsPtrType, []);
-                                   ("n", ulongType, [])
+                                   ("bounds", boundsType, []);
+                                   ("ptr", voidConstPtrType, [])
                                  ], 
                             false, []))
     ;
     
-    helperFunctions.popResultBounds <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__pop_result_bounds" (TFun(voidType, 
+    helperFunctions.pushResultBoundsBaseLimit <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__push_result_bounds_base_limit" (TFun(voidType, 
+                            Some [ 
+                                   ("ptr", voidConstPtrType, []);
+                                   ("base", voidConstPtrType, []);
+                                   ("limit", voidConstPtrType, [])
+                                 ], 
+                            false, []))
+    ;
+    
+    helperFunctions.fetchAndPushResultBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__fetch_and_push_result_bounds" (TFun(voidType, 
+                            Some [ 
+                                   ("ptr", voidConstPtrType, [])
+                                 ], 
+                            false, []))
+    ;
+    
+    helperFunctions.peekResultBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__peek_result_bounds" (TFun(voidType, 
                             Some [ 
                                    ("p_bounds", boundsPtrType, []);
                                    ("n", ulongType, [])
@@ -1112,8 +1157,9 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
     ;
     
     helperFunctions.cleanupBoundsStack <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__cleanup_bounds_tack" (TFun(voidType, 
+                            enclosingFile "__cleanup_bounds_stack" (TFun(voidType, 
                             Some [ 
+                                    ("saved_ptr", voidPtrType, [])
                                  ], 
                             false, []))
     ;
@@ -1171,8 +1217,56 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
   val currentBlock : block option ref = ref None
   val currentFuncAddressTakenLocalNames : string list ref = ref [] 
 
-
 end
+
+let rec enumeratePointerYieldingOffsetsForT t = match t with
+    TVoid(attrs) -> []
+  | TInt(ik, attrs) -> []
+  | TFloat(fk, attrs) -> []
+  | TPtr(pt, attrs) -> 
+    (match (Cil.typeSig pt) with 
+        TSBase(TVoid(_)) -> [] 
+        | _ -> [NoOffset]
+    )
+  | TArray(at, None, attrs) -> failwith "asked to enumerate ptroffs for unbounded array type"
+  | TArray(at, Some(boundExpr), attrs) -> 
+        (* For each offset that yields a pointer in the element type,
+         * prepend it with Index(n), 
+         * and copy/repeat for all n in the range of the array. *)
+        let arraySize = match constInt64ValueOfExpr boundExpr with
+            Some n -> n
+          | None -> failwith "enumerating ptroffs for non-constant array bounds"
+        in
+        let rec intsUpTo start endPlusOne = 
+            if start >= endPlusOne then [] else start :: (intsUpTo (start+1) endPlusOne)
+        in
+        let elementPtrOffsets = enumeratePointerYieldingOffsetsForT at
+        in
+        let arrayIndices = intsUpTo 0 (Int64.to_int arraySize)
+        in
+        (* copy the list of offsets, once
+         * for every index in the range of the array *)
+        List.flatten (List.map (fun offset -> List.map (fun i ->
+            Index(makeIntegerConstant (Int64.of_int i), offset)
+        ) arrayIndices) elementPtrOffsets)
+  | TFun(_, _, _, _) -> failwith "asked to enumerate ptroffs for incomplete (function) type"
+  | TNamed(ti, attrs) -> enumeratePointerYieldingOffsetsForT ti.ttype
+  | TComp(ci, attrs) -> 
+        (* For each field, recursively collect the offsets
+         * then prepend Field(fi) to each. We prepend the same fi,
+         * for all offsets yielded by a given field,
+         * then move on to the next field. *)
+        List.fold_left (fun acc -> fun fi -> 
+            let thisFieldOffsets = enumeratePointerYieldingOffsetsForT fi.ftype
+            in
+            let prepended = List.map (fun offs -> 
+                Field(fi, offs)
+            ) thisFieldOffsets
+            in
+            prepended @ acc
+        ) [] ci.cfields
+  | TEnum(ei, attrs) -> []
+  | TBuiltin_va_list(attrs) -> []
 
 let instrIsCheck checkDeriveFun instr = match instr with
     Call(_, Lval(Var(funvar), NoOffset), _, _) when funvar == checkDeriveFun -> true
@@ -1300,89 +1394,53 @@ class crunchBoundVisitor = fun enclosingFile ->
              * Unfortunately this might depend on their actual value.
              * So we need to make a call to a helper.
              * We unroll all these calls. *)
-            let formalBoundsInitList = List.fold_left (fun acc -> fun (origVi, maybeBoundsTAndVi) -> 
+            let (formalBoundsInitList, offset_at_end)
+             = List.fold_left (fun (acc_calls, acc_offset) -> fun (origVi, maybeBoundsTAndVi) -> 
+                (* We're going left-to-right through the arguments.
+                 * For each that has bounds, we want to peek the bounds stack. *)
                 match maybeBoundsTAndVi with
                     Some(Some(TComp(ci, attrs)), boundVi) when ci.cname = "__libcrunch_bounds_s" ->
                         (* singleton *)
-                        Call( Some(Var(boundVi), NoOffset),
-                                (Lval(Var(helperFunctions.makeInvalidBounds.svar),NoOffset)),
+                        (Call( None,
+                                (Lval(Var(helperFunctions.peekArgumentBounds.svar),NoOffset)),
                                 [
-                                    (*  const void *ptr *)
+                                    (* offset on stack *)
+                                    makeIntegerConstant (Int64.of_int acc_offset);
+                                    (* destination of bounds *)
+                                    mkAddrOf(Var(boundVi), NoOffset);
+                                    (*  const void *ptr, the pointer value (for makeInvalidBounds) *)
                                     Lval(Var(origVi), NoOffset)
                                 ],
                                 boundVi.vdecl (* loc *)
-                            ) :: acc
+                            ) :: acc_calls, acc_offset + 1)
                   | Some(Some(TArray(TComp(ci, attrs), Some(boundExpr), [])), boundVi) when ci.cname = "__libcrunch_bounds_s" ->
                         (* array.
                            Build a map from the array indices to the corresponding lvalue offsets.
                          *)
-                        let rec enumeratePointerYieldingOffsetsForT t = match t with
-                            TVoid(attrs) -> []
-                          | TInt(ik, attrs) -> []
-                          | TFloat(fk, attrs) -> []
-                          | TPtr(pt, attrs) -> 
-                            (match (Cil.typeSig pt) with 
-                                TSBase(TVoid(_)) -> [] 
-                                | _ -> [NoOffset]
-                            )
-                          | TArray(at, None, attrs) -> failwith "asked to enumerate ptroffs for unbounded array type"
-                          | TArray(at, Some(boundExpr), attrs) -> 
-                                (* For each offset that yields a pointer in the element type,
-                                 * prepend it with Index(n), 
-                                 * and copy/repeat for all n in the range of the array. *)
-                                let arraySize = match constInt64ValueOfExpr boundExpr with
-                                    Some n -> n
-                                  | None -> failwith "enumerating ptroffs for non-constant array bounds"
-                                in
-                                let rec intsUpTo start endPlusOne = 
-                                    if start >= endPlusOne then [] else start :: (intsUpTo (start+1) endPlusOne)
-                                in
-                                let elementPtrOffsets = enumeratePointerYieldingOffsetsForT at
-                                in
-                                let arrayIndices = intsUpTo 0 (Int64.to_int arraySize)
-                                in
-                                (* copy the list of offsets, once
-                                 * for every index in the range of the array *)
-                                List.flatten (List.map (fun offset -> List.map (fun i ->
-                                    Index(makeIntegerConstant (Int64.of_int i), offset)
-                                ) arrayIndices) elementPtrOffsets)
-                          | TFun(_, _, _, _) -> failwith "asked to enumerate ptroffs for incomplete (function) type"
-                          | TNamed(ti, attrs) -> enumeratePointerYieldingOffsetsForT ti.ttype
-                          | TComp(ci, attrs) -> 
-                                (* For each field, recursively collect the offsets
-                                 * then prepend Field(fi) to each. We prepend the same fi,
-                                 * for all offsets yielded by a given field,
-                                 * then move on to the next field. *)
-                                List.fold_left (fun acc -> fun fi -> 
-                                    let thisFieldOffsets = enumeratePointerYieldingOffsetsForT fi.ftype
-                                    in
-                                    let prepended = List.map (fun offs -> 
-                                        Field(fi, offs)
-                                    ) thisFieldOffsets
-                                    in
-                                    prepended @ acc
-                                ) [] ci.cfields
-                          | TEnum(ei, attrs) -> []
-                          | TBuiltin_va_list(attrs) -> []
+                        let pointerYieldingOffsets = enumeratePointerYieldingOffsetsForT origVi.vtype
                         in
-                        let initInstrs = List.fold_left (fun acc_is -> fun pOffset ->
+                        let (initInstrs, next_offset) = List.fold_left (fun (acc_is, acc_stack_offset) -> fun pOffset ->
                             let indexExpr = boundsIndexExprForOffset zero pOffset (Var(origVi)) NoOffset enclosingFile.globals
                             in
-                            Call( 
-                                Some(Var(boundVi), Index(indexExpr, NoOffset)),
-                                (Lval(Var(helperFunctions.makeInvalidBounds.svar),NoOffset)),
+                            (Call( 
+                                None,
+                                (Lval(Var(helperFunctions.peekArgumentBounds.svar),NoOffset)),
                                 [
+                                    (* stack offset *)
+                                    makeIntegerConstant (Int64.of_int acc_stack_offset);
+                                    (* bounds dest *)
+                                    mkAddrOf (Var(boundVi), Index(indexExpr, NoOffset));
                                     (* const void * ptr *)
                                     Lval(Var(origVi), pOffset)
                                 ],
                                 boundVi.vdecl (* loc *)
-                            ) :: acc_is
-                        ) [] (enumeratePointerYieldingOffsetsForT origVi.vtype)
+                            ) :: acc_is, acc_stack_offset + 1)
+                        ) ([], acc_offset) pointerYieldingOffsets
                         in
-                        initInstrs @ acc
+                        (initInstrs @ acc_calls, next_offset)
                   | Some(_) -> failwith "not a bounds type (v)"
-                  | None -> (* do nothing *) acc
-            ) [] (zip formalsNeedingBounds formalBoundsTsToCreate)
+                  | None -> (* do nothing *) (acc_calls, acc_offset)
+            ) ([], 0) (zip formalsNeedingBounds formalBoundsTsToCreate)
             in
             f.sbody <- { 
                 battrs = f.sbody.battrs; 
@@ -1529,16 +1587,90 @@ class crunchBoundVisitor = fun enclosingFile ->
                 debug_print 0 "Queueing some instructions\n";
                 [outerI] @ instrsToAppend
                 end
-          | Call(olv, e, es, l) -> begin
+          | Call(olv, e, es, l) -> 
+                let passesBounds = List.fold_left (fun acc -> fun argExpr -> 
+                    acc || isNonVoidPointerType (Cil.typeOf argExpr)
+                ) false es
+                in
+                let returnsBounds = match olv with Some(lv) -> 
+                    isNonVoidPointerType (Cil.typeOf (Lval(lv)))
+                  | None -> false
+                in
+                let (maybeSavedBoundsStackPtr, boundsSaveInstrs)
+                 = if passesBounds || returnsBounds then 
+                    let vi = Cil.makeTempVar f ~name:"__bounds_stack_ptr" ulongPtrType
+                    in
+                    (Some(vi), [Set((Var(vi), NoOffset), 
+                        (match findGlobalVarInFile "__bounds_sp" enclosingFile with
+                            Some(bspv) -> Lval(Var(bspv), NoOffset)
+                          | None -> failwith "internal error: did not find bounds stack pointer"), 
+                        instrLoc !currentInst)])
+                    else (None, [])
+                in
+                begin
                 (* We might be writing a pointer. 
                  * Since, if so, the pointer has come from a function call, we don't know
                  * how to get bounds for it. So we always fetch those bounds.
                  * HMM. Potentially expensive. But the cache should help.
                  *)
-                    match olv with
-                        None -> [outerI]
+                    let boundsPassInstructions = if (not passesBounds) then [] else (
+                        List.fold_left (fun callsAcc -> fun argExpr -> 
+                            let exprT = Cil.typeOf argExpr in
+                            if isNonVoidPointerType exprT
+                            then (
+                                let offsetList = match boundsTForT exprT enclosingFile.globals with
+                                    Some(TComp(ci, attrs)) when ci.cname = "__libcrunch_bounds_s" ->
+                                       [NoOffset]
+                                  | Some(TArray(TComp(ci, attrs), Some(boundExpr), [])) when ci.cname = "__libcrunch_bounds_s" ->
+                                       enumeratePointerYieldingOffsetsForT exprT
+                                  | _ -> failwith "unexpected bounds type"
+                                in
+                                (* For each offset, push the corresponding bound.
+                                 * FIXME: in forward or reverse order? *)
+                                callsAcc @ List.flatten (List.mapi (fun i -> fun offs ->
+                                    match boundsExprForExpr argExpr !currentFuncAddressTakenLocalNames lvalToBoundsFun !tempLoadExprs with
+                                        BoundsLval(blv) -> 
+                                            [Call( None,
+                                            (Lval(Var(helperFunctions.pushLocalArgumentBounds.svar),NoOffset)),
+                                            [
+                                                Lval(blv)
+                                            ],
+                                            instrLoc !currentInst
+                                            )]
+                                      | BoundsBaseLimitRvals(baseRv, limitRv) ->
+                                            [Call( None,
+                                            (Lval(Var(helperFunctions.pushArgumentBoundsBaseLimit.svar),NoOffset)),
+                                            [
+                                                argExpr;
+                                                CastE(voidConstPtrType, baseRv);
+                                                CastE(voidConstPtrType, limitRv)
+                                            ],
+                                            instrLoc !currentInst
+                                            )]
+                                      | MustFetch(maybeLoadedFromE) ->
+                                            [Call( None,
+                                            (Lval(Var(helperFunctions.fetchAndPushArgumentBounds.svar),NoOffset)),
+                                            [
+                                                argExpr;
+                                                match maybeLoadedFromE with
+                                                  Some(ptrE) -> CastE(voidPtrPtrType, ptrE)
+                                                | None -> CastE(voidPtrPtrType, nullPtr)
+                                            ],
+                                            instrLoc !currentInst
+                                            )]
+                                    ) offsetList)
+                            )
+                            else []
+                        ) [] (List.rev es) (* push r to l! *)
+                    )
+                    in
+                    let boundsPopInstructions = 
+                      match olv with
+                        None -> []
                       | Some(lhost, loff) -> 
-                        if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff))) then (
+                        let destT = Cil.typeOf (Lval(lhost, loff))
+                        in
+                        if isNonVoidPointerType destT then (
                             debug_print 0 ("Saw call writing to a non-void pointer lval: " ^ (
                                 lvalToString (lhost, loff)
                             ) ^ "\n")
@@ -1550,12 +1682,27 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 (* Queue some instructions to write the bounds. 
                                  * ACTUALLY just write invalid bounds for now. 
                                  * TODO: we'll add bounds-passing shortly. *)
-                               [outerI] @ [
-                                Call( Some(lvalToBoundsFun (lhost, loff)),
-                                (Lval(Var(helperFunctions.makeInvalidBounds.svar),NoOffset)),
+                               [
+                                Call( None,
+                                (Lval(Var(helperFunctions.peekResultBounds.svar),NoOffset)),
                                 [
+                                    (* p_bounds *)
+                                    mkAddrOf (lvalToBoundsFun (lhost, loff));
+                                    (* how many bounds are we expecting? *)
+                                    match boundsTForT destT enclosingFile.globals with
+                                        Some(TArray(at, maybeArrayBoundExpr, _)) -> 
+                                            (match maybeArrayBoundExpr with
+                                                Some(arrayBoundExpr) -> 
+                                                  (match constInt64ValueOfExpr arrayBoundExpr with
+                                                    Some n -> makeIntegerConstant n
+                                                  | None -> failwith "getting bounds type for non-constant array bounds"
+                                                  )
+                                                | None -> failwith "no array bound when one expected"
+                                            )
+                                        | Some(_) -> makeIntegerConstant (Int64.of_int 1)
+                                        | None -> failwith "no bounds type when one expected"
                                     (*  const void *ptr *)
-                                    Lval(lhost, loff)
+                                    (* Lval(lhost, loff) *)
                                 ],
                                 (instrLoc !currentInst)
                                 )
@@ -1563,11 +1710,31 @@ class crunchBoundVisitor = fun enclosingFile ->
                             end
                             else (
                                 debug_print 0 "Host is not local\n";
-                                [outerI]
+                                []
                             )
                         )
-                        else [outerI]
-                        
+                        else []
+                    in
+                    let boundsCleanupInstructions = (
+                        if passesBounds || returnsBounds then (
+                          match maybeSavedBoundsStackPtr with
+                            Some(spvi) -> [Call( None,
+                                            (Lval(Var(helperFunctions.cleanupBoundsStack.svar),NoOffset)),
+                                            [
+                                                (* ptr *)
+                                                Lval(Var(spvi), NoOffset)
+                                            ],
+                                            (instrLoc !currentInst)
+                                            )]
+                          | None -> failwith "internal error: didn't save bounds stack pointer"
+                        ) else []
+                    )
+                    in
+                    boundsSaveInstrs @ 
+                        boundsPassInstructions @ 
+                        [outerI] @ 
+                        boundsPopInstructions @ 
+                        boundsCleanupInstructions
             end
           | (* Asm(attrs, instrs, locs, u, v, l) -> *) _ -> [outerI]
     end

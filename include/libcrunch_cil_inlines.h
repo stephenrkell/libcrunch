@@ -1161,38 +1161,6 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds);
 extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds)
 {
-	// do the write -- do we have to do this? NO, CIL leaves the write intact.
-	// *dest = val;
-	unsigned long dest_addr = (unsigned long) dest;
-// #define WORD_BITS (8 * sizeof (unsigned long))
-// #define SHIFT_AMOUNT (WORD_BITS - 47) /* x86_64-specific! */
-// 	/* The range of addresses we shadow is
-// 	 * --------------
-// 	 * 2fff ffff ffff
-// 	 * 2e00 0000 0000
-// 	 * ...
-// 	 * 0100 0000 0000
-// 	 * 0000 0000 0000 ______ wraparound
-// 	 * 7f00 0000 0000
-// 	 * ...
-// 	 * 7600 0000 0000
-// 	 * 7500 0000 0000
-// 	 * --------------
-// 	 * The "slot number" for a ptr stored at p
-// 	 * is a 44-bit number. It is the top 44 bits of
-// 	 * (p + 0xa000 0000 0000)     with addition modulo 2^47, i.e. 7xxx addresses wrap around
-// 	 * The bounds region begins at 0x3000 0000 0000.
-// 	 * The address in the bounds region is the base plus twice the slot number.
-// 	 * top44( (p + 0xa000 0000 0000)_47 ) << 1 + 0x3000 0000 0000
-// 	 * HMM. I think we can't get away without two additions, unless bounds are wordsize.
-// 	 * */
-// 	unsigned long dest_slot_number
-// 	 = ((dest_addr << SHIFT_AMOUNT) + (0xa00000000000ul << SHIFT_AMOUNT)) >> 20 /* 44 bits */;
-// 	unsigned long bounds_addr = ((unsigned long) LIBCRUNCH_BOUNDS_REGION_BASE)
-// 	  + dest_slot_number * sizeof (__libcrunch_bounds_t);
-// #undef WORD_BITS
-// #undef SHIFT_AMOUNT
-
 	/* HMM. Stick with XOR top-three-bits thing for the base.
 	 * we need {0000,0555} -> {7000,7555}
 	 *         {2aaa,2fff} -> {5aaa,5fff}
@@ -1212,6 +1180,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 * Okay, let's try it.
 	 */
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
+	unsigned long dest_addr = (unsigned long) dest;
 	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
 	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
 
@@ -1243,6 +1212,14 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 }
 
 extern __thread unsigned long *__bounds_sp;
+extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bounds_stack_space)(unsigned long n);
+extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bounds_stack_space)(unsigned long n)
+{
+	__bounds_sp -= (n % sizeof (unsigned long)) ? 
+		(n / sizeof (unsigned long))
+		: ((n / sizeof (unsigned long)) + 1);
+	return __bounds_sp;
+}
 
 /* The bounds stack works as follows. 
  * 
@@ -1260,11 +1237,30 @@ extern __thread unsigned long *__bounds_sp;
  * - on return, we don't push the return bounds unless we know the caller
  *   is going to pop them
  * 
- * - there's no special cleanup function.
+ * - return by pushing *more* stuff on the stack; the caller cleans up the whole lot.
+ * 
+ * - signalling addresses: use only label addresses (call site, return site, ...?)
+ * 
+ * - what if the callee is uninstrumented? means top-of-stack will equal
+ *   the label address... the cleanup function deals with this
+ * 
+ * - what about inlined callees? need to make sure that bounds-passing gets inlined too
+ * 
+ * - should cleanup and pop be the same function? not really because non-pointer-returning
+ *   calls still need cleanup... still, could perhaps roll them together
+ * 
+ * - varargs also needs cleanup
+ * 
+ * - Q. what about a callee returning to an uninstrumented caller?
+ * 
+ * - A. answer: it doesn't! it knows if the caller passed bounds, 
+ *          though this DOES mean that an instrumented caller *always* passes its return address
+ *          even if it's not passing any bounds.
+ *          
  */
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argument_bounds)(__libcrunch_bounds_t bounds);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argument_bounds)(__libcrunch_bounds_t bounds)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	
@@ -1273,8 +1269,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bo
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __pop_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
-extern inline void (__attribute__((always_inline,gnu_inline)) __pop_argument_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr, const void *base, const void *limit);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr, const void *base, const void *limit)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	
@@ -1283,8 +1279,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __pop_argument_bou
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **fetched_from);
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **fetched_from)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	
@@ -1293,8 +1289,22 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_boun
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __pop_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
-extern inline void (__attribute__((always_inline,gnu_inline)) __pop_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+extern inline void (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(unsigned long offset, __libcrunch_bounds_t *p_bounds, const void *ptr);
+extern inline void (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(unsigned long offset, __libcrunch_bounds_t *p_bounds, const void *ptr)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	/* Were we passed anything? 
+	 * If the first stack location is not equal to the call (return) site, 
+	 * we weren't passed anything. How do we test? The function we're being
+	 * called from might be inlined. We're definitely inlined. Hmm. 
+	 * Well, if we can get the "actual frame start ip" we'd be okay. */
+#else
+	*p_bounds = __libcrunch_make_invalid_bounds(ptr);
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_result_bounds)(__libcrunch_bounds_t bounds);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_result_bounds)(__libcrunch_bounds_t bounds)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	
@@ -1303,8 +1313,38 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __pop_result_bound
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void);
-extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void)
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(const void *ptr, const void *base, const void *limit);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(const void *ptr, const void *base, const void *limit)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(const void *ptr, void **loaded_from);
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(const void *ptr, void **loaded_from)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n);
+extern inline void (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(__libcrunch_bounds_t *p_bounds, unsigned long n)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void *saved_ptr);
+extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void *saved_ptr)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	
