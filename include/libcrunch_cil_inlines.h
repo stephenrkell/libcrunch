@@ -1231,6 +1231,47 @@ extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bo
  * 
  * - to detect whether the caller pushed any bounds, we look for our
  *   current return address as the *first* thing to pop off the stack.
+ *   AH. but what about inlined callees... how does the callee get that
+ *   label address? Callee wants to do
+ * 
+ *       if (peek() == KNOWN_VALUE) { peek a bound }
+ * 
+ *       ... where the known value signifies an instrumented caller.
+ *   What if the calling function passes its own address?
+ *   The callee has no easy way to test that; it has only __builtin_return_address(0).
+ *   Can we instead use the frame address?
+ *   i.e. the caller passes its physical frame address,
+ *        and the callee immediately checks that either
+ *        -- it has the same frame address (inlined case); or
+ *        -- (the caller is instrumented, so) saved-IP position in that frame
+ * 
+ * - nastiest case: A calling an out-of-line uninstrumented callee B that immediately tail-calls 
+ *   an instrumented function C. C is in danger of mistaking the arguments
+ *   A passed to B for arguments passed by B. Passing the callee address would work.
+ * 
+ * - what about pushing the callee address? if it doesn't prevent inlining,
+ *   which it shouldn't, then it's pretty good.
+ *   But recursion is a problem
+ *   I calls...
+ *        C () {
+                   U(); // calls C         C will see bounds stack with callee C, frame address of the outer C's frame, return site in U
+                   C();
+          }
+ *   ... the call to C() within U() will pick up bounds args passed by I,
+ *   because C sees itself on the bounds stack.
+ *   UNLESS we immediately clobber that stack slot.
+ *   HMM. yes. try this.
+
+ *   OR also pass the return site?
+ *   This means we pass a caller--callee edge.
+ *   HOW do we validate the return site?
+ *   HMM. What if we pass the frame address, the return site and the callee address?
+ *       frame_address == our_frame_address                       => inlined
+                                                 ** 
+ *       different frame address, return site == our return site  => instrumented   ool caller
+ *       different frame address, return site != our return site  => uninstrumented ool caller
+ *   
+
  * 
  * - if we get it, we proceed with the pop, otherwise we use invalid bounds.
  * 
@@ -1256,7 +1297,10 @@ extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bo
  * - A. answer: it doesn't! it knows if the caller passed bounds, 
  *          though this DOES mean that an instrumented caller *always* passes its return address
  *          even if it's not passing any bounds.
- *          
+ * 
+ * - Q. is there a risk of preventing inlining, or optimisation across inlining?
+ * 
+ * - A. obviously yes. so what do we do? 
  */
 
 extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argument_bounds)(__libcrunch_bounds_t bounds);
@@ -1269,8 +1313,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argum
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr, const void *base, const void *limit);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr, const void *base, const void *limit)
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr, unsigned long base, unsigned long limit);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr, unsigned long base, unsigned long limit)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	
@@ -1289,8 +1333,18 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_a
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(unsigned long offset, __libcrunch_bounds_t *p_bounds, const void *ptr);
-extern inline void (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(unsigned long offset, __libcrunch_bounds_t *p_bounds, const void *ptr)
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_cookie)(const void *callee);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_cookie)(const void *callee)
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	
+#else
+	
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(const void *cookie, unsigned long offset, __libcrunch_bounds_t *p_bounds, const void *ptr);
+extern inline void (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(const void *cookie, unsigned long offset, __libcrunch_bounds_t *p_bounds, const void *ptr)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* Were we passed anything? 

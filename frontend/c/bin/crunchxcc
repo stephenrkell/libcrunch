@@ -35,6 +35,7 @@ class CrunchXCC(CrunchCC):
             # if we're compiling only C files.
             # Add temporary HACK to strip line numbers after preprocess
             includeArgs = [ \
+            "--commPrintLn", \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \

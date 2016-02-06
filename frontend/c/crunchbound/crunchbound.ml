@@ -52,7 +52,8 @@ type helperFunctionsRecord = {
  mutable makeBounds : fundec; 
  mutable pushLocalArgumentBounds : fundec; 
  mutable pushArgumentBoundsBaseLimit : fundec; 
- mutable fetchAndPushArgumentBounds : fundec; 
+ mutable fetchAndPushArgumentBounds : fundec;
+ mutable pushArgumentBoundsCookie : fundec; 
  mutable peekArgumentBounds : fundec; 
  mutable pushLocalResultBounds : fundec; 
  mutable pushResultBoundsBaseLimit : fundec; 
@@ -314,13 +315,13 @@ let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Ci
         debug_print 0 ("Already exists\n");
         found
     with Not_found -> 
-     debug_print 0 ("Creating new bounds local for type " ^ vi.vname ^ "\n");
+     debug_print 0 ("Creating new bounds local for local " ^ vi.vname ^ "\n");
      let maybe_bt = boundsTForT vi.vtype enclosingFile.globals 
      in
      let bt = match maybe_bt with
             Some(bt) -> bt
           | None -> failwith ("creating bounds local for a type that doesn't need it: " ^ 
-                typToString vi.vtype)
+                typToString vi.vtype ^ "\n")
      in
      let newLocalVi = makeBoundsLocal vi bt enclosingFunction enclosingFile 
      in
@@ -330,12 +331,12 @@ let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Ci
      newLocalVi
 
 let boundsLvalForLocalLval (boundsLocals : Cil.varinfo VarinfoMap.t ref) enclosingFunction enclosingFile ((lh, loff) : lval) : lval =
-    debug_print 0 "Hello from boundsLvalForLocalLval";
+    debug_print 0 "Hello from boundsLvalForLocalLval\n";
     let gs = enclosingFile.globals
     in
     match lh with
         Var(local_vi) -> 
-            debug_print 0 "Hello from Var case";
+            debug_print 0 "Hello from Var case\n";
             let boundsVi = getOrCreateBoundsLocal local_vi enclosingFunction enclosingFile boundsLocals 
             in 
             let indexExpr = boundsIndexExprForOffset zero loff (Var(local_vi)) NoOffset gs
@@ -382,7 +383,11 @@ let rec simplifyPtrExprs someE =
     |Lval(Mem(subE), offs) -> Lval(Mem(simplifyPtrExprs subE), simplifyOffset offs)
     |UnOp(op, subE, subT) -> UnOp(op, simplifyPtrExprs subE, subT)
     |BinOp(op, subE1, subE2, subT) -> BinOp(op, simplifyPtrExprs subE1, simplifyPtrExprs subE2, subT)
-    |CastE(subT, subE) -> CastE(subT, simplifyPtrExprs subE)
+    |CastE(subT, subE) -> 
+        let simplifiedSubE = simplifyPtrExprs subE
+        in
+        if getConcreteType (Cil.typeSig subT) = getConcreteType (Cil.typeSig (Cil.typeOf simplifiedSubE))
+        then simplifiedSubE else CastE(subT, simplifiedSubE)
     |AddrOf(Var(vi), offs) -> AddrOf(Var(vi), simplifyOffset offs)
     |AddrOf(Mem(subE), offs) -> AddrOf(Mem(simplifyPtrExprs subE), simplifyOffset offs)
     |StartOf(Var(vi), offs) -> StartOf(Var(vi), simplifyOffset offs)
@@ -434,6 +439,12 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames lvalToBoundsFun tempLo
     if isStaticallyNullPtr e then BoundsBaseLimitRvals(zero, one)
     else
     let simplifiedPtrExp = simplifyPtrExprs e in
+    debug_print 0 ("Getting bounds expr for expr " ^ (expToString simplifiedPtrExp) ^ "\n");
+    match simplifiedPtrExp with 
+        Lval(Var(vi), offs) when varinfoIsLocal vi currentFuncAddressTakenLocalNames -> 
+            BoundsLval(lvalToBoundsFun (Var(vi), offs))
+      | _ ->
+    debug_print 0 ("Expr has no local bounds\n");
     let maybeLoadedFromExpr = getLoadedFromAddr simplifiedPtrExp tempLoadExprs currentFuncAddressTakenLocalNames in
     let rec offsetContainsField offs = match offs with
             NoOffset -> false
@@ -1028,6 +1039,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
      pushArgumentBoundsBaseLimit = emptyFunction "__push_argument_bounds_base_limit";
      fetchAndPushArgumentBounds = emptyFunction "__fetch_and_push_argument_bounds";
+     pushArgumentBoundsCookie = emptyFunction "__push_argument_bounds_cookie";
      peekArgumentBounds = emptyFunction "__peek_argument_bounds";
      pushLocalResultBounds = emptyFunction "__push_local_result_bounds";
      pushResultBoundsBaseLimit = emptyFunction "__push_result_bounds_base_limit";
@@ -1095,8 +1107,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             enclosingFile "__push_argument_bounds_base_limit" (TFun(voidType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
-                                   ("base", voidConstPtrType, []);
-                                   ("limit", voidConstPtrType, []);
+                                   ("base", ulongType, []);
+                                   ("limit", ulongType, []);
                                  ], 
                             false, []))
     ;
@@ -1110,9 +1122,17 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
     ;
 
+    helperFunctions.pushArgumentBoundsCookie <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__push_argument_bounds_cookie" (TFun(voidType, 
+                            Some [ 
+                                   ("callee", voidConstPtrType, [])
+                                 ], 
+                            false, []))
+    ;
     helperFunctions.peekArgumentBounds <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__peek_argument_bounds" (TFun(voidType, 
                             Some [ 
+                                   ("cookie", voidConstPtrType, []);
                                    ("offset", ulongType, []);
                                    ("p_bounds", boundsPtrType, []);
                                    ("ptr", voidConstPtrType, [])
@@ -1267,6 +1287,11 @@ let rec enumeratePointerYieldingOffsetsForT t = match t with
         ) [] ci.cfields
   | TEnum(ei, attrs) -> []
   | TBuiltin_va_list(attrs) -> []
+  
+let stringStartswith s pref = 
+  if (String.length s) >= (String.length pref) 
+  then (String.sub s 0 (String.length pref)) = pref 
+  else false
 
 let instrIsCheck checkDeriveFun instr = match instr with
     Call(_, Lval(Var(funvar), NoOffset), _, _) when funvar == checkDeriveFun -> true
@@ -1317,12 +1342,7 @@ class crunchBoundVisitor = fun enclosingFile ->
       currentFuncAddressTakenLocalNames := !tempAddressTakenLocalNames
       ;
       (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
-      let startswith s pref = 
-          if (String.length s) >= (String.length pref) 
-          then (String.sub s 0 (String.length pref)) = pref 
-          else false
-      in 
-      if startswith f.svar.vname "__liballocs_" 
+      if stringStartswith f.svar.vname "__liballocs_" 
           || stringEndsWith f.svar.vdecl.file "libcrunch_cil_inlines.h"
           then (currentFunc := None; SkipChildren)
       else
@@ -1404,6 +1424,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                         (Call( None,
                                 (Lval(Var(helperFunctions.peekArgumentBounds.svar),NoOffset)),
                                 [
+                                    (* cookie, i.e. our address *)
+                                    mkAddrOf (Var(f.svar), NoOffset);
                                     (* offset on stack *)
                                     makeIntegerConstant (Int64.of_int acc_offset);
                                     (* destination of bounds *)
@@ -1426,6 +1448,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 None,
                                 (Lval(Var(helperFunctions.peekArgumentBounds.svar),NoOffset)),
                                 [
+                                    (* cookie, i.e. our address *)
+                                    mkAddrOf (Var(f.svar), NoOffset);
                                     (* stack offset *)
                                     makeIntegerConstant (Int64.of_int acc_stack_offset);
                                     (* bounds dest *)
@@ -1588,6 +1612,13 @@ class crunchBoundVisitor = fun enclosingFile ->
                 [outerI] @ instrsToAppend
                 end
           | Call(olv, e, es, l) -> 
+              (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
+              if (match e with Lval(Var(fvi), NoOffset) when stringStartswith fvi.vname "__liballocs_" 
+                  || stringEndsWith fvi.vdecl.file "libcrunch_cil_inlines.h"
+                  -> true
+                | _ -> false)
+              then [outerI]
+              else
                 let passesBounds = List.fold_left (fun acc -> fun argExpr -> 
                     acc || isNonVoidPointerType (Cil.typeOf argExpr)
                 ) false es
@@ -1606,6 +1637,17 @@ class crunchBoundVisitor = fun enclosingFile ->
                           | None -> failwith "internal error: did not find bounds stack pointer"), 
                         instrLoc !currentInst)])
                     else (None, [])
+                in
+                let boundsPushCookieInstructions = 
+                    if passesBounds || returnsBounds then 
+                    [Call(None, 
+                        Lval(Var(helperFunctions.pushArgumentBoundsCookie.svar), NoOffset), 
+                        [match e with
+                            Lval(lv) -> mkAddrOf lv
+                          | _ -> failwith "internal error: calling a non-lvalue"
+                        ], instrLoc !currentInst)
+                    ]
+                    else []
                 in
                 begin
                 (* We might be writing a pointer. 
@@ -1642,8 +1684,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                                             (Lval(Var(helperFunctions.pushArgumentBoundsBaseLimit.svar),NoOffset)),
                                             [
                                                 argExpr;
-                                                CastE(voidConstPtrType, baseRv);
-                                                CastE(voidConstPtrType, limitRv)
+                                                baseRv;
+                                                limitRv
                                             ],
                                             instrLoc !currentInst
                                             )]
@@ -1732,6 +1774,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     in
                     boundsSaveInstrs @ 
                         boundsPassInstructions @ 
+                        boundsPushCookieInstructions @
                         [outerI] @ 
                         boundsPopInstructions @ 
                         boundsCleanupInstructions
