@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include "libcrunch_private.h"
 
 _Bool __libcrunch_is_initialized = 1;
@@ -97,3 +98,12 @@ void **__libcrunch_bounds_bases_region_7a;
 unsigned long *__libcrunch_bounds_sizes_region_00;
 unsigned long *__libcrunch_bounds_sizes_region_2a;
 unsigned long *__libcrunch_bounds_sizes_region_7a;
+
+__thread unsigned long *__bounds_sp;
+
+static void init(void) __attribute__((constructor));
+static void init(void)
+{
+	__bounds_sp = mmap(NULL, 8192, PROT_READ|PROT_WRITE, 
+		MAP_ANONYMOUS|MAP_PRIVATE|MAP_GROWSDOWN, -1, 0);
+}

@@ -17,11 +17,13 @@
 #undef debug_printf /* from liballocs */
 extern char exe_basename[4096] __attribute__((visibility("hidden")));
 extern FILE *crunch_stream_err __attribute__((visibility("hidden")));
-#define debug_printf(lvl, fmt, ...) do { \
+#define debug_printf_to(strm, lvl, fmt, ...) do { \
     if ((lvl) <= __libcrunch_debug_level) { \
-      fprintf(crunch_stream_err, "%s: " fmt, exe_basename, ## __VA_ARGS__ );  \
+      fprintf((strm), "%s: " fmt, exe_basename, ## __VA_ARGS__ );  \
     } \
   } while (0)
+
+#define debug_printf(lvl, fmt, ...) debug_printf_to(crunch_stream_err, lvl, fmt, ## __VA_ARGS__ )
 
 /* avoid dependency on libc headers (in this header only) */
 void __assert_fail(const char *assertion, 

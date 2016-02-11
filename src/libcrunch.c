@@ -510,6 +510,8 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 #undef is_in_range
 }
 
+__thread unsigned long *__bounds_sp;
+
 static void init_bounds(void)
 {
 	// delay start-up here if the user asked for it
@@ -517,6 +519,32 @@ static void init_bounds(void)
 	{
 		sleep(10);
 	}
+	// figure out where our output goes
+	const char *errvar = getenv("LIBCRUNCH_ERR");
+	if (errvar)
+	{
+		// try opening it
+		crunch_stream_err = fopen(errvar, "w");
+		if (!stream_err)
+		{
+			crunch_stream_err = stderr;
+			debug_printf(0, "could not open %s for writing\n", errvar);
+		}
+	} else crunch_stream_err = stderr;
+	assert(crunch_stream_err);
+
+	// no need to grab the executable's basename -- liballocs has done it for us
+// 	char exename[4096];
+// 	ssize_t readlink_ret = readlink("/proc/self/exe", exename, sizeof exename);
+// 	if (readlink_ret != -1)
+// 	{
+// 		exe_basename = basename(exename); // GNU basename
+// 	}
+	
+	const char *debug_level_str = getenv("LIBCRUNCH_DEBUG_LEVEL");
+	if (debug_level_str) __libcrunch_debug_level = atoi(debug_level_str);
+	
+	verbose = __libcrunch_debug_level >= 1 || getenv("LIBCRUNCH_VERBOSE");
 	
 	/* Make sure we're trapping all syscalls within ld.so. */
 	replaced_syscalls[SYS_mmap] = mmap_replacement;
@@ -546,7 +574,15 @@ static void init_bounds(void)
 	char linebuf[8192];
 	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, trap_ldso_cb, (void*) interpreter_fname);
 	install_sigill_handler();
-	
+
+	#define BOUNDS_STACK_SIZE 8192
+	__bounds_sp = mmap(NULL, 8192, PROT_READ|PROT_WRITE, 
+		MAP_ANONYMOUS|MAP_PRIVATE|MAP_GROWSDOWN, -1, 0);
+	debug_printf(1, "bounds stack created with base %p\n", __bounds_sp);
+	/* Actually point bounds_sp to the highest address in the mapping. */
+	__bounds_sp = (unsigned long *) ((char*) __bounds_sp + BOUNDS_STACK_SIZE - 
+		sizeof (unsigned long));
+
 	/* Map out a big chunk of virtual address space. 
 	 * But one big chunk causes fragmentation. 
 	 * We assume user pointers are in
@@ -560,6 +596,7 @@ static void init_bounds(void)
 	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
 	if (!first_2a_free) first_2a_free = (void*) 0x2aaaaaaab000ul;
 	if (!first_30_free) first_30_free = (void*) 0x300000000000ul;
+	fclose(maps);
 	
 	/* HMM. Stick with XOR top-three-bits thing for the base.
 	 * we need {0000,0555} -> {7000,7555}
@@ -615,6 +652,8 @@ static void init_bounds(void)
 	 * ACTUALLY it wouldn't because the l0index hasn't been init'd yet.
 	 * We need to walk /proc ourselves.
 	 */
+	
+	debug_printf(1, "bounds mappings successfully initialized\n");
 }
 int __libcrunch_global_init(void)
 {
@@ -625,39 +664,12 @@ int __libcrunch_global_init(void)
 	if (tried_to_initialize) return -1;
 	tried_to_initialize = 1;
 	
-
 	// print a summary when the program exits
 	atexit(print_exit_summary);
 	
 	// we must have initialized liballocs
 	__liballocs_ensure_init();
 
-	// figure out where our output goes
-	const char *errvar = getenv("LIBCRUNCH_ERR");
-	if (errvar)
-	{
-		// try opening it
-		crunch_stream_err = fopen(errvar, "w");
-		if (!stream_err)
-		{
-			crunch_stream_err = stderr;
-			debug_printf(0, "could not open %s for writing\n", errvar);
-		}
-	} else crunch_stream_err = stderr;
-	assert(crunch_stream_err);
-
-	// no need to grab the executable's basename -- liballocs has done it for us
-// 	char exename[4096];
-// 	ssize_t readlink_ret = readlink("/proc/self/exe", exename, sizeof exename);
-// 	if (readlink_ret != -1)
-// 	{
-// 		exe_basename = basename(exename); // GNU basename
-// 	}
-	
-	const char *debug_level_str = getenv("LIBCRUNCH_DEBUG_LEVEL");
-	if (debug_level_str) __libcrunch_debug_level = atoi(debug_level_str);
-	
-	verbose = __libcrunch_debug_level >= 1 || getenv("LIBCRUNCH_VERBOSE");
 
 	/* We always include "signed char" in the lazy heap types. (FIXME: this is a 
 	 * C-specificity we'd rather not have here, but live with it for now.
