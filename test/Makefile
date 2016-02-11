@@ -14,6 +14,7 @@ export UNIQTYPES_BASE
 export ALLOCSITES_BASE
 
 export LIBCRUNCH_BASE := $(realpath $(dir $(THIS_MAKEFILE))/..)
+export LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY := 1
 
 CRUNCHCC ?= $(LIBCRUNCH_BASE)/frontend/c/bin/crunchcc
 #$(warning in Makefile, CRUNCHCC is $(CRUNCHCC))

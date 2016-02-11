@@ -288,7 +288,8 @@ static void print_exit_summary(void)
 {
 	if (__libcrunch_begun == 0 
 		&& __libcrunch_fetch_bounds_called == 0 /* FIXME: replace with __fetch_bounds_internal failure counter */
-		&& __libcrunch_created_invalid_pointer == 0) return;
+		&& __libcrunch_created_invalid_pointer == 0
+		&& !getenv("LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY")) return;
 	
 	if (repeat_suppression_count > 0)
 	{
@@ -654,6 +655,9 @@ static void init_bounds(void)
 	 */
 	
 	debug_printf(1, "bounds mappings successfully initialized\n");
+	
+	// print a summary when the program exits
+	atexit(print_exit_summary);
 }
 int __libcrunch_global_init(void)
 {
@@ -663,9 +667,6 @@ int __libcrunch_global_init(void)
 	static _Bool tried_to_initialize;
 	if (tried_to_initialize) return -1;
 	tried_to_initialize = 1;
-	
-	// print a summary when the program exits
-	atexit(print_exit_summary);
 	
 	// we must have initialized liballocs
 	__liballocs_ensure_init();
