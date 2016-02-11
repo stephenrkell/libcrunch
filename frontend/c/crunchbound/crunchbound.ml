@@ -415,9 +415,15 @@ let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames =
      * then it's a pointer being "loaded" from &l.
      * We then simplify &l, which might give us something simple
      * like *p if our pointer is **p
-     * (rather than &**p). *)
+     * (rather than &**p). 
+     * Non-lvalue pointers that are not derived from other pointers
+     * are always StartOf or AddrOf, which we handle separately.
+     *)
+    debug_print 0 ("Getting loaded-from addr for ptr expr: " ^ (expToCilString someE) ^ "\n");
     match someE with
-    |   Lval(loadHost, loadOffs) when not (hostIsLocal loadHost currentFuncAddressTakenLocalNames) -> 
+    |   Lval(loadHost, loadOffs) 
+            when not (hostIsLocal loadHost currentFuncAddressTakenLocalNames) -> 
+            debug_print 0 ("It's a non-local lval\n");
             Some(simplifyPtrExprs (mkAddrOf (loadHost, loadOffs)))
     |   Lval(Var(vi), loadOffs) -> (
           (* We might also be dealing with a temporary whose original loaded-from expression
@@ -425,10 +431,27 @@ let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames =
           try
                let foundE = VarinfoMap.find vi tempLoadExprMap
                in
+               debug_print 0 ("Found a saved loaded-from expr: " ^ (
+                match foundE with Some(fe) -> expToString fe | None -> "(saved None)") ^ "\n");
                foundE
-          with Not_found -> None
+          with Not_found -> 
+                debug_print 0 ("Didn't find a saved loaded-from expr\n");
+                None
           )
-    |   _ -> None
+    |   StartOf(Mem(memExp), NoOffset) -> (* memExp points to an array which we make decay to ptr. *)
+            (* Example (from LBM): calling     *dstGrid, 
+             * where dstGrid is a pointer to an array of double.
+             * Here *dstGrid has type double[],
+             * so the expression is equivalent to &( *dstGrid)[0],
+             * so we get StartOf(Mem(dstGrid)).
+             * What is the loaded-from address?
+             * It's clearly dstGrid, i.e. "dstGrid" holds a pointer whose
+             * bounds we might have stored at shadow(dstGrid).
+             *)
+            Some(memExp) (* FIXME: is this always an lvalue? might need to recurse? *)
+    |   _ -> 
+        debug_print 0 ("It's not an lvalue\n");
+        None
 
 type bounds_expr = 
     BoundsLval of lval
@@ -2243,6 +2266,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                                 match instrs with
                                   [] -> List.rev (cur :: rev_acc)
                                 | x :: more when instrIsCheck checkDeriveFun x ->
+                                      debug_print 0 "Saw a check\n";
                                       (* accumulate a singleton, then start a new run of instrs *)
                                       let new_singleton = [x]
                                       in
@@ -2258,10 +2282,13 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                             in
                             let accRuns = maybeSplitInstrs [] [] is
                             in
+                            debug_print 0 ("Split an Instr sequence into " ^ (string_of_int (List.length accRuns)) ^ "\n");
                             (* Okay, now we have the runs, make a block. *)
                             {
                                 labels = s.labels;
-                                skind = Block(mkBlock (List.map (fun accRun -> {
+                                skind = Block(
+                                      let b = 
+                                      mkBlock (List.map (fun accRun -> {
                                         labels = (if List.length accRun = 1 
                                             && instrIsCheck checkDeriveFun (List.hd accRun)
                                             then
@@ -2269,14 +2296,18 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                                                     Call(_, _, _, loc) -> loc
                                                   | _ -> failwith "impossible: check not a call"
                                                 in
-                                                [Label(mkLabelIdent labelPrefix, loc, false)] 
+                                                [Label(mkLabelIdent labelPrefix, loc, false)]
                                             else []
                                         );
                                         skind = Instr(accRun);
                                         sid = 0;
                                         succs = [];
                                         preds = []
-                                    }) accRuns));
+                                    }) accRuns)
+                                    in
+                                    Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 b;
+                                    b
+                                    );
                                 sid = s.sid;
                                 succs = s.succs;
                                 preds = s.preds;
@@ -2465,38 +2496,45 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       (* Now we can visit the statements *)
       let copiedBlock = ref None
       in
+      debug_print 0 ("Copying body of function " ^ f.svar.vname ^ "\n");
       let secondaryBody = (
           visitCilBlock (new copyBlockVisitor copiedBlock "__bottomhalf_") f.sbody;
           match !copiedBlock with
               Some(b) -> b
             | None -> failwith "couldn't copy function body"
-      )
+      )  
       in
+      debug_print 0 ("Labelling primary checks in function " ^ f.svar.vname ^ " original body\n");
+      f.sbody <- visitCilBlock (new checkStatementLabelVisitor "primary_check" helperFunctions.checkDerivePtr.svar) f.sbody;
+      debug_print 0 ("After visit, original body is as follows\n");
+      Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
+      debug_print 0 ("Labelling full checks in copied body of function " ^ f.svar.vname ^ "\n");
+      let labelledSecondaryBody = visitCilBlock (new checkStatementLabelVisitor "full_check" helperFunctions.checkDerivePtr.svar) secondaryBody in
       let findStmtByLabel = fun ident -> (
           let found = ref None
           in
-          (visitCilBlock (new findStmtByNameVisitor ident found) secondaryBody;
+          (visitCilBlock (new findStmtByNameVisitor ident found) labelledSecondaryBody;
           match !found with
               None -> debug_print 0 ("Label not found: " ^ ident ^ "\n"); raise Not_found
             | Some(stmt) -> ref stmt
           )
       )
       in 
-      debug_print 0 "Blah 1\n";
-      let _ = visitCilBlock (new checkStatementLabelVisitor "primary_check" helperFunctions.checkDerivePtr.svar) f.sbody
-      in
-      debug_print 0 "Blah 2\n";
-      let _ = visitCilBlock (new checkStatementLabelVisitor "full_check" helperFunctions.checkDerivePtr.svar) secondaryBody
-      in
-      debug_print 0 "Blah 3\n";
-      let _ = visitCilBlock (new primaryToSecondaryJumpVisitor helperFunctions.checkDerivePtr.svar helperFunctions.primaryCheckDerivePtr.svar findStmtByLabel) f.sbody
-      in
+      debug_print 0 ("After visit, copied body is as follows\n");
+      Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 labelledSecondaryBody;
+      debug_print 0 ("... and original body is as follows\n");
+      Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
+      debug_print 0 ("Inserting primary/secondary jumps in function " ^ f.svar.vname ^ "\n");
+      f.sbody <- visitCilBlock (new primaryToSecondaryJumpVisitor helperFunctions.checkDerivePtr.svar helperFunctions.primaryCheckDerivePtr.svar findStmtByLabel) f.sbody;
+      debug_print 0 ("Finally, function body is as follows\n");
+      Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
+      debug_print 0 ("Finished with function " ^ f.svar.vname ^ "\n");
       (* Our new body is a Block containing both *)
       f.sbody <- {
         battrs = f.sbody.battrs;
         bstmts = [
             { labels = []; skind = Block(f.sbody);       sid = 0; succs = []; preds = [] };
-            { labels = []; skind = Block(secondaryBody); sid = 0; succs = []; preds = [] }
+            { labels = []; skind = Block(labelledSecondaryBody); sid = 0; succs = []; preds = [] }
         ]
       };
       DoChildren
