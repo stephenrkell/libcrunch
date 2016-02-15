@@ -4,7 +4,7 @@
 void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
                   int *p_fd, off_t *p_offset, const void *caller);
 
-void mmap_replacement(struct generic_syscall *s, post_handler *post) __attribute__((visibility("protected")));
+void mmap_replacement(struct generic_syscall *s, post_handler *post) __attribute__((visibility("hidden")));
 void mmap_replacement(struct generic_syscall *s, post_handler *post)
 {
 	/* Unpack the mmap arguments. */

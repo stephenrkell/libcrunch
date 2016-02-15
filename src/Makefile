@@ -57,13 +57,13 @@ uniqtypes.o: uniqtypes.c
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
-libcrunch_preload.so: uniqtypes.o libcrunch.o mmap.o $(LIBALLOCS)/lib/liballocs_preload.a $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
+libcrunch_preload.so: uniqtypes.o libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$+) \
 $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) \
 -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
 -Wl,--no-whole-archive -Wl,-Bdynamic 
 
-libcrunch_preload.a: libcrunch.o mmap.o $(LIBALLOCS)/lib/liballocs_preload.a
+libcrunch_preload.a: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
 	$(AR) r "$@" $+
 
 libdumpsmaps.so: libdumpsmaps.o
@@ -73,18 +73,18 @@ libcrunch_nomemtable_preload.so: libcrunch_nomemtable.o dummy_thread_locals.o
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %hooks.a,$^) $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS)
 
 # this version lacks preload stuff
-libcrunch.so: libcrunch.o mmap.o $(LIBALLOCS)/lib/liballocs.a
+libcrunch.so: libcrunch.o $(LIBALLOCS)/lib/liballocs.a
 	$(CC) $(CFLAGS) -shared -o "$@" $^ $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,-Bdynamic #-lheap_index_hooks
 
 noop.o: CFLAGS += -fPIC 
 
-libcrunch_nomemtable.o: libcrunch.c mmap.o
+libcrunch_nomemtable.o: libcrunch.c
 	$(CC) $(CFLAGS) -DNO_MEMTABLE -c -o "$@" $+
 
-libcrunch_noop.so: noop.o $(LIBALLOCS)/lib/liballocs_noop.o
-	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS)
+libcrunch_noop.so: noop.o shadow.o mmap.o $(LIBALLOCS)/lib/liballocs_noop.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
+	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz
 
-libcrunch_noop.o: noop.o $(LIBALLOCS)/lib/liballocs_noop.o
+libcrunch_noop.o: noop.o shadow.o mmap.o $(LIBALLOCS)/lib/liballocs_noop.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(LD) -r -o "$@" $+
 
 # have to preload the hooks yourself if you want them to hook!

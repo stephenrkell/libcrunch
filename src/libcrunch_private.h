@@ -54,6 +54,6 @@ void __libcrunch_uncache_all(const void *allocptr, size_t size);
 void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds, const void *addr);
 
-void mmap_replacement(struct generic_syscall *s, post_handler *post) __attribute__((visibility("protected")));
+void mmap_replacement(struct generic_syscall *s, post_handler *post) __attribute__((visibility("hidden")));
 
 #endif
