@@ -66,7 +66,8 @@ type helperFunctionsRecord = {
  mutable primaryCheckDerivePtr : fundec; 
  mutable detrap : fundec; 
  mutable checkLocalBounds : fundec; 
- mutable storePointerNonLocal : fundec
+ mutable storePointerNonLocal : fundec;
+ mutable primarySecondaryTransition : fundec
 }
 
 let instrLoc (maybeInst : Cil.instr option) =
@@ -404,8 +405,11 @@ let rec simplifyPtrExprs someE =
         Lval(Var v, offsetFromList((offsetToList aoff) @ (offsetToList off)))
      (* e.g.  &*p                      is   p               *)
    | AddrOf (Mem a, NoOffset)            -> a
-     (* note that 
+     (* note that unlike &( *p ),
               &p->f   (i.e. with some offset)  cannot be simplified          *)
+   | StartOf (Mem s, NoOffset) -> s     (* likewise *)
+     (* note that unlike *p    (where p is of pointer-to-array type),
+              p->arr  (i.e. some offset) cannot be simplified      *)
    | _ -> withSubExprsSimplified
 
 let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames = 
@@ -456,7 +460,9 @@ let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames =
 type bounds_expr = 
     BoundsLval of lval
   | BoundsBaseLimitRvals of (Cil.exp * Cil.exp)
-  | MustFetch of Cil.exp option
+  | MustFetch of Cil.exp option (* the loaded-from address of the pointer whose bounds
+                                 * we're getting, *or* of another pointer which necessarily
+                                 * has the same bounds (i.e. in the same object). *)
 
 
 let boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
@@ -874,6 +880,18 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniq
             loc
       )
     ])
+    
+let pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals =
+    (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
+    let ptrT = exprConcreteType e
+    in
+    let ts = match ptrT with 
+        TSPtr(targetTs, _) -> targetTs
+      | _ -> failwith "fetching bounds for a non-pointer"
+    in
+    let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
+    in
+    mkAddrOf (Var(uniqtypeGlobal), NoOffset)
 
 (* We're writing some pointer value to a *local* pointer, hence also 
  * to a local bounds var. *)
@@ -902,15 +920,6 @@ let makeBoundsWriteInstruction ~doFetchOol enclosingFile enclosingFunction curre
             makeCallToMakeBounds (Some(destBoundsLval)) baseExpr limitExpr loc helperFunctions.makeBounds
       | MustFetch(maybeLoadedFromE) -> 
             if maybeLoadedFromE = None && doFetchOol then
-                (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
-                let ptrT = exprConcreteType (Lval(justWrittenLval))
-                in
-                let ts = match ptrT with 
-                    TSPtr(targetTs, _) -> targetTs
-                  | _ -> failwith "fetching bounds for a non-pointer"
-                in
-                let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
-                in
                 Call( Some(localLvalToBoundsFun justWrittenLval),
                         (Lval(Var(helperFunctions.fetchBoundsOol.svar),NoOffset)),
                         [
@@ -919,7 +928,7 @@ let makeBoundsWriteInstruction ~doFetchOol enclosingFile enclosingFunction curre
                         ;   (* const void *derived_ptr *)
                             Lval(justWrittenLval)     (* i..e the *value* of the pointer we just wrote *)
                         ;   (* struct uniqtype *t *)
-                            mkAddrOf (Var(uniqtypeGlobal), NoOffset)
+                            pointeeUniqtypeGlobalPtr (Lval(justWrittenLval)) enclosingFile uniqtypeGlobals
                         (* ; *)  (* what's the size of that thing? *)
                             (* makeSizeOfPointeeType (Lval(justWrittenLval)) *)
                         ],
@@ -1076,7 +1085,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      primaryCheckDerivePtr = emptyFunction "__primary_check_derive_ptr";
      detrap = emptyFunction "__libcrunch_detrap";
      checkLocalBounds = emptyFunction "__check_local_bounds";
-     storePointerNonLocal = emptyFunction "__store_pointer_nonlocal"
+     storePointerNonLocal = emptyFunction "__store_pointer_nonlocal";
+     primarySecondaryTransition = emptyFunction "__primary_secondary_transition"
   }
   
   initializer
@@ -1264,9 +1274,16 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             enclosingFile "__store_pointer_nonlocal" (TFun(voidType, 
                             Some [ ("dest", voidPtrPtrType, []);
                                    ("val", voidPtrType, []);
-                                   ("val_bounds", boundsType, [])
+                                   ("val_bounds", boundsType, []);
+                                   ("val_pointee_t", uniqtypePtrType, [])
                             ], 
-                            false, [])) 
+                            false, []))
+    ;
+    helperFunctions.primarySecondaryTransition <- findOrCreateExternalFunctionInFile
+                            enclosingFile "__primary_secondary_transition" (TFun(voidType, 
+                            Some [],
+                            false, []))
+
 
   val currentInst : instr option ref = ref None
   val currentFunc : fundec option ref = ref None
@@ -1362,7 +1379,7 @@ let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 
 let concatMapForAllPointerBoundsInExprList f es currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
         List.flatten (List.map (fun e -> mapForAllPointerBoundsInExpr f e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs) es)
 
-let doNonLocalStoreInstr e storeLv l enclosingFile enclosingFunction helperFunctions currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
+let doNonLocalStoreInstr e storeLv l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
     (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
     let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
       with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
@@ -1399,23 +1416,26 @@ let doNonLocalStoreInstr e storeLv l enclosingFile enclosingFunction helperFunct
                        (*  const void *ptr *)
                        e;
                        (* where did we fetch this from? *)
-                       match maybeLoadedFromE with
+                       (match maybeLoadedFromE with
                        Some(ptrE) -> CastE(voidPtrPtrType, ptrE)
-                     | None -> CastE(voidPtrPtrType, nullPtr)
+                     | None -> CastE(voidPtrPtrType, nullPtr));
+                      
                    ],
                    l
                 )]
                 )
     in
-    Call( None, 
+    preInstrs @ 
+    [Call( None, 
           Lval(Var(helperFunctions.storePointerNonLocal.svar), NoOffset), 
           [ 
             CastE(voidConstPtrPtrType, mkAddrOf storeLv) ;
             e ;
-            boundsExpr
+            boundsExpr;
+            pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals
           ],
           l
-    )
+    )]
 
 let stringStartswith s pref = 
   if (String.length s) >= (String.length pref) 
@@ -1767,7 +1787,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                          * HMM. Might be too clever; "just fetch" is sane if fetches
                          * are cheap.
                          *)
-                        [doNonLocalStoreInstr e (lhost, loff) l enclosingFile f helperFunctions !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs]
+                        doNonLocalStoreInstr e (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
                     )
                     else []
                 in begin
@@ -1913,9 +1933,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     List.rev (mapForAllPointerBoundsInExpr callForOne (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs)
                                 ) else ( (* non-local -- writing into the "heap"! *)
                                 debug_print 0 "Host is not local\n";
-                                [doNonLocalStoreInstr e (lhost, loff) l enclosingFile f helperFunctions 
+                                (doNonLocalStoreInstr e (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions 
                                      !currentFuncAddressTakenLocalNames localLvalToBoundsFun 
-                                     !tempLoadExprs]
+                                     !tempLoadExprs)
                                 )
                             )
                             else (* no pointers *) []
@@ -2330,8 +2350,9 @@ end
 class primaryToSecondaryJumpVisitor = fun fullCheckFun
                                     -> fun primaryCheckFun
                                     -> fun findStmtByLabel
+                                    -> fun enclosingFile
                                     -> object(self)
-  inherit nopCilVisitor
+  inherit (crunchBoundBasicVisitor enclosingFile)
 
   method vstmt (outerS: stmt) : stmt visitAction = 
        (* Either it's a single call to a check function, or it doesn't 
@@ -2380,7 +2401,19 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                     { labels = [];
                       skind = If(UnOp(LNot, Lval(Var(checkVarinfo), NoOffset), intType), 
                         mkBlock [{ labels = [];
-                          skind = Goto(findStmtByLabel secondaryCheckLabelIdent, loc);
+                          skind = Block(mkBlock [
+                            { labels = [];
+                              skind = Instr([Call(None, 
+                                Lval(Var(helperFunctions.primarySecondaryTransition.svar), NoOffset), 
+                                [], 
+                                loc)]);
+                              sid = 0; succs = []; preds = []
+                            };
+                            { labels = [];
+                              skind = Goto(findStmtByLabel secondaryCheckLabelIdent, loc);
+                              sid = 0; succs = []; preds = []
+                            }
+                          ]);
                           sid = 0; succs = []; preds = []
                         }],
                         mkBlock [],
@@ -2525,7 +2558,7 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       debug_print 0 ("... and original body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
       debug_print 0 ("Inserting primary/secondary jumps in function " ^ f.svar.vname ^ "\n");
-      f.sbody <- visitCilBlock (new primaryToSecondaryJumpVisitor helperFunctions.checkDerivePtr.svar helperFunctions.primaryCheckDerivePtr.svar findStmtByLabel) f.sbody;
+      f.sbody <- visitCilBlock (new primaryToSecondaryJumpVisitor helperFunctions.checkDerivePtr.svar helperFunctions.primaryCheckDerivePtr.svar findStmtByLabel enclosingFile) f.sbody;
       debug_print 0 ("Finally, function body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
       debug_print 0 ("Finished with function " ^ f.svar.vname ^ "\n");
