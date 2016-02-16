@@ -1193,10 +1193,10 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	}
 	unsigned long dest_addr = (unsigned long) dest;
 	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
-	unsigned long size_plus_one_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
+	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
 
-	*((void **)         base_stored_addr) = (void*) val_bounds.base;
-	*((unsigned *) size_plus_one_stored_addr) = val_bounds.size + 1;
+	*((void **)    base_stored_addr) = (void*)    val_bounds.base;
+	*((unsigned *) size_stored_addr) = (unsigned) val_bounds.size;
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
 	 * any locals. Hm. I think it's already allowed to assume that. */
@@ -1211,11 +1211,23 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	{
 		unsigned long loaded_from_addr = (unsigned long) loaded_from;
 		unsigned long base_stored_addr = loaded_from_addr ^ 0x700000000000ul;
-		unsigned long size_plus_one_stored_addr = (loaded_from_addr >> 1) + 0x080000000000ul;
+		unsigned long size_stored_addr = (loaded_from_addr >> 1) + 0x080000000000ul;
 
 		__libcrunch_bounds_t b = (__libcrunch_bounds_t) {
 			.base = *((unsigned long *)         base_stored_addr),
-			.size = ((unsigned long) *((unsigned *) size_plus_one_stored_addr)) - 1
+			/* For the size, we do it sneakily. To ensure that 
+			 * loading "0x ffff ffff" maps to "max bounds", 
+			 * we need a 32-to-64 transformation that generates
+			 * "0x ffff ffff ffff ffff" from "0x ffff ffff"
+			 * but leaves everything else unchanged. Below is the answer.
+			 */
+			.size = (
+				(unsigned long) (
+					*((unsigned *) size_stored_addr)
+					+ 1u
+				)
+				- 1ul
+			)
 		};
 #ifdef LIBCRUNCH_DEBUG_SHADOW_SPACE
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
@@ -1397,14 +1409,14 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_resul
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(_Bool really, const void *ptr, const void *base, const void *limit);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(_Bool really, const void *ptr, const void *base, const void *limit)
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(_Bool really, const void *ptr, unsigned long base, unsigned long limit);
+extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(_Bool really, const void *ptr, unsigned long base, unsigned long limit)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	if (really)
 	{
 		__libcrunch_bounds_t *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
-		*b = __make_bounds((unsigned long) base, (unsigned long) limit);
+		*b = __make_bounds(base, limit);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 		warnx("Pushed result bounds: base %p, size %lu\n", b->base, b->size);
 #endif
@@ -1438,8 +1450,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	/* If the cookie hasn't been tweaked, do nothing. */
 	if (really)
 	{
-		char *base = (char*) __bounds_sp[1 + 2*offset];
-		unsigned long size = __bounds_sp[1 + 2*offset + 1];
+		char *base = (char*) __bounds_sp[2*offset];
+		unsigned long size = __bounds_sp[2*offset + 1];
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 		warnx("Peeked result bounds at offset %lu: base %p, size %lu\n", offset, base, size);
 #endif

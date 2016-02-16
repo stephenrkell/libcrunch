@@ -465,7 +465,7 @@ type bounds_expr =
                                  * has the same bounds (i.e. in the same object). *)
 
 
-let boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
+let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
     if isStaticallyNullPtr e then BoundsBaseLimitRvals(zero, one)
     else
     let simplifiedPtrExp = simplifyPtrExprs e in
@@ -680,7 +680,16 @@ let boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun t
             in
             BoundsLval(sourceBoundsLval)
             (* Ditto / see above. *)
-
+      | CastE(targetT, subE) when getConcreteType (Cil.typeSig (Cil.typeOf subE)) = getConcreteType (Cil.typeSig targetT) ->
+            (* If we're only const-modifying the type, we can recurse. 
+               NOTE: SoftBound differs here! It always recurses here.
+               It *may* return MustFetch, although it will only fast-fetch
+               from the shadow space. *)
+            boundsExprForExpr subE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs
+      | Const(CStr(s)) ->  (* we can write down the bounds for string literals straight away *)
+            BoundsBaseLimitRvals(CastE(ulongType, Const(CStr(s))), CastE(ulongType, BinOp(PlusPI, Const(CStr(s)), makeIntegerConstant (Int64.of_int (String.length s)), Cil.typeOf e)))
+      | Const(CWStr(s)) -> (* same for wide string literals *)
+            BoundsBaseLimitRvals(CastE(ulongType, Const(CWStr(s))), CastE(ulongType, BinOp(PlusPI, Const(CWStr(s)), makeIntegerConstant (Int64.of_int (List.length s)), Cil.typeOf e)))
 
             (* Casts? Literal pointers? 
              * HMM. Literal pointers always need their bounds retrieving, because
@@ -1198,8 +1207,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             Some [ 
                                    ("really", boolType, []);
                                    ("ptr", voidConstPtrType, []);
-                                   ("base", voidConstPtrType, []);
-                                   ("limit", voidConstPtrType, [])
+                                   ("base", ulongType, []);
+                                   ("limit", ulongType, [])
                                  ], 
                             false, []))
     ;
@@ -1379,12 +1388,10 @@ let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 
 let concatMapForAllPointerBoundsInExprList f es currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
         List.flatten (List.map (fun e -> mapForAllPointerBoundsInExpr f e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs) es)
 
-let doNonLocalPointerStoreInstr ptrE storeLv l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
+let doNonLocalPointerStoreInstr ptrE storeLv be l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions = 
     (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
     let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
       with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
-    in
-    let be = boundsExprForExpr ptrE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs
     in
     (* What do we do if we have to fetch the bounds of the stored value?
      * This means that we don't *locally* know the bounds of the stored
@@ -1810,7 +1817,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                          * HMM. Might be too clever; "just fetch" is sane if fetches
                          * are cheap.
                          *)
-                        doNonLocalPointerStoreInstr e (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+                        let boundsExpr = boundsExprForExpr e !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+                        in
+                        doNonLocalPointerStoreInstr e (lhost, loff) (boundsExpr) l enclosingFile f uniqtypeGlobals helperFunctions
                     )
                     else []
                 in begin
@@ -1915,52 +1924,64 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 debug_print 0 ("Saw call writing to a non-void pointer lval: " ^ (
                                     lvalToString (lhost, loff)
                                 ) ^ "\n");
+                                let writeOne boundsLval ptrExpr _ offsetExpr = 
+                                    Call(
+                                        Some(boundsLval),
+                                        (Lval(Var(helperFunctions.peekResultBounds.svar),NoOffset)),
+                                        [
+                                            (* really? only if *)
+                                            (match !cookieStackAddrVar with
+                                                Some(vi) ->
+                                                    BinOp(Ne, Lval(Mem(Lval(Var(vi), NoOffset)), NoOffset),
+                                                        CastE(ulongType, mkAddrOf calleeLval), boolType)
+                                              | None -> failwith "error: no saved bounds stack pointer for cookie"
+                                            )
+                                              ;
+                                            (* offset? *)
+                                            (* makeIntegerConstant (Int64.of_int 1); *)
+                                            offsetExpr; 
+                                            (* match boundsTForT destT enclosingFile.globals with
+                                                Some(TArray(at, maybeArrayBoundExpr, _)) -> 
+                                                    (match maybeArrayBoundExpr with
+                                                        Some(arrayBoundExpr) -> 
+                                                          (match constInt64ValueOfExpr arrayBoundExpr with
+                                                            Some n -> makeIntegerConstant n
+                                                          | None -> failwith "getting bounds type for non-constant array bounds"
+                                                          )
+                                                        | None -> failwith "no array bound when one expected"
+                                                    )
+                                                | Some(_) -> makeIntegerConstant (Int64.of_int 1)
+                                                | None -> failwith "no bounds type when one expected"
+                                            *)
+                                            (*  const void *ptr *)
+                                            ptrExpr (* Lval(lhost, loff) *)
+                                        ],
+                                        instrLoc !currentInst
+                                    )
+                                in
+                                let callsForOneLocal ptrExpr blah offsetExpr = 
+                                    [writeOne (localLvalToBoundsFun (lhost, loff)) ptrExpr blah offsetExpr]
+                                in
+                                let callsForOneNonLocal ptrExpr blah offsetExpr =
+                                    let bvi = Cil.makeTempVar f ~name:"__bounds_return_" boundsType
+                                    in
+                                    (writeOne (Var(bvi), NoOffset) ptrExpr blah offsetExpr) :: (
+                                     doNonLocalPointerStoreInstr 
+                                        (* pointer value *) (Lval(lhost, loff)) 
+                                        (* where it's been/being stored *) (lhost, loff)
+                                        (* its bounds *) (BoundsLval(Var(bvi), NoOffset))
+                                        l enclosingFile f uniqtypeGlobals helperFunctions
+                                    )
+                                in
                                 if hostIsLocal lhost !currentFuncAddressTakenLocalNames then (
                                     debug_print 0 "Local, so updating/invalidating its bounds.\n";
-                                    let callForOne ptrExpr _ offsetExpr = 
-                                        Call(
-                                            Some(localLvalToBoundsFun (lhost, loff)),
-                                            (Lval(Var(helperFunctions.peekResultBounds.svar),NoOffset)),
-                                            [
-                                                (* really? only if *)
-                                                (match !cookieStackAddrVar with
-                                                    Some(vi) ->
-                                                        BinOp(Ne, Lval(Mem(Lval(Var(vi), NoOffset)), NoOffset),
-                                                            CastE(ulongType, mkAddrOf calleeLval), boolType)
-                                                  | None -> failwith "error: no saved bounds stack pointer for cookie"
-                                                )
-                                                  ;
-                                                (* offset? *)
-                                                (* makeIntegerConstant (Int64.of_int 1); *)
-                                                offsetExpr; 
-                                                (* match boundsTForT destT enclosingFile.globals with
-                                                    Some(TArray(at, maybeArrayBoundExpr, _)) -> 
-                                                        (match maybeArrayBoundExpr with
-                                                            Some(arrayBoundExpr) -> 
-                                                              (match constInt64ValueOfExpr arrayBoundExpr with
-                                                                Some n -> makeIntegerConstant n
-                                                              | None -> failwith "getting bounds type for non-constant array bounds"
-                                                              )
-                                                            | None -> failwith "no array bound when one expected"
-                                                        )
-                                                    | Some(_) -> makeIntegerConstant (Int64.of_int 1)
-                                                    | None -> failwith "no bounds type when one expected"
-                                                *)
-                                                (*  const void *ptr *)
-                                                ptrExpr (* Lval(lhost, loff) *)
-                                            ],
-                                            instrLoc !currentInst
-                                        )
-                                    in
                                     (* we're popping/peeking, so reverse *)
-                                    List.rev (mapForAllPointerBoundsInExpr callForOne (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs)
+                                    List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs))
                                 ) else ( (* non-local -- writing into the "heap"! *)
                                 debug_print 0 "Host is not local\n";
-                                (doNonLocalPointerStoreInstr (Lval(lhost, loff)) (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions 
-                                     !currentFuncAddressTakenLocalNames localLvalToBoundsFun 
-                                     !tempLoadExprs)
+                                List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneNonLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs))
                                 )
-                            )
+                            ) (* end if pointer list non-empty *)
                             else (* no pointers *) []
                     in
                     let boundsCleanupInstructions = (
