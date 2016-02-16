@@ -1379,12 +1379,12 @@ let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 
 let concatMapForAllPointerBoundsInExprList f es currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
         List.flatten (List.map (fun e -> mapForAllPointerBoundsInExpr f e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs) es)
 
-let doNonLocalStoreInstr e storeLv l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
+let doNonLocalPointerStoreInstr ptrE storeLv l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
     (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
     let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
       with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
     in
-    let be = boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs
+    let be = boundsExprForExpr ptrE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs
     in
     (* What do we do if we have to fetch the bounds of the stored value?
      * This means that we don't *locally* know the bounds of the stored
@@ -1414,10 +1414,10 @@ let doNonLocalStoreInstr e storeLv l enclosingFile enclosingFunction uniqtypeGlo
                    (Lval(Var(helperFunctions.fetchBoundsInl.svar),NoOffset)),
                    [
                        (*  const void *ptr *)
-                       e;
+                       ptrE;
                        (* where did we fetch this from? *)
                        (match maybeLoadedFromE with
-                       Some(ptrE) -> CastE(voidPtrPtrType, ptrE)
+                       Some(loadedFromPtrE) -> CastE(voidPtrPtrType, loadedFromPtrE)
                      | None -> CastE(voidPtrPtrType, nullPtr));
                       
                    ],
@@ -1430,9 +1430,9 @@ let doNonLocalStoreInstr e storeLv l enclosingFile enclosingFunction uniqtypeGlo
           Lval(Var(helperFunctions.storePointerNonLocal.svar), NoOffset), 
           [ 
             CastE(voidConstPtrPtrType, mkAddrOf storeLv) ;
-            e ;
+            ptrE ;
             boundsExpr;
-            pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals
+            pointeeUniqtypeGlobalPtr ptrE enclosingFile uniqtypeGlobals
           ],
           l
     )]
@@ -1527,15 +1527,44 @@ class crunchBoundVisitor = fun enclosingFile ->
                             )
                 ) returnExp !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
                 in
+                (* PROBLEM. Goto and Switch make use of 'ref statements'. 
+                 * This is completely stupid, but too hard to fix right now.
+                 * The consequence is that we can't just move labels from one
+                 * statement to another with impunity. we have to make sure
+                 * that whatever statement record gets the labels
+                 * is the same OCaml object 
+                 * as originally had them. 
+                 * We do this by mutating s. 
+                 * Effectively, 's' is updated from being a Return statement
+                 * into being an If statement. It keeps the same labels. *)
+                let sReturnKind = s.skind
+                in
                 let returnWithBoundsBlock = {
                     battrs = [];
-                    bstmts = {
+                    bstmts = [{
                         labels = [];
                         skind = Instr(boundsReturnInstrList);
                         sid = 0;
                         succs = [];
                         preds = []
-                    } :: [s]
+                    }; {
+                        labels = [];
+                        skind = sReturnKind;
+                        sid = 0;
+                        succs = [];
+                        preds = []
+                    }]
+                }
+                in
+                let ordinaryReturnBlock = {
+                    battrs = [];
+                    bstmts =  [{
+                        labels = [];
+                        skind = sReturnKind;
+                        sid = 0;
+                        succs = [];
+                        preds = []
+                    }]
                 }
                 in
                 match !currentFuncCallerIsInstFlag with 
@@ -1544,18 +1573,12 @@ class crunchBoundVisitor = fun enclosingFile ->
                 let testForUninstCallerExpression = 
                     UnOp(LNot, Lval(Var(callerIsInstVar), NoOffset), boolType)
                 in
-                {
-                    labels = s.labels;
-                    skind = If(testForUninstCallerExpression, {
-                            battrs = [];
-                            bstmts = [s]
-                        },
-                        returnWithBoundsBlock,
+                s.skind <- If(
+                            testForUninstCallerExpression, 
+                            (* true  *) ordinaryReturnBlock,
+                            (* false *) returnWithBoundsBlock,
                         loc);
-                    sid = s.sid;
-                    succs = s.succs;
-                    preds = s.preds
-                }
+                s
             end
             | _ -> s (* after change, not a Return of Some of *)
             ) (* end ChangeDoChildrenPost *)
@@ -1787,16 +1810,16 @@ class crunchBoundVisitor = fun enclosingFile ->
                          * HMM. Might be too clever; "just fetch" is sane if fetches
                          * are cheap.
                          *)
-                        doNonLocalStoreInstr e (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+                        doNonLocalPointerStoreInstr e (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
                     )
                     else []
                 in begin
                 debug_print 0 "Queueing some instructions\n";
                 [outerI] @ instrsToAppend
                 end
-          | Call(olv, e, es, l) -> 
+          | Call(olv, calledE, es, l) -> 
               (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
-              if (match e with Lval(Var(fvi), NoOffset) when stringStartswith fvi.vname "__liballocs_" 
+              if (match calledE with Lval(Var(fvi), NoOffset) when stringStartswith fvi.vname "__liballocs_" 
                   || stringEndsWith fvi.vdecl.file "libcrunch_cil_inlines.h"
                   -> true
                 | _ -> false)
@@ -1864,7 +1887,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     in
                     let cookieStackAddrVar = ref None
                     in
-                    let calleeLval = match e with
+                    let calleeLval = match calledE with
                                 Lval(lv) -> lv
                               | _ -> failwith "internal error: calling a non-lvalue"
                     in
@@ -1933,7 +1956,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     List.rev (mapForAllPointerBoundsInExpr callForOne (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs)
                                 ) else ( (* non-local -- writing into the "heap"! *)
                                 debug_print 0 "Host is not local\n";
-                                (doNonLocalStoreInstr e (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions 
+                                (doNonLocalPointerStoreInstr (Lval(lhost, loff)) (lhost, loff) l enclosingFile f uniqtypeGlobals helperFunctions 
                                      !currentFuncAddressTakenLocalNames localLvalToBoundsFun 
                                      !tempLoadExprs)
                                 )
@@ -2463,8 +2486,9 @@ class copyBlockVisitor = fun (outputBlock : block option ref) -> fun labelPrefix
         Label(ident, loc, flag) -> Label(labelPrefix ^ ident, loc, flag)
       | _ -> l) ls
     in
+    (* make a copy of the statement, renaming any labels. *)
     let s' = {s with sid = s.sid; labels = prefixLabels s.labels} in
-    H.add stmtmap s.sid s'; (* Remember where we copied this *)
+    H.add stmtmap s.sid s'; (* remember the copied statement, by its sid *)
     (* if we have a Goto or a Switch remember them to fixup at end *)
     (match s'.skind with
       (Goto _ | Switch _) -> patches := s' :: !patches
@@ -2474,13 +2498,17 @@ class copyBlockVisitor = fun (outputBlock : block option ref) -> fun labelPrefix
 
   (* Copy blocks since they are mutable *)
   method vblock (outerB: block) = 
+    let copiedB = {outerB with bstmts = outerB.bstmts}
+    in
     if !toplevelBlock = None then
-        toplevelBlock := Some(outerB)
+        toplevelBlock := Some(copiedB)
     else ();
-    ChangeDoChildrenPost ({outerB with bstmts = outerB.bstmts}, fun b -> (
+    ChangeDoChildrenPost (copiedB, fun b -> (
         (* Do fixup and output if we're *finishing* with the top-level block.  *)
         (match !toplevelBlock with
-            Some(b') when b' == outerB ->
+            (* We always *have* a top-level block, but only if it's us, i.e. we're
+             * the top-level activation of vblock, do we want to do anything. *)
+            Some(b') when b' == copiedB ->
               let findStmt (i: int) = 
                 try Hashtbl.find stmtmap i 
                 with Not_found -> failwith "bug: cannot find the copy of stmt"
@@ -2488,7 +2516,6 @@ class copyBlockVisitor = fun (outputBlock : block option ref) -> fun labelPrefix
               let patchstmt (s: stmt) = 
                 match s.skind with
                   Goto (sr, l) -> 
-                    (* Make a copy of the reference *)
                     let sr' = ref (findStmt !sr.sid) in
                     s.skind <- Goto (sr',l)
                 | Switch (e, body, cases, l) -> 
@@ -2496,9 +2523,11 @@ class copyBlockVisitor = fun (outputBlock : block option ref) -> fun labelPrefix
                                        List.map (fun cs -> findStmt cs.sid) cases, l)
                 | _ -> ()
               in
+              (* for all goto or switch statements we saw, 
+               * patch their references *)
               List.iter patchstmt !patches; 
               outputBlock := Some(b)
-              | _ -> ()
+        | _ -> ()   (* None case, i.e. we are not finishing the top-level block. *)
         ) ; b
     ))
 
