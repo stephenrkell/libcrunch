@@ -1179,6 +1179,12 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 *         {1d55,22aa} 
 	 *         {4555,47ff}.
 	 * Okay, let's try it.
+	 * 
+	 * We store "size plus one", not size. This is so that 0 represents
+	 * a distinguished "max size" value. When we subtract one, we do so
+	 * in 64-bit space, meaning we wrap around to get the biggest positive
+	 * (unsigned) number, meaning primary checks trivially succeed.
+	 * 
 	 */
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	if (unlikely(__libcrunch_bounds_invalid(val_bounds, val)))
@@ -1187,10 +1193,10 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	}
 	unsigned long dest_addr = (unsigned long) dest;
 	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
-	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
+	unsigned long size_plus_one_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
 
 	*((void **)         base_stored_addr) = (void*) val_bounds.base;
-	*((unsigned *) size_stored_addr) = ~(val_bounds.size);
+	*((unsigned *) size_plus_one_stored_addr) = val_bounds.size + 1;
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
 	 * any locals. Hm. I think it's already allowed to assume that. */
@@ -1205,11 +1211,11 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	{
 		unsigned long loaded_from_addr = (unsigned long) loaded_from;
 		unsigned long base_stored_addr = loaded_from_addr ^ 0x700000000000ul;
-		unsigned long size_stored_addr = (loaded_from_addr >> 1) + 0x080000000000ul;
+		unsigned long size_plus_one_stored_addr = (loaded_from_addr >> 1) + 0x080000000000ul;
 
 		__libcrunch_bounds_t b = (__libcrunch_bounds_t) {
 			.base = *((unsigned long *)         base_stored_addr),
-			.size = ~(*((unsigned *) size_stored_addr))
+			.size = ((unsigned long) *((unsigned *) size_plus_one_stored_addr)) - 1
 		};
 #ifdef LIBCRUNCH_DEBUG_SHADOW_SPACE
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
