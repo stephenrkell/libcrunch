@@ -6,10 +6,12 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <assert.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <link.h>
 
 #include "maps.h"
@@ -27,18 +29,6 @@ unsigned long *__libcrunch_bounds_sizes_region_7a;
 
 static void *first_2a_free;
 static void *first_30_free = (void*) 0x300000000000ul;
-static int trap_ldso_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, void *interpreter_fname_as_void)
-{
-	const char *interpreter_fname = (const char *) interpreter_fname_as_void;
-	if (ent->x == 'x' && 0 == strcmp(interpreter_fname, ent->rest))
-	{
-		/* It's an executable mapping in the ld.so, so trap it. */
-		trap_one_executable_region((unsigned char *) ent->first, (unsigned char *) ent->second,
-			interpreter_fname, ent->w == 'w', ent->r == 'r');
-	}
-	
-	return 0;
-}
 
 static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, void *arg)
 {
@@ -77,7 +67,7 @@ static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, vo
 /* This is a constructor, since it's important that it happens before
  * much stuff has been memory-mapped. Unlike the main libcrunch/liballocs
  * initialisation, we don't rely on any dynamic linker or libc state. */
-static void init_shadow_space(void) __attribute__((constructor,priority(102)));
+static void init_shadow_space(void) __attribute__((constructor(102)));
 extern int _etext;
 
 void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
@@ -148,36 +138,7 @@ __thread unsigned long *__bounds_sp;
 
 static void init_shadow_space(void)
 {
-	static char realpath_buf[4096]; /* bit of a HACK */
-	/* Make sure we're trapping all syscalls within ld.so. */
-	replaced_syscalls[SYS_mmap] = mmap_replacement;
-	/* Get a hold of the ld.so's link map entry. How? We get it from the auxiliary
-	 * vector. */
-	const char *interpreter_fname = NULL;
-	ElfW(auxv_t) *auxv = get_auxv((const char **) environ, &interpreter_fname);
-	if (!auxv) abort();
-	ElfW(auxv_t) *auxv_at_base = auxv_lookup(auxv, AT_BASE);
-	if (!auxv_at_base) abort();
-	const void *interpreter_base = (const void *) auxv_at_base->a_un.a_val;
-	for (struct LINK_MAP_STRUCT_TAG *l = find_r_debug()->r_map; l; l = l->l_next)
-	{
-		if ((const void *) l->l_addr == interpreter_base)
-		{
-			interpreter_fname = realpath(l->l_name, &realpath_buf[0]);
-		}
-	}
-	if (!interpreter_fname) abort();
-	struct proc_entry entry;
-	char proc_buf[4096];
-	int ret;
-	ret = snprintf(proc_buf, sizeof proc_buf, "/proc/%d/maps", getpid());
-	if (!(ret > 0)) abort();
-	FILE *maps = fopen(proc_buf, "r");
-	if (!maps) abort();
-	char linebuf[8192];
-	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, trap_ldso_cb, (void*) interpreter_fname);
-	install_sigill_handler();
-
+	sleep(10);
 	#define BOUNDS_STACK_SIZE 8192
 	__bounds_sp = mmap(NULL, 8192, PROT_READ|PROT_WRITE, 
 		MAP_ANONYMOUS|MAP_PRIVATE|MAP_GROWSDOWN, -1, 0);
@@ -185,6 +146,15 @@ static void init_shadow_space(void)
 	/* Actually point bounds_sp to the highest address in the mapping. */
 	__bounds_sp = (unsigned long *) ((char*) __bounds_sp + BOUNDS_STACK_SIZE - 
 		sizeof (unsigned long));
+
+	struct proc_entry entry;
+	char proc_buf[4096];
+	int ret;
+	ret = snprintf(proc_buf, sizeof proc_buf, "/proc/%d/maps", getpid());
+	if (!(ret > 0)) abort();
+	int fd = open(proc_buf, O_RDONLY);
+	if (fd == -1) abort();
+	char linebuf[8192];
 
 	/* Map out a big chunk of virtual address space. 
 	 * But one big chunk causes fragmentation. 
@@ -195,11 +165,10 @@ static void init_shadow_space(void)
 	 * 
 	 * First, CHECK this from /proc/maps at startup, and at mmap() calls.
 	 */
-	rewind(maps);
-	for_each_maps_entry(fileno(maps), linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
+	for_each_maps_entry(fd, linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
 	if (!first_2a_free) first_2a_free = (void*) 0x2aaaaaaab000ul;
 	if (!first_30_free) first_30_free = (void*) 0x300000000000ul;
-	fclose(maps);
+	close(fd);
 	
 	/* HMM. Stick with XOR top-three-bits thing for the base.
 	 * we need {0000,0555} -> {7000,7555}

@@ -385,7 +385,7 @@ static void install_segv_handler(void)
 	
 }
 
-static void early_init(void) __attribute__((constructor,priority(101)));
+static void early_init(void) __attribute__((constructor(101)));
 static void early_init(void)
 {
 	// delay start-up here if the user asked for it
@@ -687,14 +687,14 @@ int __is_a_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
-	memory_kind k = UNKNOWN;
+	struct allocator *a = NULL;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
 	
 	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
-		&k,
+		&a,
 		&alloc_start,
 		&alloc_size_bytes,
 		&alloc_uniqtype,
@@ -732,7 +732,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	/* FIXME: static allocations are cacheable *only* so long as we 
 	 * purge the cache on dynamic unloading (which we currently don't).
 	 * FIXME: we need to distinguish alloca'd from stack'd allocations, somehow. */
-	_Bool is_cacheable = (k != STACK) /*|| ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
+	_Bool is_cacheable = a->is_cacheable /*|| ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
@@ -754,7 +754,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	}
 	
 	// if we got here, we might still need to apply lazy heap typing
-	if (__builtin_expect(k == HEAP
+	if (__builtin_expect(a == &__generic_malloc_allocator /* FIXME */
 			&& is_lazy_uniqtype(alloc_uniqtype)
 			&& !__currently_allocating, 0))
 	{
@@ -808,7 +808,7 @@ int __is_a_internal(const void *obj, const void *arg)
 						obj, test_uniqtype, test_uniqtype->name,
 						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 						(long)((char*) obj - (char*) alloc_start),
-						name_for_memory_kind(k), 
+						a ? a->name : "(no allocator)",
 						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 						NAME_FOR_UNIQTYPE(alloc_uniqtype), 
 						(cur_obj_uniqtype ? 
@@ -838,7 +838,7 @@ int __like_a_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
-	memory_kind k;
+	struct allocator *a;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
@@ -846,7 +846,7 @@ int __like_a_internal(const void *obj, const void *arg)
 	void *caller_address = __builtin_return_address(0);
 	
 	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
-		&k,
+		&a,
 		&alloc_start,
 		&alloc_size_bytes,
 		&alloc_uniqtype, 
@@ -981,7 +981,7 @@ like_a_failed:
 				debug_printf(0, "Failed check __like_a(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
 					obj, test_uniqtype, test_uniqtype->name,
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
-					name_for_memory_kind(k), 
+					a ? a->name : "(no allocator)",
 					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 					NAME_FOR_UNIQTYPE(alloc_uniqtype), 
 					alloc_site);
@@ -1000,7 +1000,7 @@ int __named_a_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const char* test_typestr = (const char *) arg;
-	memory_kind k;
+	struct allocator *a;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
@@ -1008,7 +1008,7 @@ int __named_a_internal(const void *obj, const void *arg)
 	void *caller_address = __builtin_return_address(0);
 	
 	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
-		&k,
+		&a,
 		&alloc_start,
 		&alloc_size_bytes,
 		&alloc_uniqtype, 
@@ -1091,7 +1091,7 @@ named_a_failed:
 				debug_printf(0, "Failed check __named_a(%p, \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
 					obj, test_typestr,
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
-					name_for_memory_kind(k), 
+					a ? a->name : "(no allocator)",
 					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 					NAME_FOR_UNIQTYPE(alloc_uniqtype),
 					alloc_site);
@@ -1108,7 +1108,7 @@ __check_args_internal(const void *obj, int nargs, ...)
 	 * not a constructor, because it's not safe to call super-early). */
 	__libcrunch_check_init();
 
-	memory_kind k;
+	struct allocator *a;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
@@ -1118,7 +1118,7 @@ __check_args_internal(const void *obj, int nargs, ...)
 	struct uniqtype *fun_uniqtype = NULL;
 	
 	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
-		&k,
+		&a,
 		&alloc_start,
 		&alloc_size_bytes,
 		&fun_uniqtype,
@@ -1186,7 +1186,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 	__libcrunch_check_init();
 	
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
-	memory_kind k = UNKNOWN;
+	struct allocator *a = NULL;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
@@ -1194,7 +1194,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 	signed target_offset_within_uniqtype;
 	
 	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
-		&k,
+		&a,
 		&alloc_start,
 		&alloc_size_bytes,
 		&alloc_uniqtype,
@@ -1312,7 +1312,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 							"originating at %p\n", 
 						obj, test_uniqtype, test_uniqtype->name,
 						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
-						name_for_memory_kind(k), 
+						a ? a->name : "(no allocator)",
 						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 						NAME_FOR_UNIQTYPE(alloc_uniqtype),
 						alloc_site);
@@ -1385,14 +1385,14 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 	 * not a constructor, because it's not safe to call super-early). */
 	__libcrunch_check_init();
 	
-	memory_kind k = UNKNOWN;
+	struct allocator *a = NULL;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
 	
 	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
-		&k,
+		&a,
 		&alloc_start,
 		&alloc_size_bytes,
 		&alloc_uniqtype,
@@ -1460,7 +1460,7 @@ is_a_pointer_failed:
 			"originating at %p\n", 
 		obj, d,
 		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
-		name_for_memory_kind(k), 
+		a ? a->name : "(no allocator)",
 		(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 		NAME_FOR_UNIQTYPE(alloc_uniqtype),
 		alloc_site);
@@ -1518,14 +1518,14 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	__libcrunch_check_init();
 
 	/* To hold a pointer, we must be a pointer. Find the pointer subobject at `obj'. */
-	memory_kind obj_k = UNKNOWN;
+	struct allocator *obj_a = NULL;
 	const void *obj_alloc_start;
 	unsigned long obj_alloc_size_bytes;
 	struct uniqtype *obj_alloc_uniqtype = (struct uniqtype *)0;
 	const void *obj_alloc_site;
 	
 	struct liballocs_err *obj_err = __liballocs_get_alloc_info(obj, 
-		&obj_k,
+		&obj_a,
 		&obj_alloc_start,
 		&obj_alloc_size_bytes,
 		&obj_alloc_uniqtype,
@@ -1562,7 +1562,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	}
 	struct uniqtype *type_of_pointer_being_stored_to = cur_obj_uniqtype;
 	
-	memory_kind value_k = UNKNOWN;
+	struct allocator *value_a = NULL;
 	const void *value_alloc_start = NULL;
 	unsigned long value_alloc_size_bytes = (unsigned long) -1;
 	struct uniqtype *value_alloc_uniqtype = (struct uniqtype *)0;
@@ -1608,7 +1608,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 // 		}
 
 		struct liballocs_err *value_err = __liballocs_get_alloc_info(value, 
-			&value_k,
+			&value_a,
 			&value_alloc_start,
 			&value_alloc_size_bytes,
 			&value_alloc_uniqtype,
@@ -1732,12 +1732,12 @@ can_hold_pointer_failed:
 		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 		NAME_FOR_UNIQTYPE(type_of_pointer_being_stored_to),
 		(long)((char*) obj - (char*) obj_alloc_start),
-		name_for_memory_kind(obj_k), 
+		obj_a ? obj_a->name : "(no allocator)",
 		(ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site) && obj_alloc_uniqtype && obj_alloc_size_bytes > obj_alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 		NAME_FOR_UNIQTYPE(obj_alloc_uniqtype),
 		obj_alloc_site,
 		(long)((char*) value - (char*) value_alloc_start),
-		name_for_memory_kind(value_k), 
+		value_a ? value_a->name : "(no allocator)",
 		(ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site) && value_alloc_uniqtype && value_alloc_size_bytes > value_alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
 		NAME_FOR_UNIQTYPE(value_alloc_uniqtype),
 		value_alloc_site
@@ -1854,14 +1854,14 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	if (!obj) goto return_min_bounds;
 	
 	struct uniqtype *test_uniqtype = t;
-	memory_kind k = UNKNOWN;
+	struct allocator *a = NULL;
 	const void *alloc_start;
 	unsigned long alloc_size_bytes;
 	struct uniqtype *alloc_uniqtype = (struct uniqtype *)0;
 	const void *alloc_site;
 	
 	struct liballocs_err *err = __liballocs_get_alloc_info(obj, 
-		&k,
+		&a,
 		&alloc_start,
 		&alloc_size_bytes,
 		&alloc_uniqtype,
@@ -1937,7 +1937,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK */) ? alloc_uniqtype->pos_maxoff : 0;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
-	_Bool is_cacheable = (k != STACK)/* || ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
+	_Bool is_cacheable = a->is_cacheable/* || ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
 			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK test for -1 */

@@ -11,8 +11,8 @@ frontend:
 .PHONY: lib
 lib: src
 	mkdir -p lib && cd lib && \
-    ln -sf ../src/libcrunch.so ../src/libcrunch_noop.so ../src/libcrunch_preload.so ../src/libcrunch_preload.a . && \
-    ln -sf ../src/noop.o libcrunch_noop.o
+    ln -sf ../src/libcrunch.so ../src/libcrunch_stubs.so ../src/libcrunch_preload.so ../src/libcrunch_preload.a . && \
+    ln -sf ../src/libcrunch_stubs.o libcrunch_stubs.o
 
 .PHONY: clean
 clean:

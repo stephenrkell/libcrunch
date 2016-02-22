@@ -1,3 +1,7 @@
+THIS_MAKEFILE := $(realpath $(lastword $(MAKEFILE_LIST)))
+SRCROOT := $(dir $(THIS_MAKEFILE))../
+TRAP_SYSCALLS ?= $(HOME)/work/devel/trap-syscalls.hg
+
 CFLAGS += -std=gnu99 -g -fPIC -I../include
 # debugging version
 ifneq ($(DEBUG),)
@@ -6,7 +10,7 @@ else
 # experiment to see what's faster -- plain old -O4 -flto seems marginally faster than with -Os
 #CFLAGS += -O4 -flto -DNDEBUG
 #CFLAGS += -Os -flto -DNDEBUG
-CFLAGS += -O3 -flto -DNDEBUG
+CFLAGS += -O3 -flto -ffat-lto-objects -DNDEBUG
 FINAL_LDFLAGS += -O4 -flto -Bsymbolic -Wl,-O2
 endif
 #CFLAGS += -O0 
@@ -22,7 +26,7 @@ ifeq ($(notdir $(CC)),crunchcc)
 export CC := cc
 endif
 
-default: libcrunch_preload.so libcrunch_preload.a libcrunch_noop.so libcrunch_noop.o
+default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o
 
 ifeq ($(USE_REAL_LIBUNWIND),)
 CFLAGS += -fno-omit-frame-pointer
@@ -49,6 +53,23 @@ $(CC_DEPS): .%.d : %.cc
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
 libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size
 
+vpath dlmalloc.c $(TRAP_SYSCALLS)/src
+# We put dlmalloc in a library so that --exclude-libs=dlmalloc.a will hide its symbols
+# in our output .so, so that they don't override anything in the rest of the program.
+dlmalloc.a: dlmalloc.o
+	$(AR) r "$@" $^
+dlmalloc.o: CFLAGS += -DHAVE_MORECORE=0 -DUSE_DL_PREFIX -fPIC
+libcrunch_preload.so: dlmalloc.a
+libcrunch_preload.so: LDFLAGS += -Wl,--whole-archive dlmalloc.a  -Wl,--no-whole-archive \
+ -Wl,--defsym,__private_malloc=dlmalloc \
+ -Wl,--defsym,__private_calloc=dlcalloc \
+ -Wl,--defsym,__private_free=dlfree \
+ -Wl,--defsym,__private_realloc=dlrealloc \
+ -Wl,--defsym,__private_memalign=dlmemalign \
+ -Wl,--defsym,__private_posix_memalign=dlposix_memalign \
+ -Wl,--exclude-libs=dlmalloc.a \
+ -Bsymbolic # important for _etext in preload hooks
+
 uniqtypes.o: uniqtypes.c
 	$(CC) -o "$@" $(filter-out -flto,$(CFLAGS)) -c "$<" && \
 	$(LIBALLOCS)/tools/lang/c/bin/link-used-types "$@" || (rm -f "$@"; false)
@@ -74,17 +95,17 @@ libcrunch_nomemtable_preload.so: libcrunch_nomemtable.o dummy_thread_locals.o
 
 # this version lacks preload stuff
 libcrunch.so: libcrunch.o $(LIBALLOCS)/lib/liballocs.a
-	$(CC) $(CFLAGS) -shared -o "$@" $^ $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,-Bdynamic #-lheap_index_hooks
+	$(CC) $(CFLAGS) -shared -o "$@" $^ $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) -Wl,-Bdynamic
 
-noop.o: CFLAGS += -fPIC 
+stubs.o: CFLAGS += -fPIC 
 
 libcrunch_nomemtable.o: libcrunch.c
 	$(CC) $(CFLAGS) -DNO_MEMTABLE -c -o "$@" $+
 
-libcrunch_noop.so: noop.o shadow.o mmap.o $(LIBALLOCS)/lib/liballocs_noop.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
+libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz
 
-libcrunch_noop.o: noop.o shadow.o mmap.o $(LIBALLOCS)/lib/liballocs_noop.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
+libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(LD) -r -o "$@" $+
 
 # have to preload the hooks yourself if you want them to hook!

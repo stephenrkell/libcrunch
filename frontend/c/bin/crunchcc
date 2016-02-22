@@ -64,6 +64,9 @@ class CrunchCC(AllocsCC):
     
     def getLibNameStem(self):
         return "crunch"
+    
+    def getDummyWeakObjectNameStem(self):
+        return "stubs"
      
     def getLinkPath(self):
         return os.path.dirname(__file__) + "/../../../lib"
