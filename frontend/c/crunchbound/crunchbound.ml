@@ -456,6 +456,20 @@ let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames =
     |   _ -> 
         debug_print 0 ("It's not an lvalue\n");
         None
+        
+let rec multiplyAccumulateArrayBounds acc t = 
+    match t with
+      | TArray(at, None, attrs) -> 
+            (* failwith ("accumulating array bounds through unbounded array type: " ^ (typToString t)) *)
+            (* this can happen -- see notes below about AddrOf/StartOf localarr/globlarr. *)
+            raise Not_found
+      | TArray(at, Some(boundExpr), attrs) -> begin
+            match constInt64ValueOfExpr boundExpr with
+                    Some n -> multiplyAccumulateArrayBounds (Int64.mul acc n) at
+                  | None -> failwith "getting array bounds for non-constant array bounds"
+        end
+      | TNamed(ti, attrs) -> multiplyAccumulateArrayBounds acc ti.ttype
+      | _ -> (acc, t)
 
 type bounds_expr = 
     BoundsLval of lval
@@ -506,20 +520,6 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
             Index(_, _) -> true
           | _ -> false
         in *)
-        let rec multiplyAccumulateArrayBounds acc t = 
-            match t with
-              | TArray(at, None, attrs) -> 
-                    (* failwith ("accumulating array bounds through unbounded array type: " ^ (typToString t)) *)
-                    (* this can happen -- see notes below about AddrOf/StartOf localarr/globlarr. *)
-                    raise Not_found
-              | TArray(at, Some(boundExpr), attrs) -> begin
-                    match constInt64ValueOfExpr boundExpr with
-                            Some n -> multiplyAccumulateArrayBounds (Int64.mul acc n) at
-                          | None -> failwith "getting array bounds for non-constant array bounds"
-                end
-              | TNamed(ti, attrs) -> multiplyAccumulateArrayBounds acc ti.ttype
-              | _ -> (acc, t)
-        in
         let (arrayElementCount, arrayElementT) = multiplyAccumulateArrayBounds (Int64.of_int 1) indexedType
         in
         (* NOTE: to avoid introducing pointer arithmetic that we will later redundantly check, 
@@ -686,10 +686,21 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
                It *may* return MustFetch, although it will only fast-fetch
                from the shadow space. *)
             boundsExprForExpr subE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs
-      | Const(CStr(s)) ->  (* we can write down the bounds for string literals straight away *)
-            BoundsBaseLimitRvals(CastE(ulongType, Const(CStr(s))), CastE(ulongType, BinOp(PlusPI, Const(CStr(s)), makeIntegerConstant (Int64.of_int (String.length s)), Cil.typeOf e)))
+      | Const(CStr(s)) ->  (* Ae can write down the bounds for string literals straight away.
+                            * As usual, avoid introducing new pointer arithmetic; work in the
+                            * integer (ulongType) domain. *)
+            BoundsBaseLimitRvals(CastE(ulongType, Const(CStr(s))), 
+                BinOp(PlusA, CastE(ulongType, Const(CStr(s))), 
+                makeIntegerConstant (Int64.of_int (1 + String.length s)), 
+                ulongType))
       | Const(CWStr(s)) -> (* same for wide string literals *)
-            BoundsBaseLimitRvals(CastE(ulongType, Const(CWStr(s))), CastE(ulongType, BinOp(PlusPI, Const(CWStr(s)), makeIntegerConstant (Int64.of_int (List.length s)), Cil.typeOf e)))
+            BoundsBaseLimitRvals(CastE(ulongType, Const(CWStr(s))), 
+                BinOp(PlusA, 
+                    CastE(ulongType, Const(CWStr(s))), 
+                    (* FIXME: this is broken for escape characters in wide strings.
+                     * CIL should help us by interpreting the escape chars, but doesn't. *)
+                    BinOp(Mult, makeIntegerConstant (Int64.of_int (1 + List.length s)), SizeOf(!Cil.wcharType), intType),
+                    ulongType))
 
             (* Casts? Literal pointers? 
              * HMM. Literal pointers always need their bounds retrieving, because
@@ -769,6 +780,7 @@ match ptrE with
     | CastE(castToT, castE) -> true
     | AddrOf(lhost, loff) -> true
     | StartOf(lhost, loff) -> true
+    | Const(_) -> false
     | _ -> true
 
 
@@ -2050,7 +2062,16 @@ class crunchBoundVisitor = fun enclosingFile ->
                    | NoOffset :: rest -> failwith "impossible: NoOffset in offset list"
                    | Field(fi, ign) :: rest -> 
                          hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Field(fi, ign)]) lhost (prevOffsetList @ [Field(fi, ign)])
-                   | Index(intExp, ign) :: rest -> 
+                   | Index(indexExp, ign) :: rest -> 
+                         let indexedType = Cil.typeOf (Lval(origHost, offsetFromList prevOffsetList))
+                         in
+                         let exprType = Cil.typeOf (Lval(origHost, offsetFromList (prevOffsetList @ [Index(indexExp, ign)])))
+                         in
+                         let (arrayElementCount, arrayElementT)
+                          = multiplyAccumulateArrayBounds (Int64.of_int 1) exprType
+                         in
+                         let intExp = (* BinOp(Mult, indexExp, makeIntegerConstant arrayElementCount, intType) *) indexExp
+                         in
                          let isPossiblyOOB = 
                              (* Try to get a bound *)
                              let maybeBound = match (lhost, offsetsOkayWithoutCheck) with
@@ -2136,13 +2157,21 @@ class crunchBoundVisitor = fun enclosingFile ->
                             in
                             if not isPossiblyOOB then
                                 (* simple recursive call *)
-                                hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(intExp, ign)]) lhost (prevOffsetList @ [Index(intExp, ign)])
+                                hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(indexExp, ign)]) lhost (prevOffsetList @ [Index(indexExp, ign)])
                             else 
                                 (* if we started with x[i].rest, 
-                                 * make a temporary to hold &x + i, 
+                                 * make a temporary to hold &x[0] + i, 
                                  * check that,
                                  * then recurse
-                                 * with current lvalue *(temp).rest *)
+                                 * with current lvalue *(temp).rest.
+                                 *
+                                 * SUBTLETY:
+                                 * If x itself has array type, 
+                                 * &x[0] will always have type T* where T is the ultimate (non-array) element type.
+                                 * We need to multiply.
+                                 * OR DO WE? 
+                                 * Does StartOf always give us a pointer to the raw element type? 
+                                 * If it gives us pointers to arrays, we're okay. *)
                                 let localLvalToBoundsFun = boundsLvalForLocalLval boundsLocals theFunc enclosingFile
                                 in
                                 let ptrExp =  (Cil.mkAddrOrStartOf (lhost, offsetFromList offsetsOkayWithoutCheck))
