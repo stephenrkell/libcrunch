@@ -1039,9 +1039,12 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 #endif
 	unsigned long base = (unsigned long) __libcrunch_get_base(derivedfrom_bounds, derivedfrom);
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
-	
-	// return (addr - base <= size - t_sz);
-	return addr - base < size;
+	_Bool success = addr - base < size;
+#ifdef LIBCRUNCH_TRACE_PRIMARY_CHECKS
+	if (!success) warnx("Primary check failed: addr %p, base %p, size %lu\n", 
+		(void*) addr, (void*) base, size);
+#endif
+	return success;
 	//if (!(addr - base < size)) abort(); else return 1;
 #else
 	return 1;
