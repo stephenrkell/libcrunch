@@ -5,6 +5,7 @@
 #include "libcrunch_private.h"
 
 _Bool __libcrunch_is_initialized = 1;
+extern _Bool our_init_flag __attribute__((visibility("hidden"),alias("__libcrunch_is_initialized")));
 
 struct __libcrunch_cache __libcrunch_is_a_cache; // all zeroes
 struct __libcrunch_cache __libcrunch_fake_bounds_cache; // all zeroes
@@ -19,6 +20,19 @@ unsigned long int __libcrunch_checked_pointer_adjustments = 0;
 unsigned long int __libcrunch_fetch_bounds_called = 0;
 unsigned long int __libcrunch_fetch_bounds_missed_cache = 0;
 unsigned long __libcrunch_primary_secondary_transitions = 0;
+
+void __liballocs_systrap_init(void);
+static void init(void) __attribute__((constructor));
+static void init(void)
+{
+	/* It's critical that we detect whether we're being overridden,
+	 * and skip this init if so. The preload code in liballocs wants to
+	 * initialise systrap *only* after it has scanned /proc/self/maps, 
+	 * so that it can accurately track mmappings. To test for overriddenness,
+	 * we use a hidden alias for something that will be overridden by our
+	 * overrider, here the init flag. */
+	if (&__libcrunch_is_initialized == &our_init_flag) __liballocs_systrap_init();
+}
 
 void __libcrunch_scan_lazy_typenames(void *blah) {}
 

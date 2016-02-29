@@ -24,9 +24,6 @@
 #include "libcrunch.h"
 #include "libcrunch_private.h"
 
-#define unlikely(cond) (__builtin_expect( (cond), 0 ))
-#define likely(cond)   (__builtin_expect( (cond), 1 ))
-
 #define NAME_FOR_UNIQTYPE(u) ((u) ? ((u)->name ?: "(unnamed type)") : "(unknown type)")
 
 /* Heap storage sized using a "loose" data type, like void*,

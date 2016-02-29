@@ -109,8 +109,8 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 		return;
 	}
 	
-	if (we_are_caller)
-	{
+	if (/*we_are_caller && */ *p_length > BIGGEST_SANE_USER_ALLOC)
+	{   // PROBLEM: "we" might be the stubs library or the preload library -- CHECK FIXME
 		/* Try to give ourselves regions *outside* the 2a range, in the 3s and 4s. */
 		*p_addr = first_30_free;
 		first_30_free = (char*) first_30_free + *p_length;
@@ -136,9 +136,8 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 
 __thread unsigned long *__bounds_sp;
 
-static void init_shadow_space(void)
+static void init_shadow_space(void) // constructor (declared above)
 {
-	sleep(10);
 	#define BOUNDS_STACK_SIZE 8192
 	__bounds_sp = mmap(NULL, 8192, PROT_READ|PROT_WRITE, 
 		MAP_ANONYMOUS|MAP_PRIVATE|MAP_GROWSDOWN, -1, 0);
