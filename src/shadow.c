@@ -17,6 +17,7 @@
 #include "maps.h"
 #include "relf.h"
 #include "systrap.h"
+#include "pageindex.h"
 #include "libcrunch.h"
 #include "libcrunch_private.h"
 
@@ -68,7 +69,6 @@ static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, vo
  * much stuff has been memory-mapped. Unlike the main libcrunch/liballocs
  * initialisation, we don't rely on any dynamic linker or libc state. */
 static void init_shadow_space(void) __attribute__((constructor(102)));
-extern int _etext;
 
 void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
                   int *p_fd, off_t *p_offset, const void *caller)
@@ -88,9 +88,9 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 	 *    really huge, maybe we assume they know what they're doing?
 	 */
 	void *our_load_address = get_highest_loaded_object_below(init_shadow_space);
-	unsigned long text_segment_size = (unsigned long) &_etext; /* HACK: ABS symbol, so not relocated. */
+	void *text_segment_end = get_local_text_segment_end();
 	_Bool we_are_caller = ((char*) caller >= (char*) our_load_address 
-		&& (char*) caller < (char*) our_load_address + text_segment_size);
+		&& (char*) caller < (char*) text_segment_end);
 	
 	if (*p_addr && (*p_flags & MAP_FIXED))
 	{
@@ -105,30 +105,29 @@ void __liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p
 				first_2a_free = (char*) *p_addr + *p_length;
 			}
 		}
-		
-		return;
 	}
-	
-	if (/*we_are_caller && */ *p_length > BIGGEST_SANE_USER_ALLOC)
+	else if (/*we_are_caller && */ *p_length > BIGGEST_SANE_USER_ALLOC)
 	{   // PROBLEM: "we" might be the stubs library or the preload library -- CHECK FIXME
 		/* Try to give ourselves regions *outside* the 2a range, in the 3s and 4s. */
 		*p_addr = first_30_free;
 		first_30_free = (char*) first_30_free + *p_length;
-		return;
 	}
-	
-	if (!first_2a_free)
+	else if (!first_2a_free)
 	{
 		/* PROBLEM: we want to put it in the 2a range, but we haven't yet walked
 		 * the maps so we don't know where's free. Abort. */
 		abort();
 	}
-
-	// try to give them the next free 2a. FIXME: randomize!
-	if (!*p_addr)
+	else if (!*p_addr)// try to give them the next free 2a. FIXME: randomize!
 	{
 		*p_addr = first_2a_free;
 		first_2a_free = (char*) first_2a_free + *p_length;
+	}
+	
+	// now check we did something sensible
+	if (&pageindex && pageindex)
+	{
+		assert(pageindex[ ((uintptr_t) (*p_addr)) >> LOG_PAGE_SIZE ] == 0);
 	}
 	
 #undef is_in_range

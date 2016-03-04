@@ -78,7 +78,7 @@ uniqtypes.o: uniqtypes.c
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
-libcrunch_preload.so: uniqtypes.o libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
+libcrunch_preload.so: uniqtypes.o libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$+) \
 $(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) \
 -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
