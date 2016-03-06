@@ -799,14 +799,14 @@ int __is_a_internal(const void *obj, const void *arg)
 					}
 
 					debug_printf(0, "Failed check __is_a(%p, %p a.k.a. \"%s\") at %p (%s); "
-							"obj is %ld bytes into an allocation of a %s%s%s "
+							"obj is %ld bytes into a %s%s%s "
 							"(deepest subobject: %s at offset %d) "
 							"originating at %p\n", 
 						obj, test_uniqtype, test_uniqtype->name,
 						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 						(long)((char*) obj - (char*) alloc_start),
 						a ? a->name : "(no allocator)",
-						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 						NAME_FOR_UNIQTYPE(alloc_uniqtype), 
 						(cur_obj_uniqtype ? 
 							((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : cur_obj_uniqtype->name) 
@@ -979,7 +979,7 @@ like_a_failed:
 					obj, test_uniqtype, test_uniqtype->name,
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
 					a ? a->name : "(no allocator)",
-					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 					NAME_FOR_UNIQTYPE(alloc_uniqtype), 
 					alloc_site);
 			}
@@ -1089,7 +1089,7 @@ named_a_failed:
 					obj, test_typestr,
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
 					a ? a->name : "(no allocator)",
-					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 					NAME_FOR_UNIQTYPE(alloc_uniqtype),
 					alloc_site);
 			}
@@ -1310,7 +1310,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 						obj, test_uniqtype, test_uniqtype->name,
 						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 						a ? a->name : "(no allocator)",
-						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 						NAME_FOR_UNIQTYPE(alloc_uniqtype),
 						alloc_site);
 					last_failed_site = __builtin_return_address(0);
@@ -1458,7 +1458,7 @@ is_a_pointer_failed:
 		obj, d,
 		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 		a ? a->name : "(no allocator)",
-		(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+		(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 		NAME_FOR_UNIQTYPE(alloc_uniqtype),
 		alloc_site);
 	return 1; // so that program will continue
@@ -1723,19 +1723,19 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 can_hold_pointer_failed:
 	++__libcrunch_failed;
 	debug_printf(0, "Failed check __can_hold_pointer(%p, %p) at %p (%s), "
-			"target pointer is a %s, %ld bytes into an allocation of a %s%s%s originating at %p, "
-			"value points %ld bytes into an allocation of a %s%s%s originating at %p\n", 
+			"target pointer is a %s, %ld bytes into a %s%s%s originating at %p, "
+			"value points %ld bytes into a %s%s%s originating at %p\n", 
 		obj, value,
 		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 		NAME_FOR_UNIQTYPE(type_of_pointer_being_stored_to),
 		(long)((char*) obj - (char*) obj_alloc_start),
 		obj_a ? obj_a->name : "(no allocator)",
-		(ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site) && obj_alloc_uniqtype && obj_alloc_size_bytes > obj_alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+		(ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site) && obj_alloc_uniqtype && obj_alloc_size_bytes > obj_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 		NAME_FOR_UNIQTYPE(obj_alloc_uniqtype),
 		obj_alloc_site,
 		(long)((char*) value - (char*) value_alloc_start),
 		value_a ? value_a->name : "(no allocator)",
-		(ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site) && value_alloc_uniqtype && value_alloc_size_bytes > value_alloc_uniqtype->pos_maxoff) ? " block of " : " ", 
+		(ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site) && value_alloc_uniqtype && value_alloc_size_bytes > value_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 		NAME_FOR_UNIQTYPE(value_alloc_uniqtype),
 		value_alloc_site
 		);
