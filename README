@@ -1,51 +1,70 @@
-libcrunch is an infrastructure for fast dynamic type checking. 
+libcrunch is a runtime library, with some toolchain extensions (compiler
+wrapper, etc.), for fast dynamic type checking in unsafe languages.
+Currently that means mostly C, although languages are fairly pluggable
+in the design.
 
-In principle it is language-agnostic -- its operations are defined in
-terms of "allocations", each having a well-defined "data type".
-libcrunch reifies these data types, provides fast access to
-per-allocation metadata, and thereby allows assertions such as 
+It is based on my other project, liballocs, which you should build (and
+probably understand) first.
 
-"p is_a Widget"
-
-to be coded directly. 
-
-Currently the only language frontend is for C, and in this case, one
-could write 
-
-assert(__is_a(p, "Widget"))
-
-or 
+Liballocs models programs during execution in terms of /typed
+allocations/. It reifies data types, providing fast access to
+per-allocation metadata. Libcrunch extends this with check functions,
+thereby allowing assertions such as 
 
 assert(__is_aU(p, &__uniqtype_Widget));
 
-and so on. Moreover, a compiler wrapper allows such checks to be
-inserted automatically at particular points -- currently, at pointer
-casts.
+to assert that p points to a Widget, and so on. 
 
-Allocations may be stack frames, static objects or heap chunks. Data
-types are left a somewhat opaque notion, deliberately,  which is
-somewhat opaque, but includes a notion of containment.
+A compiler wrapper inserts these checks automatically at particular
+points -- primarily at pointer casts, but also at certain uses of va_arg
+(and some other places too obscure to get into here). The effect is to
+provide clean error messages on bad pointer casts. Language-wise,
+libcrunch slightly narrows standard C, such that all live, allocated
+storage has a well-defined type at any moment (cf. C99 "effective type"
+which is more liberal).
+
+Also, there's a new bounds checker in the works (see crunchbcc,
+crunchbound.ml) that avoids a lot of false positives common to other
+bounds checkers. I'm hoping it will become the first really practical
+on-by-default bounds checker, but time will tell.
+
+Below there is a slightly out-of-date list of some of the known
+limitations. More positively, it really works (if you can build it),
+supports lots of nasty C code really quite well, and usually only slows
+execution by about 5--35% (more if you turn on bounds checking, though).
+You can also run instrumented code without the library loaded, when the
+slowdown is usually negligible (again, less so for bounds checks).
 
 
 Current limitations of metadata
 
 - no metadata (debug info) for actual parameters passed in varargs
+     (need to maintain a shadow stack for this; am working on it)
+
 - no metadata (debug info) for address-taken temporaries
+     (significant for C++, but not for C; needs compiler fixes)
+     
 - sizeof scraping is not completely reliable (but is really not bad)
+
 
 Current performance quirks
 
 - heap_index's trailer implementation causes page-sized clownshoes
-- nested allocators sometimes slow down metadata quite a bit (bug!)
+
 
 Current usability quirks 
 
-- requires manual identification of alloc functions
+- requires manual identification of alloc functions (or rather,
+liballocs does)
+
 
 Current completeness quirks
 
 - assumes memory-correct execution
-- C frontend (trumptr) only instruments casts
-- ... i.e. check-on-cast is too eager for some C programming styles
-- higher-order (indirect, pointer-to-function) checks are conservative
-- ... i.e. false positives are possible in these cases
+
+- check-on-cast is too eager for some C programming styles
+    ("trap pointer" mechanism in the works)
+    
+- higher-order (indirect, pointer-to-function) checks are slightly 
+    conservative
+    (i.e. a few false positives are possible in these cases)
