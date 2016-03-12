@@ -232,6 +232,7 @@ unsigned long __libcrunch_failed;
 unsigned long __libcrunch_failed_in_alloc;
 unsigned long __libcrunch_failed_and_suppressed;
 unsigned long __libcrunch_succeeded;
+unsigned long __libcrunch_is_a_hit_cache;
 unsigned long __libcrunch_created_invalid_pointer;
 unsigned long __libcrunch_fetch_bounds_called;
 unsigned long __libcrunch_fetch_bounds_missed_cache;
