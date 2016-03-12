@@ -1,0 +1,33 @@
+#!/usr/bin/env python
+# ... or for debugging, use something like
+#!/home/stephen/bin/gdbrun python
+
+# Compiler wrapper for libcrunch.
+import os, sys, re, subprocess, tempfile
+
+# HACK
+liballocs_base = os.path.realpath(os.path.dirname(__file__) + "/../../../../liballocs.hg")
+sys.path.append(liballocs_base + "/tools")
+sys.path.append(liballocs_base + "/tools/lang/fortran/lib")
+from allocsfc import AllocsFC
+
+class CrunchFC(AllocsFC):
+ 
+    def fixupDotO(self, filename, errfile):
+        # no instrumentation yet, so no uniqtype refs to fix up
+        return AllocsFC.fixupDotO(self, filename, errfile)
+     
+    def getLibNameStem(self):
+        return "crunch"
+    
+    def getDummyWeakObjectNameStem(self):
+        return "stubs"
+     
+    def getLinkPath(self):
+        return os.path.dirname(__file__) + "/../../../lib"
+
+if __name__ == '__main__':
+    wrapper = CrunchFC()
+    ret = wrapper.main()
+    exit(ret)
+
