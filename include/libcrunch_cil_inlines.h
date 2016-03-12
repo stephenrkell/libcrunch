@@ -84,6 +84,7 @@ int __libcrunch_global_init (void);
 /* Type checking */
 int __is_a_internal(const void *obj, const void *u) PURE;
 int __like_a_internal(const void *obj, const void *u) PURE;
+int __loosely_like_a_internal(const void *obj, const void *u) PURE;
 int __named_a_internal(const void *obj, const void *u) PURE;
 int __is_a_function_refining_internal(const void *obj, const void *u) PURE;
 int __is_a_pointer_of_degree_internal(const void *obj, int d) PURE;
@@ -165,7 +166,6 @@ extern struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache;
 #define LIBCRUNCH_TRAP_INVALID 3
 #define LIBCRUNCH_TRAP_TAG_WIDTH 2
 #define LIBCRUNCH_TRAP_TAG_MASK (((unsigned long)((1ul<<LIBCRUNCH_TRAP_TAG_WIDTH) - 1ul)) << LIBCRUNCH_TRAP_TAG_SHIFT)
-
 
 extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
 
@@ -601,6 +601,42 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const v
 	// now we're really started 
 	__libcrunch_begun++; 
 	int ret = __like_a_internal(obj, uniqtype); 
+	return ret;
+#else
+	return 1;
+#endif
+}
+
+extern inline int (__attribute__((always_inline,gnu_inline)) __loosely_like_aU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline)) __loosely_like_aU )(const void *obj, const void *uniqtype)
+{
+#ifndef LIBCRUNCH_NOOP_INLINES
+	if (!obj) 
+	{ 
+		return 1; 
+	} 
+	if (obj == (void*) -1)
+	{
+		return 1;
+	}
+	// int inited = __libcrunch_check_init (); 
+	// if (unlikely(inited == -1))
+	// { 
+	//	 return 1; 
+	// } 
+	
+	/* Null uniqtype means __is_aS got a bad typestring, OR we're not  
+	 * linked with enough uniqtypes data. */ 
+	if (unlikely(!uniqtype))
+	{ 
+	   __libcrunch_begun++; 
+	   __libcrunch_aborted_typestr++; 
+		 return 1; 
+	} 
+	/* No need for the char check in the CIL version */ 
+	// now we're really started 
+	__libcrunch_begun++; 
+	int ret = __loosely_like_a_internal(obj, uniqtype); 
 	return ret;
 #else
 	return 1;

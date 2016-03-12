@@ -56,6 +56,11 @@ int __like_a_internal(const void *obj, const void *r)
 	return 1;
 }
 
+int __loosely_like_a_internal(const void *obj, const void *r)
+{
+	return 1;
+}
+
 int __named_a_internal(const void *obj, const void *r)
 {
 	return 1;

@@ -48,9 +48,7 @@ module H = Hashtbl
 
 (* How we deal with incompletes. 
  * 
- * incompletes themselves: by default, don't check anything (treat them like void)
- *     because the name of an incomplete type is arbitrary
- *     BUT, at the user's request, allow __named_a check (TODO).
+ * incompletes themselves: by default, do a __named_a check
  *
  * types built out of incompletes (__PTR_incomplete, __FUN_FROM_ ptr-to-incomplete, etc.)
  *
@@ -96,6 +94,24 @@ end with Not_found -> []
 let likeAStr =  try begin
     (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
 end with Not_found -> ""
+
+let sloppyFps = try begin
+    let envstr = (Sys.getenv "LIBCRUNCH_SLOPPY_FUNCTION_POINTERS")
+    in (String.length envstr) > 0
+end with Not_found -> false
+
+let strictVoidpps = try begin
+    let envstr = (Sys.getenv "LIBCRUNCH_STRICT_GENERIC_POINTERS")
+    in (String.length envstr) > 0
+end with Not_found -> false
+
+let likeATypeNames = try begin
+    Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
+end with Not_found -> []
+
+let looseGPCOTTypeNames = try begin
+    Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LOOSELY_LIKE_A_FOR_TYPES")
+end with Not_found -> []
 
 let rec findLikeA barename l = match l with 
    [] -> None
@@ -181,6 +197,63 @@ let mkCheckInstrsForTargetType
       mkCheckInstrs e enclosingFunction testFunVar inlineAssertFun (instrLoc !currentInst) ourCheckArgs uniqtypeS uniqtypeGlobals currentInst
  end
 
+let isGenericPointerType (t : Cil.typ) = 
+    let upts = ultimatePointeeTs (getConcreteType(Cil.typeSig t))
+    in
+    upts = Cil.typeSig(voidType)
+     || upts = Cil.typeSig(charType)
+
+let rec isGPCOT t = (* generic-pointer-containing object type *)
+isGenericPointerType t
+||
+match t with
+    TVoid(attrs) -> false
+  | TInt(ik, attrs) -> false
+  | TFloat(fk, attrs) -> false
+  | TPtr(pt, attrs) -> isGenericPointerType pt
+  | TArray(at, _, attrs) -> isGPCOT at
+  | TFun(_, _, _, _) -> false
+  | TNamed(ti, attrs) -> isGPCOT ti.ttype
+  | TComp(ci, attrs) -> 
+        let allFieldTypes = List.map (fun fi -> fi.ftype) ci.cfields
+        in
+        List.fold_left (fun acc -> fun ft -> acc || isGPCOT ft) false allFieldTypes
+  | TEnum(ei, attrs) -> false
+  | TBuiltin_va_list(attrs) -> false
+
+(* We actually care about "loose" GPCOTs. These are GPCOTs T that the user
+ * has requested we use the more relaxed __loosely_like_a(T) check for. 
+ * GPPs are always included, but other (structs) may also be named.
+ * perl needs this, for example.
+ *)
+let isLooseGPCOT (t : Cil.typ) = 
+    isGPCOT t && (
+        (* all generic pointer types are not only GPCOTs, 
+         * but are automagically treated as loose GPCOTs 
+         * (i.e. this behaviour is not opt-in for void** and friends. *)
+        (isGenericPointerType t && not strictVoidpps)
+        || 
+        (* some named structure types are also GPCOTs *)
+        List.mem (barenameFromSig (getConcreteType (Cil.typeSig t))) looseGPCOTTypeNames
+        (* OR: I THINK: for any subobject of a loose GPCOT, 
+         * if that subobject type is a GPCOT,
+         * it is a loose GPCOT. This prevents us from
+         * bypassing GPCOT write-checks by selecting a
+         * subobject to write through. HMM. Is this really
+         * necessary? ONLY IF we see through subobjects
+         * in our __loosely_like_a check. It'll be easier
+         * not to, initially. *)
+    )
+
+let tIsIndirectedLooseGPCOT (t : Cil.typ) = 
+    isPointerType t
+    && ((
+        isGenericPointerType t && 
+       isLooseGPCOT (penultimatePointeeT t)
+    ) 
+    || isLooseGPCOT (ultimatePointeeT t))
+
+
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
                            fun checkArgsInternalFunDec -> 
@@ -188,6 +261,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                            fun isAUInlineFun ->
                            fun likeAUInlineFun ->
                            fun namedAUInlineFun ->
+                           fun looselyLikeAUInlineFun ->
                            fun isAFunctionRefiningUInlineFun ->
                            fun isAPointerOfDegreeInlineFun ->
                            fun canHoldPointerInlineFun ->
@@ -195,24 +269,6 @@ class trumPtrExprVisitor = fun enclosingFile ->
                            fun inlineAssertFun -> 
                                object(self)
   inherit nopCilVisitor
-
-  val likeAStr =  try begin
-    (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
-  end with Not_found -> ""
-
-  val sloppyFps = try begin
-    let envstr = (Sys.getenv "LIBCRUNCH_SLOPPY_FUNCTION_POINTERS")
-    in (String.length envstr) > 0
-  end with Not_found -> false
-
-  val strictVoidpps = try begin
-    let envstr = (Sys.getenv "LIBCRUNCH_STRICT_GENERIC_POINTERS")
-    in (String.length envstr) > 0
-  end with Not_found -> false
-  
-  val likeATypeNames = try begin
-    Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
-  end with Not_found -> []
 
   (* Remember the named types we've seen, so that we can map them back to
    * source code locations.
@@ -254,8 +310,30 @@ class trumPtrExprVisitor = fun enclosingFile ->
         Some(_) -> true
       | None -> false
     in
-    let lvalueIsThroughVoidpp lv = match lv with 
-        (Mem(e), _) -> (ultimatePointeeTs (getConcreteType(Cil.typeSig(Cil.typeOf e))) = Cil.typeSig(voidType))
+    let lvalueNamesPointerThroughPtrToLooseGPCOT lv = match lv with 
+        (Mem(e), offs) when
+            (* we're writing to an lvalue of generic pointer type, 
+             * i.e. one of the subobjects in the GPCOT that actually
+             * needs checking. *)
+            (let writtenObjectType = Cil.typeOf (Lval(Mem(e), offs))
+             in 
+             let writtenThroughPointerType = Cil.typeOf e      (* a pointer type*)
+             in
+             let writtenThroughPointeeType = Cil.typeOf (Lval(Mem(e), NoOffset))
+             in
+             (* What about writes of the form
+             
+                   ( ***p ).ptr = <some ptr>
+             
+                ?    We're not writing through a GPCOT type.
+                     The type we're writing through is a *pointer to pointer* to GPCOT.
+                     OH, but that's a nested Mem:
+                      Lval(Mem(Lval(Mem( ...
+                     ... and the outermost Mem *is* a pointer to GPCOT.
+                     So we're okay as we are.
+              *)
+              isGenericPointerType writtenObjectType
+              && isLooseGPCOT writtenThroughPointeeType) -> true
       | _ -> false
     in
     let (maybeWrittenLv, doingWrite, writtenType, doingIndirectCall) = match i with 
@@ -358,7 +436,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
         in
         let writtenLv = match maybeWrittenLv with Some(lv) -> lv | None -> failwith "logic error"
         in
-        if not (lvalueIsThroughVoidpp writtenLv) then []
+        if not (lvalueNamesPointerThroughPtrToLooseGPCOT writtenLv) then []
         else begin
           let writtenType = Cil.typeOf (Lval(writtenLv))
           in
@@ -367,7 +445,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
           let location = instrLoc !currentInst
           in
           [
-            (* enqueue the checkargs call *)
+            (* enqueue the write-checking call *)
             Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
                   (Lval(Var(canHoldPointerInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
                   [ 
@@ -575,10 +653,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
              because they only "fail" if they don't point to valid memory, 
              which is a memory-safety issue
        *)
-      CastE(t, subex) -> 
+      CastE(targetT, subex) -> 
           let subexTs = getConcreteType(Cil.typeSig(Cil.typeOf(subex)))
           in 
-          let targetTs = getConcreteType(Cil.typeSig(t))
+          let targetTs = getConcreteType(Cil.typeSig(targetT))
           in
           if targetTs = subexTs then DoChildren else begin
           (
@@ -602,10 +680,37 @@ class trumPtrExprVisitor = fun enclosingFile ->
           if (sloppyFps && (tsIsFunctionPointer targetTs)) then DoChildren else 
           (* To any void** or higher-degree void ptr is okay if we're not being strict. 
            * BUT we also have to check that the target degree is not greater than the 
-           * source degree, or else do a check. *)
-          if ((not strictVoidpps) && (tsIsMultiplyIndirectedVoid targetTs))
+           * source degree, or else do a check. 
+           * And then we generalise this to "loose GPCOTs",  *)
+          if ((not strictVoidpps) && (tIsIndirectedLooseGPCOT targetT))
           then
-            if indirectionLevel subexTs >= indirectionLevel targetTs then DoChildren
+            (* If we're (statically) casting away levels of indirection,
+             * *and* if the target type is a pointer to GPP,
+             * we needn't do anything (by our invariant: the cast-from pointer
+             * is definitely okay).
+             * 
+             * If we have a value that's statically a     T***,
+             * and we're casting to a void**, 
+             * that's reducing the indirection level,
+             * and it's always fine for any T.
+             * If we were casting to a (struct Loose ** ), it wouldn't be.
+             * 
+             * "__loosely_like_a":
+             * if we're pointing at a T*, that pointer is loosely like a void*;
+             * if we're pointing at a structure containing a T*, 
+                        that any generic pointer in the cast-to [pointed-to] structure type is matched
+                           loosely,
+                        and the struct passes __loosely_like_a
+                            otherwise like __like_a.
+             * In all cases, the generic pointer must be _no more indirect_
+             * than the actually pointed-to pointer.
+             * 
+             * Question: do we split the "generic pointer cast" from the "structure case" here?
+             * Answer: no, cleaner to put it in a single function, in the same way
+             *          that we present it to the user as a single function.
+             *)
+            if (indirectionLevel subexTs >= indirectionLevel targetTs
+                && tsIsMultiplyIndirectedGenericPointer targetTs) then DoChildren
             else
               begin
                 (* Output a dynamic check of the pointer degree *)
@@ -616,13 +721,23 @@ class trumPtrExprVisitor = fun enclosingFile ->
                   Set( (Var(exprTmpVar), NoOffset), e, instrLoc !currentInst );
                   (* next enqueue the is_a_pointer_of_degree call *)
                   Call( Some((Var(checkTmpVar), NoOffset)), (* return value dest *)
-                        (Lval(Var(isAPointerOfDegreeInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
+                        (Lval(Var(looselyLikeAUInlineFun.svar),NoOffset)),  (* lvalue of function to call *)
                         [ 
-                          (* first arg is the expression result *)
+                          (* first arg is the expression *)
                           Lval(Var(exprTmpVar), NoOffset);
-                          (* second argument is the degree, minus one because we're talking
+                          (* second arg is the type we want it to be loosely-like-a type,
+                           * i.e. the pointee type of targetTs. *)
+                          (let concretePtdts = match targetTs with 
+                             TSPtr(ptdts, attrs) -> getConcreteType ptdts
+                           | _ -> failwith "pointer to GPCOT is not a pointer"
+                          in
+                          let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concretePtdts enclosingFile uniqtypeGlobals
+                          in
+                          Cil.mkAddrOf(Var(uniqtypeV), NoOffset)
+                          )
+                          (* OLD: second argument is the degree, minus one because we're talking
                            * about the object on the end of the argument pointer *)
-                          Const(CInt64((Int64.of_int ((indirectionLevel targetTs) - 1)), IInt, None))
+                          (* Const(CInt64((Int64.of_int ((indirectionLevel targetTs) - 1)), IInt, None)) *)
                         ],
                         instrLoc !currentInst
                   );
@@ -632,7 +747,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                         [
                           (* arg is the check result *)
                           Lval(Var(checkTmpVar), NoOffset);
-                          Const(CStr("__is_a_pointer_of_degree(" ^ exprTmpVar.vname ^ ", " ^ string_of_int((indirectionLevel targetTs) - 1) ^ ")"));
+                          Const(CStr("__loosely_like_a(" ^ exprTmpVar.vname ^ ", " ^ string_of_int((indirectionLevel targetTs) - 1) ^ ")"));
                           Const(CStr( location.file ));
                           Const(CInt64(Int64.of_int (if location.line == -1 then 0 else location.line), IUInt, None));
                           Const(CStr( enclosingFunction.svar.vname ))
@@ -641,7 +756,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                   )
                 ];
                 (* change to a reference to the decl'd tmp var *)
-                ChangeTo ( CastE(t, subex) )
+                ChangeTo ( CastE(targetT, subex) )
               end
           else (* not multiply-indirected void *) begin
           match targetTs with 
@@ -654,7 +769,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                But we just let the compiler do it! It will inline our __is_aU and will
                simplify it down to nothing if the pointer is null. *)
           | TSPtr(ptdts, attrs) (* when not isStaticallyNullPtr subex *) -> begin
-              debug_print 1 ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(t) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
+              debug_print 1 ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(targetT) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
               (* enqueue the tmp var decl, assignment and assertion *)
               let concretePtdts = (getConcreteType ptdts)  in
               (* FIXME: use List API! *)
@@ -692,7 +807,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
               in 
               self#queueInstr instrs; 
               (* change to a reference to the decl'd tmp var *)
-              ChangeTo ( CastE(t, Lval(Var(resultTmp), NoOffset)) )
+              ChangeTo ( CastE(targetT, Lval(Var(resultTmp), NoOffset)) )
             end (* end TSPtr other cases *)
           | _ -> DoChildren
         end (* end target-ptr case *)
@@ -764,6 +879,7 @@ class trumPtrFunVisitor = fun fl -> object
   val mutable isASInlineFun = emptyFunction "__is_aS"
   val mutable likeAUInlineFun = emptyFunction "__like_aU"
   val mutable namedAUInlineFun = emptyFunction "__named_aU"
+  val mutable looselyLikeAUInlineFun = emptyFunction "__loosely_like_aU"
   val mutable isAFunctionRefiningUInlineFun = emptyFunction "__is_a_function_refiningU"
   val mutable isAPointerOfDegreeInlineFun = emptyFunction "__is_a_pointer_of_degree"
   val mutable canHoldPointerInlineFun = emptyFunction "__can_hold_pointer"
@@ -815,6 +931,14 @@ class trumPtrFunVisitor = fun fl -> object
                             fl (* namedAUInlineFun *) "__named_aU" (TFun(intType, 
                             Some [ ("obj", voidConstPtrType, []);
                                    ("s", voidConstPtrType, [])
+                                 ], 
+                            false, [])) 
+    ;
+
+    looselyLikeAUInlineFun <- (* makeInlineFunctionInFile *) findOrCreateExternalFunctionInFile 
+                            fl (* looselyLikeAUInlineFun *) "__loosely_like_aU" (TFun(intType, 
+                            Some [ ("obj", voidConstPtrType, []);
+                                   ("r", voidConstPtrType, [])
                                  ], 
                             false, [])) 
     ;
@@ -872,7 +996,10 @@ class trumPtrFunVisitor = fun fl -> object
           || stringEndsWith f.svar.vdecl.file "libcrunch_cil_inlines.h"
           then SkipChildren
       else
-          let tpExprVisitor = new trumPtrExprVisitor fl f checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun likeAUInlineFun namedAUInlineFun isAFunctionRefiningUInlineFun isAPointerOfDegreeInlineFun canHoldPointerInlineFun traceWidenIntToPointerInlineFun inlineAssertFun
+          let tpExprVisitor = new trumPtrExprVisitor fl f checkArgsInternalFunDec.svar isASInlineFun isAUInlineFun
+               likeAUInlineFun namedAUInlineFun looselyLikeAUInlineFun isAFunctionRefiningUInlineFun 
+               isAPointerOfDegreeInlineFun canHoldPointerInlineFun traceWidenIntToPointerInlineFun 
+               inlineAssertFun
           in
           ChangeTo(visitCilFunction tpExprVisitor f)
 end

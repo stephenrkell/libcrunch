@@ -15,11 +15,10 @@
 #include "systrap.h"
 
 #undef debug_printf /* from liballocs */
-extern char exe_basename[4096] __attribute__((visibility("hidden")));
 extern FILE *crunch_stream_err __attribute__((visibility("hidden")));
 #define debug_printf_to(strm, lvl, fmt, ...) do { \
     if ((lvl) <= __libcrunch_debug_level) { \
-      fprintf((strm), "%s: " fmt, exe_basename, ## __VA_ARGS__ );  \
+      fprintf((strm), "%s: " fmt, get_exe_basename(), ## __VA_ARGS__ );  \
     } \
   } while (0)
 

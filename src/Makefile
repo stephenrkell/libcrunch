@@ -60,13 +60,15 @@ dlmalloc.a: dlmalloc.o
 	$(AR) r "$@" $^
 dlmalloc.o: CFLAGS += -DHAVE_MORECORE=0 -DUSE_DL_PREFIX -fPIC
 libcrunch_preload.so: dlmalloc.a
-libcrunch_preload.so: LDFLAGS += -Wl,--whole-archive dlmalloc.a  -Wl,--no-whole-archive \
- -Wl,--defsym,__private_malloc=dlmalloc \
- -Wl,--defsym,__private_calloc=dlcalloc \
- -Wl,--defsym,__private_free=dlfree \
- -Wl,--defsym,__private_realloc=dlrealloc \
- -Wl,--defsym,__private_memalign=dlmemalign \
- -Wl,--defsym,__private_posix_memalign=dlposix_memalign \
+libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
+-Wl,--wrap,dlfree -Wl,--wrap,dlrealloc -Wl,--wrap,dlmemalign -Wl,--wrap,dlposix_memalign \
+-Wl,--whole-archive dlmalloc.a  -Wl,--no-whole-archive \
+ -Wl,--defsym,__private_malloc=__wrap_dlmalloc \
+ -Wl,--defsym,__private_calloc=__wrap_dlcalloc \
+ -Wl,--defsym,__private_free=__wrap_dlfree \
+ -Wl,--defsym,__private_realloc=__wrap_dlrealloc \
+ -Wl,--defsym,__private_memalign=__wrap_dlmemalign \
+ -Wl,--defsym,__private_posix_memalign=__wrap_dlposix_memalign \
  -Wl,--exclude-libs=dlmalloc.a \
  -Bsymbolic # important for _etext in preload hooks
 
