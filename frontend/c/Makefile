@@ -5,7 +5,7 @@ LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
 OCAMLFIND ?= ocamlfind
 CIL_INSTALL ?= $(LIBALLOCS_BASE)/tools/lang/c/cil
 CILLY ?= $(CIL_INSTALL)/bin/cilly
-CIL_TOOLS := trumptr vsimplemem vsimpleaddr crunchbound
+CIL_TOOLS := trumptr vsimplemem vsimpleaddr crunchbound dumpreftypes
 OCAMLFLAGS +=  -package findlib -I $(CIL_INSTALL)/lib/cil
 OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/cilallocs #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
 

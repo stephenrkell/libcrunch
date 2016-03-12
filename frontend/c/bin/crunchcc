@@ -47,8 +47,9 @@ class CrunchCC(AllocsCC):
                 "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
                  "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
-               "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
-            "--dotrumptr"]
+               "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../dumpreftypes/dumpreftypes.cmxs"),  "--dodumpreftypes", \
+               "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"),  "--dotrumptr" \
+            ]
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
         
