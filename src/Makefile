@@ -53,6 +53,8 @@ $(CC_DEPS): .%.d : %.cc
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
 libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size
 
+libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDLIBS += -lz -Wl,--no-as-needed -ldl
+
 vpath dlmalloc.c $(TRAP_SYSCALLS)/src
 # We put dlmalloc in a library so that --exclude-libs=dlmalloc.a will hide its symbols
 # in our output .so, so that they don't override anything in the rest of the program.
@@ -80,11 +82,14 @@ uniqtypes.o: uniqtypes.c
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
+
+libcrunch_preload.so: LDLIBS += $(LIBUNWIND_LDLIBS)
 libcrunch_preload.so: uniqtypes.o libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$+) \
-$(LDFLAGS) -ldl $(LIBUNWIND_LDLIBS) \
+$(LDFLAGS) \
 -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
--Wl,--no-whole-archive -Wl,-Bdynamic 
+-Wl,--no-whole-archive -Wl,-Bdynamic \
+$(LDLIBS)
 
 libcrunch_preload.a: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
 	$(AR) r "$@" $+
