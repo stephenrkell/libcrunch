@@ -90,7 +90,7 @@ class dumpRefTypesVisitor = fun (fl: Cil.file) -> object(self)
        * function def formal or function def local. *)
       match (!refOutChannel, !defOutChannel) with
        (Some (refChan), Some (defChan)) ->
-          if (v.vused v.vglob && not (isAlwaysInline v) && v.vstorage != Static) then
+          if ( (* v.vused *) v.vglob && not (isAlwaysInline v) && v.vstorage != Static) then
               
               (* TODO 1: for reference types, only include things that are "vreferenced"
                  after running Rmtmps.removeUnusedTemps

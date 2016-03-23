@@ -52,7 +52,6 @@ $(CC_DEPS): .%.d : %.cc
 # linked in the fastest possible way.
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
 libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size
-
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDLIBS += -lz -Wl,--no-as-needed -ldl
 
 vpath dlmalloc.c $(TRAP_SYSCALLS)/src

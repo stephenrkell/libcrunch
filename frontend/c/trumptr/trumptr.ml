@@ -198,6 +198,7 @@ let mkCheckInstrsForTargetType
  end
 
 let isGenericPointerType (t : Cil.typ) = 
+    indirectionLevel (Cil.typeSig t) >= 1 &&
     let upts = ultimatePointeeTs (getConcreteType(Cil.typeSig t))
     in
     upts = Cil.typeSig(voidType)
@@ -229,8 +230,8 @@ match t with
 let isLooseGPCOT (t : Cil.typ) = 
     isGPCOT t && (
         (* all generic pointer types are not only GPCOTs, 
-         * but are automagically treated as loose GPCOTs 
-         * (i.e. this behaviour is not opt-in for void** and friends. *)
+         * but are automagically treated as loose GPCOTs unles opted-out
+         * (i.e. this behaviour is opt-out, not opt-in, for void** and friends. *)
         (isGenericPointerType t && not strictVoidpps)
         || 
         (* some named structure types are also GPCOTs *)
@@ -247,11 +248,19 @@ let isLooseGPCOT (t : Cil.typ) =
 
 let tIsIndirectedLooseGPCOT (t : Cil.typ) = 
     isPointerType t
-    && ((
-        isGenericPointerType t && 
-       isLooseGPCOT (penultimatePointeeT t)
-    ) 
-    || isLooseGPCOT (ultimatePointeeT t))
+    && (
+        (
+            isGenericPointerType t && 
+            indirectionLevel (Cil.typeSig t) >= 2 &&
+            (not strictVoidpps)
+        )
+    || 
+        let result = isLooseGPCOT (ultimatePointeeT t)
+        in (if result then
+                (output_string stderr ("type " ^ (typToString t) ^ ", ultimate pointee " ^ (typToString (ultimatePointeeT t)) ^ ", ultimately points to a loose GPCOT\n");
+                result)
+            else result)
+    )
 
 
 class trumPtrExprVisitor = fun enclosingFile -> 
@@ -682,7 +691,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
            * BUT we also have to check that the target degree is not greater than the 
            * source degree, or else do a check. 
            * And then we generalise this to "loose GPCOTs",  *)
-          if ((not strictVoidpps) && (tIsIndirectedLooseGPCOT targetT))
+          if tIsIndirectedLooseGPCOT targetT
           then
             (* If we're (statically) casting away levels of indirection,
              * *and* if the target type is a pointer to GPP,
@@ -758,7 +767,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 (* change to a reference to the decl'd tmp var *)
                 ChangeTo ( CastE(targetT, subex) )
               end
-          else (* not multiply-indirected void *) begin
+          else (* not multiply-indirected void (or rather, not pointer to loose GPCOT) *) begin
           match targetTs with 
             TSPtr(TSFun(_, _, _, _), _) when sloppyFps -> failwith "impossible sloppyFps failure"   
           | TSPtr(TSBase(TVoid([])), []) (* when tsIsPointer subexTs *) -> DoChildren

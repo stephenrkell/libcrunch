@@ -517,33 +517,6 @@ int __libcrunch_global_init(void)
 	return 0;
 }
 
-static void clear_alloc_site_metadata(const void *alloc_start)
-{
-	/* In cases where heap classification failed, we null out the allocsite 
-	 * to avoid repeated searching. We only do this for non-debug
-	 * builds because it makes debugging a bit harder.
-	 */
-
-	struct insert *ins = lookup_object_info((void*) alloc_start, NULL, NULL, NULL);
-	assert(INSERT_DESCRIBES_OBJECT(ins));
-	/* Update the heap chunk's info to null the alloc site. 
-	 * PROBLEM: we need to make really sure that we're not nulling
-	 * out a redirected (deep) chunk's alloc site. 
-	 * 
-	 * NOTE that we don't want the insert to look like a deep-index
-	 * terminator, so we set the flag.
-	 */
-	if (ins)
-	{
-#ifdef NDEBUG
-		ins->alloc_site_flag = 1;
-		ins->alloc_site = 0;
-#endif
-		assert(INSERT_DESCRIBES_OBJECT(ins));
-		assert(!INSERT_IS_NULL(ins));
-	}
-}
-
 static void check_cache_sanity(struct __libcrunch_cache *cache)
 {
 	__libcrunch_check_cache_sanity(cache);
@@ -689,10 +662,6 @@ int __is_a_internal(const void *obj, const void *arg)
 		&alloc_size_bytes,
 		&alloc_uniqtype,
 		&alloc_site);
-	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
-	{
-		clear_alloc_site_metadata(alloc_start);
-	}
 	
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
 
@@ -841,11 +810,6 @@ int __like_a_internal(const void *obj, const void *arg)
 		&alloc_size_bytes,
 		&alloc_uniqtype, 
 		&alloc_site);
-	
-	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
-	{
-		clear_alloc_site_metadata(alloc_start);
-	}
 	
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
 	
@@ -1004,10 +968,6 @@ int __named_a_internal(const void *obj, const void *arg)
 		&alloc_uniqtype, 
 		&alloc_site);
 	
-	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
-	{
-		clear_alloc_site_metadata(alloc_start);
-	}
 	if (__builtin_expect(err != NULL, 0)) return 1; // we've already counted it
 	
 	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
@@ -1422,11 +1382,6 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 		&alloc_uniqtype, 
 		&alloc_site);
 	
-	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
-	{
-		clear_alloc_site_metadata(alloc_start);
-	}
-	
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
 	
 	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
@@ -1513,7 +1468,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	 * element in the test type is such an array, we skip over any number of
 	 * fields in the object type, until we reach the offset of the end element.  */
 	unsigned i_obj_subobj = 0, i_test_subobj = 0;
-	debug_printf(0, "__loosely_like_a proceeding on subobjects of (test) %s and (object) %s\n",
+	if (test_uniqtype != cur_obj_uniqtype) debug_printf(0, "__loosely_like_a proceeding on subobjects of (test) %s and (object) %s\n",
 		NAME_FOR_UNIQTYPE(test_uniqtype), NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
 	for (; 
 		i_obj_subobj < cur_obj_uniqtype->nmemb && i_test_subobj < test_uniqtype->nmemb; 
@@ -1565,6 +1520,13 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 						generic_ptr_degree
 					)
 				)
+				|| // loose match: signed/unsigned
+				(UNIQTYPE_IS_BASE_TYPE(test_uniqtype->contained[i_test_subobj].ptr)
+				 && UNIQTYPE_IS_BASE_TYPE(cur_obj_uniqtype->contained[i_obj_subobj].ptr)
+				 && 
+				 (((struct uniqtype *) test_uniqtype->contained[i_test_subobj].ptr)->
+				 	contained[0].ptr == ((struct uniqtype *) cur_obj_uniqtype->contained[i_obj_subobj].ptr))
+				)
 		);
 		if (!matches) goto try_deeper;
 	}
@@ -1586,7 +1548,8 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	} while (1);
 	
 loosely_like_a_succeeded:
-	debug_printf(0, "__loosely_like_a succeeded!\n");
+	if (test_uniqtype != alloc_uniqtype) debug_printf(0, "__loosely_like_a succeeded! test type %s, allocation type %s\n",
+		NAME_FOR_UNIQTYPE(test_uniqtype), NAME_FOR_UNIQTYPE(alloc_uniqtype));
 	++__libcrunch_succeeded;
 	return 1;
 	
@@ -1837,10 +1800,6 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 			&value_alloc_uniqtype,
 			&value_alloc_site);
 
-		if (__builtin_expect(value_err == &__liballocs_err_unrecognised_alloc_site, 0))
-		{
-			clear_alloc_site_metadata(value_alloc_start);
-		}
 		if (__builtin_expect(value_err != NULL, 0)) return 1; // liballocs has already counted this abort
 		
 		signed value_target_offset_within_uniqtype = (char*) value - (char*) value_alloc_start;
@@ -2092,15 +2051,6 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	
 	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
 	{
-		/* Don't waste time trying to look up this alloc site again. 
-		 * This will only actually take effect if we compile with DNDEBUG,
-		 * since it reduces our debugging ability somewhat.
-		 * FIXME: this is an abstraction violation w.r.t. liballocs,
-		 * since it makes other clients' calls to get_alloc_site fail.
-		 * Better to taint the alloc site somehow, so we can skip the
-		 * check. */
-		clear_alloc_site_metadata(alloc_start);
-		
 		if (!(alloc_start && alloc_size_bytes)) goto abort_returning_max_bounds;
 	}
 	else if (__builtin_expect(err != NULL, 0))
