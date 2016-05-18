@@ -1,6 +1,12 @@
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 
-LIBALLOCS_BASE ?= $(realpath ../../../liballocs.hg)
+SRCROOT := $(realpath $(dir $(THIS_MAKEFILE))/../..)
+include $(SRCROOT)/config.mk
+
+CXXFLAGS += -I$(SRCROOT)/include
+
+LIBALLOCS ?= $(SRCROOT)/../liballocs
+LIBALLOCS_BASE ?= $(realpath $(LIBALLOCS))
 
 OCAMLFIND ?= ocamlfind
 CIL_INSTALL ?= $(LIBALLOCS_BASE)/tools/lang/c/cil

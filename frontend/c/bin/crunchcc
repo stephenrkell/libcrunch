@@ -5,8 +5,14 @@
 # Compiler wrapper for libcrunch.
 import os, sys, re, subprocess, tempfile
 
-# HACK
-liballocs_base = os.path.realpath(os.path.dirname(__file__) + "/../../../../liballocs.hg")
+# to find liballocs, we can either
+# - use the python path
+# - use ../liballocs from the toplevel dir
+# - use the LIBALLOCS env var
+if "LIBALLOCS" in os.environ:
+    liballocs_base = os.path.realpath(os.environ["LIBALLOCS"])
+else:
+    liballocs_base = os.path.realpath(os.path.dirname(sys.argv[0]) + "/../../../../liballocs/")
 sys.path.append(liballocs_base + "/tools")
 sys.path.append(liballocs_base + "/tools/lang/c/lib")
 from allocscc import AllocsCC

@@ -8,7 +8,7 @@ export CFLAGS
 
 UNIQTYPES_BASE ?= /usr/lib/allocsites
 ALLOCSITES_BASE ?= /usr/lib/allocsites
-LIBALLOCS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../liballocs.hg)
+LIBALLOCS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../liballocs)
 
 export UNIQTYPES_BASE
 export ALLOCSITES_BASE
@@ -48,24 +48,15 @@ endif
 
 cases := $(filter-out checks.sh,$(wildcard [-a-z]*))
 
-ifneq ($(LIBCRUNCH_USE_PRELOAD),no)
 LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/../lib/libcrunch_preload.so)
-else
-LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/../lib/libcrunch.so)
-endif
+
 ifneq ($(MAKECMDGOALS),clean)
 ifeq ($(wildcard $(LIBCRUNCH)),)
         $(error You must first build libcrunch{.so,_preload.so} and link them from ../lib)
 endif
 endif
 
-ifneq ($(LIBCRUNCH_USE_PRELOAD),no)
 export PRELOAD := "$(LIBCRUNCH)"
-else
-LIBHEAP_INDEX_HOOKS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../libpmirror.hg/lib/libheap_index_fast_hooks.so)
-# FIXME: do we really need to preload libcrunch in this case?
-export PRELOAD := "$(LIBHEAP_INDEX_HOOKS) $(LIBCRUNCH)"
-endif
 
 INCLUDE_MK_INC = `if test -e $(dir $(realpath $(THIS_MAKEFILE)))/$*/mk.inc; then /bin/echo -f mk.inc; else true; fi`
 

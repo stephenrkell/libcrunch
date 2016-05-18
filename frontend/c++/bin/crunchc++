@@ -14,8 +14,10 @@
 
 import os, sys, re, subprocess, tempfile
 
-# HACK
-sys.path.append(os.path.realpath(os.path.dirname(sys.argv[0]) + "/../../../../liballocs.hg/tools/lang/c++/lib"))
+if "LIBALLOCS" in os.environ:
+    sys.path.append(os.path.realpath(os.environ["LIBALLOCS"]) + "/tools/lang/c++/lib")
+else:
+    sys.path.append(os.path.realpath(os.path.dirname(sys.argv[0]) + "/../../../../liballocs/tools/lang/c++/lib"))
 from allocscxx import AllocsCxx
 
 class CrunchCxx(AllocsCxx):

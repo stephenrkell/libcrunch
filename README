@@ -4,7 +4,28 @@ Currently that means mostly C, although languages are fairly pluggable
 in the design.
 
 It is based on my other project, liballocs, which you should build (and
-probably understand) first.
+probably understand) first. Nevertheless, for the impatient, if you're
+on a Debian-based x86-64 GNU/Linux machine with gcc 4.9 or later, you 
+can try the following.
+
+$ apt-get install libelf-dev autoconf automake libtool pkg-config \
+    autoconf-archive libdwarf-dev ocaml openjdk-7-jre libunwind-dev \
+    libboost-{iostreams,regex,serialization,filesystem}1.55-dev
+$ git clone https://github.com/stephenrkell/liballocs.git
+$ cd liballocs
+$ git submodule init
+$ git submodule update
+$ make -C contrib -jn         # for your favourite n
+$ ./autogen.sh
+$ . contrib/env.sh 
+$ ./configure --prefix=/usr/local
+$ make -jn                    # for your favourite n
+$ cd ..
+$ export LIBALLOCS=`pwd`/liballocs
+$ git clone https://github.com/stephenrkell/libcrunch.git
+$ cd libcrunch
+$ make -jn                    # for your favourite n
+$ make -C test
 
 Liballocs models programs during execution in terms of /typed
 allocations/. It reifies data types, providing fast access to
@@ -35,8 +56,27 @@ execution by about 5--35% (more if you turn on bounds checking, though).
 You can also run instrumented code without the library loaded, when the
 slowdown is usually negligible (again, less so for bounds checks).
 
+An incomplete and rather old TODO follows.
 
-Current limitations of metadata
+
+Usability quirks 
+
+- requires manual identification of alloc functions (or rather,
+liballocs does)
+
+- check-on-cast is too eager for some C programming styles
+    ("trap pointer" mechanism in the works)
+    
+- higher-order (indirect, pointer-to-function) checks are slightly 
+    conservative
+    (i.e. a few false positives are possible in these cases)
+
+- plain crunchcc assumes memory-correct execution and checks only
+    types (use crunchxcc for bounds checking too; 
+    temporal correctness is assumed, i.e. use-after-free can break us)
+
+
+Limitations of metadata
 
 - no metadata (debug info) for actual parameters passed in varargs
      (need to maintain a shadow stack for this; am working on it)
@@ -49,22 +89,5 @@ Current limitations of metadata
 
 Current performance quirks
 
-- heap_index's trailer implementation causes page-sized clownshoes
+- liballocs's trailer-based heap index implementation causes clownshoes
 
-
-Current usability quirks 
-
-- requires manual identification of alloc functions (or rather,
-liballocs does)
-
-
-Current completeness quirks
-
-- assumes memory-correct execution
-
-- check-on-cast is too eager for some C programming styles
-    ("trap pointer" mechanism in the works)
-    
-- higher-order (indirect, pointer-to-function) checks are slightly 
-    conservative
-    (i.e. a few false positives are possible in these cases)

@@ -1,6 +1,10 @@
 THIS_MAKEFILE := $(realpath $(lastword $(MAKEFILE_LIST)))
 SRCROOT := $(dir $(THIS_MAKEFILE))../
-TRAP_SYSCALLS ?= $(HOME)/work/devel/trap-syscalls.hg
+TRAP_SYSCALLS ?= $(realpath $(SRCROOT)/../trap-syscalls)
+LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
+
+CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap
+LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
 
 CFLAGS += -std=gnu99 -g -fPIC -I../include
 # debugging version

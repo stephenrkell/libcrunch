@@ -1,6 +1,7 @@
 DEPS := 
 
-ALLOCSITES ?= ../../../../liballocs.hg/tools/
+LIBALLOCS ?= ../../../../liballocs/
+ALLOCSITES ?= $(LIBALLOCS)/tools/
 
 CXXFLAGS += -std=c++0x -g -O0 -I$(ALLOCSITES)
 CXXFLAGS += -Wno-deprecated-declarations # while we're using old libdwarfpp -- FIXME
