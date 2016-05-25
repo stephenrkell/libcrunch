@@ -1,7 +1,7 @@
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 SRCROOT := $(dir $(THIS_MAKEFILE))
 
-include local-config.mk
+-include local-config.mk
 
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
 LIBCXXGEN ?= $(LIBALLOCS)/contrib/libcxxgen
