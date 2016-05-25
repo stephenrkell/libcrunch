@@ -40,6 +40,9 @@ LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m`
 CFLAGS += -DUSE_REAL_LIBUNWIND
 endif
 
+# until binutils bug 13600 is fixed, gold is the linker we need
+LDFLAGS += -Wl,-fuse-ld=gold
+
 C_DEPS := $(patsubst %.c,.%.d,$(C_SRC))
 CC_DEPS := $(patsubst %.cc,.%.d,$(CC_SRC))
 

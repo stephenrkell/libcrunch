@@ -3,13 +3,23 @@ wrapper, etc.), for fast dynamic type checking in unsafe languages.
 Currently that means mostly C, although languages are fairly pluggable
 in the design.
 
-It is based on my other project, liballocs, which you should build (and
-probably understand) first. Nevertheless, for the impatient, if you're
-on a Debian-based x86-64 GNU/Linux machine with gcc 4.9 or later, you 
-can try the following.
+"Dynamic type checking" mostly means checking pointer casts. There is
+limited checking of other things like va_arg and union use; more to add
+in due course. More recently, libcrunch has acquired a bounds checker
+which promises to be faster and more usable than SoftBound. I'm hoping
+it will become the first really practical on-by-default bounds checker,
+but time will tell... it is still fairly immature and unevaluated. There
+is no temporal memory checking at present, but a GC is on the cards.
+
+All this is build on top of my other project, liballocs, which you
+should build (and probably understand) first. Nevertheless, for the
+impatient, if you're on a Debian-based x86-64 GNU/Linux machine with gcc
+4.9 or later, you can try the following, which is tested on Debian
+jessie.
 
 $ apt-get install libelf-dev autoconf automake libtool pkg-config \
-    autoconf-archive libdwarf-dev ocaml openjdk-7-jre libunwind-dev \
+    autoconf-archive libdwarf-dev ocaml openjdk-7-jre-headless \
+    libunwind-dev \
     libboost-{iostreams,regex,serialization,filesystem}1.55-dev
 $ git clone https://github.com/stephenrkell/liballocs.git
 $ cd liballocs
@@ -25,7 +35,9 @@ $ export LIBALLOCS=`pwd`/liballocs
 $ git clone https://github.com/stephenrkell/libcrunch.git
 $ cd libcrunch
 $ make -jn                    # for your favourite n
-$ make -C test
+$ make -C test                # if this succeeds, be amazed
+$ frontend/c/bin/crunchcc -o hello /path/to/hello.c  # your code here
+$ LD_PRELOAD=`pwd`/lib/libcrunch_preload.so ./hello  # marvel!
 
 Liballocs models programs during execution in terms of /typed
 allocations/. It reifies data types, providing fast access to
@@ -44,10 +56,9 @@ libcrunch slightly narrows standard C, such that all live, allocated
 storage has a well-defined type at any moment (cf. C99 "effective type"
 which is more liberal).
 
-Also, there's a new bounds checker in the works (see crunchbcc,
-crunchbound.ml) that avoids a lot of false positives common to other
-bounds checkers. I'm hoping it will become the first really practical
-on-by-default bounds checker, but time will tell.
+Instrumentation is currently done with CIL. There is also a clang
+front-end which is less mature (lacks a bounds checker) but will appear
+as a submodule in this tree shortly.
 
 Below there is a slightly out-of-date list of some of the known
 limitations. More positively, it really works (if you can build it),
@@ -56,7 +67,6 @@ execution by about 5--35% (more if you turn on bounds checking, though).
 You can also run instrumented code without the library loaded, when the
 slowdown is usually negligible (again, less so for bounds checks).
 
-An incomplete and rather old TODO follows.
 
 
 Usability quirks 
