@@ -15,9 +15,11 @@
 import os, sys, re, subprocess, tempfile
 
 if "LIBALLOCS" in os.environ:
-    sys.path.append(os.path.realpath(os.environ["LIBALLOCS"]) + "/tools/lang/c++/lib")
+    liballocs_base = os.path.realpath(os.environ["LIBALLOCS"])
 else:
-    sys.path.append(os.path.realpath(os.path.dirname(sys.argv[0]) + "/../../../../liballocs/tools/lang/c++/lib"))
+    liballocs_base = os.path.realpath(os.path.dirname(sys.argv[0]) + "/../../../../liballocs/")
+sys.path.append(liballocs_base + "/tools")
+sys.path.append(liballocs_base + "/tools/lang/c++/lib")
 from allocscxx import AllocsCxx
 
 class CrunchCxx(AllocsCxx):
@@ -38,6 +40,12 @@ class CrunchCxx(AllocsCxx):
      
     def getLinkPath(self):
         return os.path.dirname(__file__) + "/../../../lib"
+
+    def getLibNameStem(self):
+        return "crunch"
+    
+    def getDummyWeakObjectNameStem(self):
+        return "stubs"
 
     def getUnderlyingCompilerCommand(self, sourceFiles):
         return AllocsCxx.getUnderlyingCompilerCommand(self, sourceFiles) + ["-Wold-style-cast", \
