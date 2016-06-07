@@ -87,3 +87,6 @@ test/noquery-bounds-nofetch/noquery-bounds-nofetch
 test/trap-bounds-oneprev/fail-bounds-oneprev
 test/trap-bounds-oneprev/trap-bounds-oneprev
 test/trap-bounds-toint/trap-bounds-toint
+*.i.deftypes
+*.i.reftypes
+test/*/check-stamp
