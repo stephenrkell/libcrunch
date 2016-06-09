@@ -5,7 +5,7 @@ src:
 	$(MAKE) -C src
 
 .PHONY: frontend
-frontend:
+frontend: lib
 	$(MAKE) -C frontend
 
 .PHONY: lib
