@@ -63,6 +63,10 @@ static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, vo
 	{
 		// okay -- it's a kernel thingy
 	}
+	else if (is_in_range(0x300000000000ul, 0x4ffffffffffful, ent->first, ent->second - 1))
+	{
+		// we assume the 3s and 4s are controlled by us -- HMM
+	}
 	else abort();
 }
 /* This is a constructor, since it's important that it happens before
