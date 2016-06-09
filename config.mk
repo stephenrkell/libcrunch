@@ -18,5 +18,5 @@ export CXXFLAGS += \
 export LDFLAGS += \
 -L$(LIBCXXGEN)/lib -Wl,-rpath,$(LIBCXXGEN)/lib \
 -L$(LIBDWARFPP)/lib -Wl,-rpath,$(LIBDWARFPP)/lib \
--L$(LIBSRK31CXX)/lib) -Wl,-rpath,$(LIBSRK31CXX)/lib \
+-L$(LIBSRK31CXX)/lib -Wl,-rpath,$(LIBSRK31CXX)/lib \
 -L$(LIBCXXFILENO)/lib -Wl,-rpath,$(LIBCXXFILENO)/lib
