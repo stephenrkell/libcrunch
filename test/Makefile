@@ -64,7 +64,9 @@ default: checkall
 
 checkall: $(patsubst %,checkrun-%,$(cases))
 .PRECIOUS: $(patsubst %,%/check-stamp,$(cases))
+ifeq ($(realpath .),$(realpath $(dir $(THIS_MAKEFILE))))
 $(warning cases are $(cases))
+endif
 
 RERUN_TESTS_ON_CHANGE := $(LIBCRUNCH) $(shell find $(dir $(THIS_MAKEFILE))/../frontend | grep '\.cmxs$$' )
 
