@@ -33,6 +33,9 @@ $ ./configure --prefix=/usr/local
 $ make -jn                    # for your favourite n
 $ cd ..
 $ export LIBALLOCS=`pwd`/liballocs
+$ sudo mkdir /usr/lib/allocsites # metadata will live here
+$ sudo chown root:staff /usr/lib/allocsites
+$ sudo chmod g+w /usr/lib/allocsites
 $ git clone https://github.com/stephenrkell/libcrunch.git
 $ cd libcrunch
 $ make -jn                    # for your favourite n
