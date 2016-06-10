@@ -36,6 +36,8 @@ $ export LIBALLOCS=`pwd`/liballocs
 $ sudo mkdir /usr/lib/allocsites # metadata will live here
 $ sudo chown root:staff /usr/lib/allocsites
 $ sudo chmod g+w /usr/lib/allocsites
+$ make -f "$LIBALLOCS"/tools/Makefile.allocsites \
+  /usr/lib/allocsites$( readlink -f /lib/x86_64-linux-gnu/libc.so.6 )-types.so
 $ git clone https://github.com/stephenrkell/libcrunch.git
 $ cd libcrunch
 $ make -jn                    # for your favourite n
