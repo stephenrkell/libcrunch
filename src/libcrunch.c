@@ -207,18 +207,6 @@ void __libcrunch_main_init(void)
 	done_init = 1;
 }
 
-const struct uniqtype *__libcrunch_uniqtype_void; // remember the location of the void uniqtype
-const struct uniqtype *__libcrunch_uniqtype_signed_char;
-const struct uniqtype *__libcrunch_uniqtype_unsigned_char;
-#define LOOKUP_CALLER_TYPE(frag, caller) /* FIXME: use caller not RTLD_DEFAULT -- use interval tree? */ \
-    ( \
-		(__libcrunch_uniqtype_ ## frag) ? __libcrunch_uniqtype_ ## frag : \
-		(__libcrunch_uniqtype_ ## frag = dlsym(RTLD_DEFAULT, "__uniqtype__" #frag), \
-			assert(__libcrunch_uniqtype_ ## frag), \
-			__libcrunch_uniqtype_ ## frag \
-		) \
-	)
-
 /* counters */
 unsigned long __libcrunch_begun;
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
@@ -413,6 +401,11 @@ static void early_init(void)
 	// print a summary when the program exits
 	atexit(print_exit_summary);
 }
+
+static struct uniqtype *pointer_to___uniqtype__void;
+static struct uniqtype *pointer_to___uniqtype__signed_char;
+static struct uniqtype *pointer_to___uniqtype__unsigned_char;
+
 int __libcrunch_global_init(void)
 {
 	if (__libcrunch_is_initialized) return 0; // we are okay
@@ -424,8 +417,25 @@ int __libcrunch_global_init(void)
 	
 	// we must have initialized liballocs
 	__liballocs_ensure_init();
-
-
+	
+	/* Snarf the addresses of certain uniqtypes, if they're present.
+	 * Because the Unix linker is broken (see notes below on uniquing),
+	 * we can't have uniqueness of anything defined in a preload,
+	 * and from a preload we also can't bind to anything defined elsewhere.
+	 * So we use the dynamic linker to work around this mess. */
+	pointer_to___uniqtype__void = dlsym(RTLD_DEFAULT, "__uniqtype__void");
+	pointer_to___uniqtype__signed_char = dlsym(RTLD_DEFAULT, "__uniqtype__signed_char$8");
+	pointer_to___uniqtype__unsigned_char = dlsym(RTLD_DEFAULT, "__uniqtype__unsigned_char$8");
+	if (!pointer_to___uniqtype__void || !pointer_to___uniqtype__signed_char
+			|| !pointer_to___uniqtype__unsigned_char)
+	{
+		debug_printf(0, "looks uninstrumented!");
+		abort(); 
+		/* This breaks the case of loading instrumented shared libraries
+		 * into an uninstrumented executable with preload active. It *can* 
+		 * be unbroken, with a little effort. */
+	}
+	
 	/* We always include "signed char" in the lazy heap types. (FIXME: this is a 
 	 * C-specificity we'd rather not have here, but live with it for now.
 	 * Perhaps the best way is to have "uninterpreted_sbyte" and make signed_char
@@ -869,7 +879,6 @@ int __like_a_internal(const void *obj, const void *arg)
 		/* Does the test type have a signedness complement matching the cur obj type? */
 		if (test_uniqtype->contained[0].ptr == cur_obj_uniqtype) goto like_a_succeeded;
 	}
-			
 	
 	/* Okay, we can start the like-a test: for each element in the test type, 
 	 * do we have a type-equivalent in the object type?
@@ -884,9 +893,9 @@ int __like_a_internal(const void *obj, const void *arg)
 	{
 		if (__builtin_expect(test_uniqtype->contained[i_test_subobj].ptr->is_array
 			&& (test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
-					== LOOKUP_CALLER_TYPE(signed_char, caller_address)
+					== pointer_to___uniqtype__signed_char
 			|| test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
-					== LOOKUP_CALLER_TYPE(unsigned_char, caller_address)), 0))
+					== pointer_to___uniqtype__unsigned_char), 0))
 		{
 			// we will skip this field in the test type
 			signed target_off =
@@ -1188,11 +1197,24 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 					/* HACK: a little bit of C-specifity is creeping in here.
 					 * FIXME: adjust this to reflect sloppy generic-pointer-pointer matches! 
 					      (only if LIBCRUNCH_STRICT_GENERIC_POINTERS not set) */
+					/* HACK: referencing uniqtypes directly from libcrunch is problematic
+					 * for COMDAT / section group / uniqing reasons. Ideally we wouldn't
+					 * do this. To prevent non-uniquing, we need to avoid linking
+					 * uniqtypes into the preload .so. But we can't rely on any particular
+					 * uniqtypes being in the executable; and if they're in a library
+					 * won't let us bind to them from the preload library (whether the
+					 * library is linked at startup or later, as it happens).  One workaround:
+					 * use the _nonshared.a hack for -lcrunch_stubs too, so that all 
+					 * libcrunch-enabled executables necessarily have __uniqtype__void
+					 * and __uniqtype__signed_char in the executable.
+					 * ARGH, but we still can't bind to these from the preload lib.
+					 * (That's slightly surprising semantics, but it's what I observe.)
+					 * We have to use dynamic linking. */
 					#define would_always_succeed(from, to) \
 						( \
 							!UNIQTYPE_IS_POINTER_TYPE((to)) \
-						||  (UNIQTYPE_POINTEE_TYPE((to)) == &__uniqtype__void) \
-						||  (UNIQTYPE_POINTEE_TYPE((to)) == &__uniqtype__signed_char) \
+						||  (UNIQTYPE_POINTEE_TYPE((to)) == pointer_to___uniqtype__void) \
+						||  (UNIQTYPE_POINTEE_TYPE((to)) == pointer_to___uniqtype__signed_char) \
 						||  (UNIQTYPE_IS_POINTER_TYPE((from)) && \
 							__liballocs_find_matching_subobject( \
 							/* target_offset_within_uniqtype */ 0, \
@@ -1306,9 +1328,9 @@ static _Bool pointer_degree_and_ultimate_pointee_type(struct uniqtype *t, int *o
 
 static _Bool is_generic_ultimate_pointee(struct uniqtype *ultimate_pointee_type)
 {
-	return ultimate_pointee_type == &__uniqtype__void 
-		|| ultimate_pointee_type == &__uniqtype__signed_char
-		|| ultimate_pointee_type == &__uniqtype__unsigned_char;
+	return ultimate_pointee_type == pointer_to___uniqtype__void 
+		|| ultimate_pointee_type == pointer_to___uniqtype__signed_char
+		|| ultimate_pointee_type == pointer_to___uniqtype__unsigned_char;
 }
 
 static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d)
@@ -1480,9 +1502,9 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 		
 		if (__builtin_expect(test_uniqtype->contained[i_test_subobj].ptr->is_array
 			&& (test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
-					== LOOKUP_CALLER_TYPE(signed_char, caller_address)
+					== pointer_to___uniqtype__signed_char
 			|| test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
-					== LOOKUP_CALLER_TYPE(unsigned_char, caller_address)), 0))
+					== pointer_to___uniqtype__unsigned_char), 0))
 		{
 			// we will skip this field in the test type
 			signed target_off =
@@ -2063,11 +2085,11 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	if (alloc_start && alloc_size_bytes && !alloc_uniqtype)
 	{
 		/* Pretend it's a char allocation */
-		alloc_uniqtype = &__uniqtype__signed_char;
+		alloc_uniqtype = pointer_to___uniqtype__signed_char;
 	}
 	
-	if (t == &__uniqtype__signed_char
-			|| t == &__uniqtype__unsigned_char)
+	if (t == pointer_to___uniqtype__signed_char
+			|| t == pointer_to___uniqtype__unsigned_char)
 	{
 		goto return_alloc_bounds; // FIXME: this is C-specific
 	}

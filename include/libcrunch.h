@@ -26,22 +26,6 @@ extern unsigned long __libcrunch_fetch_bounds_called __attribute__((weak));
 extern unsigned long __libcrunch_fetch_bounds_missed_cache __attribute__((weak));
 extern unsigned long __libcrunch_primary_secondary_transitions __attribute__((weak));
 
-/* Uniqtypes for signed_char and unsigned_char.
- * 
- * CARE: we need to make sure that these *are* present in the output binary.
- * If we use them and they're weak, *and* they are not defined (whether in 
- * liballocs or the client program that includes this), they will get 'defined'
- * to zero. This is BAD because if we later load a -types object that references
- * one of them, it will get a null pointer instead of a real object address.
- * 
- * The way to solve this is the way we normally do: link-used-types! 
- * Actually liballocs doesn't need these guys, but libcrunch does. So we run
- * link-used-types on libcrunch.o., after building it. Heh.
- */
-extern struct uniqtype __uniqtype__signed_char/* __attribute__((weak)) */;
-extern struct uniqtype __uniqtype__unsigned_char/* __attribute__((weak)) */;
-extern struct uniqtype __uniqtype__int/* __attribute__((weak))*/;
-
 int __libcrunch_global_init(void) __attribute__((weak));
 // declare as const void *-returning, to simplify trumptr
 const void *__libcrunch_typestr_to_uniqtype(const char *typestr) __attribute__((weak));

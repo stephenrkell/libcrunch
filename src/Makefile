@@ -80,17 +80,13 @@ libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
  -Wl,--exclude-libs=dlmalloc.a \
  -Bsymbolic # important for _etext in preload hooks
 
-uniqtypes.o: uniqtypes.c
-	$(CC) -o "$@" $(filter-out -flto,$(CFLAGS)) -c "$<" && \
-	$(LIBALLOCS)/tools/lang/c/bin/link-used-types "$@" || (rm -f "$@"; false)
-
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
 
 libcrunch_preload.so: LDLIBS += $(LIBUNWIND_LDLIBS)
-libcrunch_preload.so: uniqtypes.o libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
+libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$+) \
 $(LDFLAGS) \
 -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
