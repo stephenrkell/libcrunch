@@ -93,20 +93,26 @@ static int match_typename_cb(struct uniqtype *t, void *ignored)
 	return 0; // keep going
 }
 
-void __libcrunch_scan_lazy_typenames(void *typelib_handle)
+void __libcrunch_scan_lazy_typenames(void *ignored)
 {
-	__liballocs_iterate_types(typelib_handle, match_typename_cb, NULL);
+	/* __liballocs_iterate_types(typelib_handle, match_typename_cb, NULL); */
 
-	// for (unsigned i = 0; i < lazy_heap_types_count; ++i)
-	// {
-	// 	if (lazy_heap_typenames[i] && !lazy_heap_types[i])
-	// 	{
-	// 		// look up 
-	// 		const void *u = typestr_to_uniqtype_from_lib(typelib_handle, lazy_heap_typenames[i]);
-	// 		// if we found it, install it
-	// 		if (u) lazy_heap_types[i] = (struct uniqtype *) u;
-	//	}
-	// }
+	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
+	{
+		if (lazy_heap_typenames[i] && !lazy_heap_types[i])
+		{
+			// build the uniqtype name
+			char buf[4096];
+			char *pos = &buf[0];
+			strcpy(buf, "__uniqtype__"); // use the codeless version. FIXME: what if that's not enough?
+			strncat(buf, lazy_heap_typenames[i], sizeof buf - sizeof "__uniqtype__");
+			buf[sizeof buf - 1] = '\0';
+			// look up in global namespace
+			const void *u = dlsym(RTLD_DEFAULT, buf);
+			// if we found it, install it
+			if (u) lazy_heap_types[i] = (struct uniqtype *) u;
+		}
+	}
 }
 
 static ElfW(Dyn) *get_dynamic_section(void *handle)
@@ -454,33 +460,34 @@ int __libcrunch_global_init(void)
 	lazy_heap_types = calloc(upper_bound, sizeof (struct uniqtype *));
 
 	// the first entry is always signed char
-	lazy_heap_typenames[0] = "signed char";
+	lazy_heap_typenames[0] = "signed_char$8";
 	if (lazy_heap_types_str)
 	{
 		fill_separated_words(&lazy_heap_typenames[1], lazy_heap_types_str, ' ',
 				upper_bound - 1);
 	}
 	
-	/* We have to scan for lazy heap types *in link order*, so that we see
-	 * the first linked definition of any type that is multiply-defined.
-	 * Do a scan now; we also scan when loading a types object, and when loading
-	 * a user-dlopen()'d object. 
-	 * 
-	 * We don't use dl_iterate_phdr because it doesn't give us the link_map * itself. 
-	 * Instead, walk the link map directly, like a debugger would
-	 *                                           (like I always knew somebody should). */
-	// grab the executable's end address
-	dlerror();
-	void *executable_handle = dlopen(NULL, RTLD_NOW | RTLD_NOLOAD);
-	assert(executable_handle != NULL);
-	void *exec_dynamic = ((struct link_map *) executable_handle)->l_ld;
-	assert(exec_dynamic != NULL);
-	ElfW(Dyn) *dt_debug = get_dynamic_entry_from_section(exec_dynamic, DT_DEBUG);
-	struct r_debug *r_debug = (struct r_debug *) dt_debug->d_un.d_ptr;
-	for (struct link_map *l = r_debug->r_map; l; l = l->l_next)
-	{
-		__libcrunch_scan_lazy_typenames(l);
-	}
+// 	/* We have to scan for lazy heap types *in link order*, so that we see
+// 	 * the first linked definition of any type that is multiply-defined.
+// 	 * Do a scan now; we also scan when loading a types object, and when loading
+// 	 * a user-dlopen()'d object. 
+// 	 * 
+// 	 * We don't use dl_iterate_phdr because it doesn't give us the link_map * itself. 
+// 	 * Instead, walk the link map directly, like a debugger would
+// 	 *                                           (like I always knew somebody should). */
+// 	// grab the executable's end address
+// 	dlerror();
+// 	void *executable_handle = dlopen(NULL, RTLD_NOW | RTLD_NOLOAD);
+// 	assert(executable_handle != NULL);
+// 	void *exec_dynamic = ((struct link_map *) executable_handle)->l_ld;
+// 	assert(exec_dynamic != NULL);
+// 	ElfW(Dyn) *dt_debug = get_dynamic_entry_from_section(exec_dynamic, DT_DEBUG);
+// 	struct r_debug *r_debug = (struct r_debug *) dt_debug->d_un.d_ptr;
+// 	for (struct link_map *l = r_debug->r_map; l; l = l->l_next)
+// 	{
+// 		
+// 	}
+	__libcrunch_scan_lazy_typenames(NULL);
 	
 	/* Load the suppression list from LIBCRUNCH_SUPPRESS. It's a space-separated
 	 * list of triples <test-type-pat, testing-function-pat, alloc-type-pat>
@@ -727,7 +734,7 @@ int __is_a_internal(const void *obj, const void *arg)
 			&& is_lazy_uniqtype(alloc_uniqtype)
 			&& !__currently_allocating, 0))
 	{
-		struct insert *ins = lookup_object_info(obj, NULL, NULL, NULL);
+		struct insert *ins = __liballocs_get_insert(obj);
 		assert(ins);
 		if (STORAGE_CONTRACT_IS_LOOSE(ins, alloc_site))
 		{
@@ -1383,6 +1390,29 @@ static _Bool is_generic_pointer_type(struct uniqtype *t)
 	return is_generic_pointer_type_of_degree_at_least(t, 1);
 }
 
+static void
+reinstate_looseness_if_necessary(
+    const void *alloc_start, const void *alloc_site,
+    struct uniqtype *alloc_uniqtype
+)
+{
+	/* Unlike other checks, we want to preserve looseness of the target block's 
+	 * type, if it's a pointer type. So set the loose flag if necessary. */
+	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) 
+			&& alloc_site != NULL
+			&& UNIQTYPE_IS_POINTER_TYPE(alloc_uniqtype))
+	{
+		struct insert *ins = __liballocs_get_insert(alloc_start);
+		//	(void*) alloc_start, malloc_usable_size((void*) alloc_start)
+		//);
+		if (ins->alloc_site_flag)
+		{
+			assert(0 == ins->alloc_site & 0x1ul);
+			ins->alloc_site |= 0x1ul;
+		}
+	}
+}
+
 int __loosely_like_a_internal(const void *obj, const void *arg)
 {
 	/* We might not be initialized yet (recall that __libcrunch_global_init is 
@@ -1405,6 +1435,9 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 		&alloc_site);
 	
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
+	
+	/* HACK */
+	reinstate_looseness_if_necessary(alloc_start, alloc_site, alloc_uniqtype);
 	
 	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
@@ -1637,21 +1670,9 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 	{
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
-	/* Unlike other checks, we want to preserve looseness of the target block's 
-	 * type, if it's a pointer type. So set the loose flag if necessary. */
-	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) 
-			&& alloc_site != NULL
-			&& UNIQTYPE_IS_POINTER_TYPE(alloc_uniqtype))
-	{
-		struct insert *ins = __liballocs_insert_for_chunk_and_usable_size(
-			(void*) alloc_start, malloc_usable_size((void*) alloc_start)
-		);
-		if (ins->alloc_site_flag)
-		{
-			assert(0 == ins->alloc_site & 0x1ul);
-			ins->alloc_site |= 0x1ul;
-		}
-	}
+	
+	/* HACK */
+	reinstate_looseness_if_necessary(alloc_start, alloc_site, alloc_uniqtype);
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	
@@ -1834,20 +1855,8 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		{
 			value_target_offset_within_uniqtype %= value_alloc_uniqtype->pos_maxoff;
 		}
-		/* Preserve looseness of value. */
-		if (ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site) 
-				&& value_alloc_site != NULL
-				&& UNIQTYPE_IS_POINTER_TYPE(value_alloc_uniqtype))
-		{
-			struct insert *ins = __liballocs_insert_for_chunk_and_usable_size(
-				(void*) value_alloc_start, malloc_usable_size((void*) value_alloc_start)
-			);
-			if (ins->alloc_site_flag)
-			{
-				assert(0 == ins->alloc_site & 0x1ul);
-				ins->alloc_site |= 0x1ul;
-			}
-		}
+		/* HACK: preserve looseness of value. */
+		reinstate_looseness_if_necessary(value_alloc_start, value_alloc_site, value_alloc_uniqtype);
 
 		/* See if the top-level object matches */
 		struct match_cb_args args = {
@@ -1908,7 +1917,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	 * If the written-to pointer is not generic, then it's that target type.
 	 */
 	// FIXME: use value_alloc_start to avoid another heap lookup
-	struct insert *value_object_info = lookup_object_info(value, NULL, NULL, NULL);
+	struct insert *value_object_info = __liballocs_get_insert(value);
 	/* HACK: until we have a "loose" bit */
 	struct uniqtype *pointee = UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to);
 
@@ -1928,24 +1937,32 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	}
 
 can_hold_pointer_failed:
-	++__libcrunch_failed;
-	debug_printf(0, "Failed check __can_hold_pointer(%p, %p) at %p (%s), "
-			"target pointer is a %s, %ld bytes into a %s%s%s originating at %p, "
-			"value points %ld bytes into a %s%s%s originating at %p\n", 
-		obj, value,
-		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
-		NAME_FOR_UNIQTYPE(type_of_pointer_being_stored_to),
-		(long)((char*) obj - (char*) obj_alloc_start),
-		obj_a ? obj_a->name : "(no allocator)",
-		(ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site) && obj_alloc_uniqtype && obj_alloc_size_bytes > obj_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
-		NAME_FOR_UNIQTYPE(obj_alloc_uniqtype),
-		obj_alloc_site,
-		(long)((char*) value - (char*) value_alloc_start),
-		value_a ? value_a->name : "(no allocator)",
-		(ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site) && value_alloc_uniqtype && value_alloc_size_bytes > value_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
-		NAME_FOR_UNIQTYPE(value_alloc_uniqtype),
-		value_alloc_site
-		);
+	if (__currently_allocating || __currently_freeing)
+	{
+		++__libcrunch_failed_in_alloc;
+		// suppress warning
+	}
+	else
+	{
+		++__libcrunch_failed;
+		debug_printf(0, "Failed check __can_hold_pointer(%p, %p) at %p (%s), "
+				"target pointer is a %s, %ld bytes into a %s%s%s originating at %p, "
+				"value points %ld bytes into a %s%s%s originating at %p\n", 
+			obj, value,
+			__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
+			NAME_FOR_UNIQTYPE(type_of_pointer_being_stored_to),
+			(long)((char*) obj - (char*) obj_alloc_start),
+			obj_a ? obj_a->name : "(no allocator)",
+			(ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site) && obj_alloc_uniqtype && obj_alloc_size_bytes > obj_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
+			NAME_FOR_UNIQTYPE(obj_alloc_uniqtype),
+			obj_alloc_site,
+			(long)((char*) value - (char*) value_alloc_start),
+			value_a ? value_a->name : "(no allocator)",
+			(ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site) && value_alloc_uniqtype && value_alloc_size_bytes > value_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
+			NAME_FOR_UNIQTYPE(value_alloc_uniqtype),
+			value_alloc_site
+			);
+	}
 	return 1; // fail, but program continues
 	
 }
