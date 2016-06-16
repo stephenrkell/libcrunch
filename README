@@ -20,7 +20,7 @@ jessie.
 $ apt-get install libelf-dev autoconf automake libtool pkg-config \
     autoconf-archive libdwarf-dev ocaml ocaml-findlib \
     openjdk-7-jre-headless make git g++ gawk libunwind-dev \
-    libc6-dev-i386 \
+    libc6-dev-i386 zlib1g-dev libc6-dbg gdb \
     libboost-{iostreams,regex,serialization,filesystem}1.55-dev
 $ git clone https://github.com/stephenrkell/liballocs.git
 $ cd liballocs
