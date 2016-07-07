@@ -31,7 +31,7 @@ unsigned long *__libcrunch_bounds_sizes_region_7a;
 static void *first_2a_free;
 static void *first_30_free = (void*) 0x300000000000ul;
 
-static int check_maps_cb(struct proc_entry *ent, char *linebuf, size_t bufsz, void *arg)
+static int check_maps_cb(struct proc_entry *ent, char *linebuf, void *arg)
 {
 	/* Does this mapping fall within our shadowed ranges? This means
 	 *     0000..0555
