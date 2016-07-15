@@ -92,16 +92,29 @@ static int match_typename_cb(struct uniqtype *t, void *ignored)
 	}
 	return 0; // keep going
 }
-
-void __libcrunch_scan_lazy_typenames(void *ignored)
+static int do_nothing_cb(struct uniqtype *t, void *ignored)
 {
-	/* __liballocs_iterate_types(typelib_handle, match_typename_cb, NULL); */
+	return 0; // keep going
+}
 
+void __libcrunch_scan_lazy_typenames(void *typelib_handle)
+{
+	/* NOTE that any object can potentially contain uniqtypes, so "typelib_handle"
+	 * might not actually be the handle of a -types.so. */
+	
+	/* __liballocs_iterate_types is slow. use the hash table instead. */
+	/* __liballocs_iterate_types(typelib_handle, match_typename_cb, NULL); */
+	// HACK: while still hunting performance regressions, waste some time by doing nothing
+	__liballocs_iterate_types(typelib_handle, do_nothing_cb, NULL);
+	
 	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
 	{
 		if (lazy_heap_typenames[i] && !lazy_heap_types[i])
 		{
-			// build the uniqtype name
+			// was: look up using our hacky helper
+			// const void *u = typestr_to_uniqtype_from_lib(typelib_handle, lazy_heap_typenames[i]);
+					
+			// build the uniqtype name and use the power of the symbol hash tables
 			char buf[4096];
 			char *pos = &buf[0];
 			strcpy(buf, "__uniqtype__"); // use the codeless version. FIXME: what if that's not enough?
@@ -476,18 +489,17 @@ int __libcrunch_global_init(void)
 // 	 * Instead, walk the link map directly, like a debugger would
 // 	 *                                           (like I always knew somebody should). */
 // 	// grab the executable's end address
-// 	dlerror();
-// 	void *executable_handle = dlopen(NULL, RTLD_NOW | RTLD_NOLOAD);
-// 	assert(executable_handle != NULL);
-// 	void *exec_dynamic = ((struct link_map *) executable_handle)->l_ld;
-// 	assert(exec_dynamic != NULL);
-// 	ElfW(Dyn) *dt_debug = get_dynamic_entry_from_section(exec_dynamic, DT_DEBUG);
-// 	struct r_debug *r_debug = (struct r_debug *) dt_debug->d_un.d_ptr;
-// 	for (struct link_map *l = r_debug->r_map; l; l = l->l_next)
-// 	{
-// 		
-// 	}
-	__libcrunch_scan_lazy_typenames(NULL);
+	dlerror();
+	void *executable_handle = dlopen(NULL, RTLD_NOW | RTLD_NOLOAD);
+	assert(executable_handle != NULL);
+	void *exec_dynamic = ((struct link_map *) executable_handle)->l_ld;
+	assert(exec_dynamic != NULL);
+	ElfW(Dyn) *dt_debug = get_dynamic_entry_from_section(exec_dynamic, DT_DEBUG);
+	struct r_debug *r_debug = (struct r_debug *) dt_debug->d_un.d_ptr;
+	for (struct link_map *l = r_debug->r_map; l; l = l->l_next)
+	{
+		__libcrunch_scan_lazy_typenames(l);
+	}
 	
 	/* Load the suppression list from LIBCRUNCH_SUPPRESS. It's a space-separated
 	 * list of triples <test-type-pat, testing-function-pat, alloc-type-pat>
