@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <link.h>
+#include <fcntl.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #ifdef USE_REAL_LIBUNWIND
@@ -377,7 +378,7 @@ static void fill_separated_words(const char **out, const char *str, char sep, un
 		if (spacepos - pos > 0) 
 		{
 			assert(n_added < max);
-			out[n_added++] = strndup(pos, spacepos - pos);
+			out[n_added++] = __liballocs_private_strndup(pos, spacepos - pos);
 		}
 
 		pos = spacepos;
@@ -424,6 +425,14 @@ static void early_init(void)
 static struct uniqtype *pointer_to___uniqtype__void;
 static struct uniqtype *pointer_to___uniqtype__signed_char;
 static struct uniqtype *pointer_to___uniqtype__unsigned_char;
+
+static void clear_mem_refbits(void)
+{
+	int fd = open("/proc/self/clear_refs", O_WRONLY);
+	if (fd == -1) abort();
+	write(fd, "1\n", sizeof "1\n" - 1);
+	close(fd);
+}
 
 int __libcrunch_global_init(void)
 {
@@ -538,6 +547,9 @@ int __libcrunch_global_init(void)
 
 	// we need a segv handler to handle uses of trapped pointers
 	install_segv_handler();
+	
+	// for sane memory usage measurement, consider referencedness to start now
+	clear_mem_refbits();
 	
 	__libcrunch_is_initialized = 1;
 
