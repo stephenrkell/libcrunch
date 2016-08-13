@@ -178,6 +178,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
 	if (!cond) __assert_fail(assertion, file, line, func);
 }
 
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr);
+
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void);
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void)
 {
@@ -531,12 +533,12 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 		{
 			// to make sure the error message and suppression handling happen,
 			// we have to call the slow-path code.
-			return __is_a_internal(obj, uniqtype); 
+			return __is_a_internal((const void *) __libcrunch_detrap(obj), uniqtype); 
 		}
 		return 1; //__libcrunch_is_a_cache[i].result;
 	}
 	// miss: __is_a_internal will cache if it's cacheable
-	int ret = __is_a_internal(obj, uniqtype); 
+	int ret = __is_a_internal((const void *) __libcrunch_detrap(obj), uniqtype); 
 	
 	return ret;
 #else
@@ -600,7 +602,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const v
 	/* No need for the char check in the CIL version */ 
 	// now we're really started 
 	__libcrunch_begun++; 
-	int ret = __like_a_internal(obj, uniqtype); 
+	int ret = __like_a_internal((const void *) __libcrunch_detrap(obj), uniqtype); 
 	return ret;
 #else
 	return 1;
@@ -636,7 +638,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __loosely_like_aU )
 	/* No need for the char check in the CIL version */ 
 	// now we're really started 
 	__libcrunch_begun++; 
-	int ret = __loosely_like_a_internal(obj, uniqtype); 
+	int ret = __loosely_like_a_internal((const void *) __libcrunch_detrap(obj), uniqtype); 
 	return ret;
 #else
 	return 1;
@@ -667,7 +669,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const 
 	/* No need for the char check in the CIL version */ 
 	// now we're really started 
 	__libcrunch_begun++;
-	int ret = __named_a_internal(obj, s);
+	int ret = __named_a_internal((const void *) __libcrunch_detrap(obj), s);
 	return ret;
 #else
 	return 1;
@@ -701,7 +703,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_ref
 	}
 	// now we're really started
 	__libcrunch_begun++;
-	int ret = __is_a_function_refining_internal(obj, uniqtype);
+	int ret = __is_a_function_refining_internal((const void *) __libcrunch_detrap(obj), uniqtype);
 	return ret;
 #else
 	return 1;
@@ -722,7 +724,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_pointer_of_d
 	if (d == 0) return 1;
 	
 	__libcrunch_begun++;
-	int ret = __is_a_pointer_of_degree_internal(obj, d);
+	int ret = __is_a_pointer_of_degree_internal((const void *) __libcrunch_detrap(obj), d);
 	return ret;
 #else
 	return 1;
@@ -749,7 +751,7 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)
 		return 1;
 	}
 	__libcrunch_begun++;
-	int ret = __can_hold_pointer_internal(target, value);
+	int ret = __can_hold_pointer_internal((const void *) __libcrunch_detrap(target), value);
 	return ret;
 #else
 	return 1;
@@ -784,6 +786,7 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 	// An experiment with "shift left, shift right" logic.
 	// This means leaving one bit between address bits and the trap bits,
 	// so that we avoid shifting out all the should-be-all-0-or-all-1 bits.
+#ifdef LIBCRUNCH_USING_TRAP_PTRS
 #define WORD_BITS (8 * sizeof (unsigned long))
 	/* Leave the top one non-canonical bit of the pointer present. It will fill in the rest. */
 #define SHIFT_AMOUNT (WORD_BITS - LIBCRUNCH_TRAP_TAG_SHIFT)
@@ -792,6 +795,9 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 	);
 #undef WORD_BITS
 #undef SHIFT_AMOUNT
+#else /* no trap ptrs */
+	return (unsigned long) val;
+#endif
 #else
 	return any_ptr;
 #endif

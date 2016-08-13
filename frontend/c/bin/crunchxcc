@@ -40,6 +40,7 @@ class CrunchXCC(CrunchCC):
             includeArgs = [ \
             "--commPrintLn", \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
+            "-DLIBCRUNCH_USING_TRAP_PTRS", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
