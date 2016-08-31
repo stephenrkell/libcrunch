@@ -1,4 +1,4 @@
-default: src lib frontend test
+default: src lib frontend test kernel
 
 .PHONY: src
 src:
@@ -14,9 +14,14 @@ lib: src
     ln -sf ../src/libcrunch.so ../src/libcrunch_stubs.so ../src/libcrunch_preload.so ../src/libcrunch_preload.a . && \
     ln -sf ../src/libcrunch_stubs.o libcrunch_stubs.o
 
+.PHONY: kernel
+kernel:
+	$(MAKE) -C kernel
+
 .PHONY: clean
 clean:
 	$(MAKE) -C src clean
 	rm -f lib/*.so lib/*.o lib/.??*
 	$(MAKE) -C frontend clean
 	$(MAKE) -C test clean
+	$(MAKE) -C kernel clean
