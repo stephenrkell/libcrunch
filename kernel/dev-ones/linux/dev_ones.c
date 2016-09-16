@@ -71,7 +71,9 @@ static unsigned long __setall_user(void __user *addr, unsigned long size)
 	might_fault();
 	/* no memory constraint because it doesn't change any memory gcc knows
 	   about */
+#ifdef CONFIG_X86_SMAP
 	stac();
+#endif
 	asm volatile(
 			"	   testq  %[size8],%[size8]\n"
 			"	   jz	 4f\n"
@@ -94,7 +96,9 @@ static unsigned long __setall_user(void __user *addr, unsigned long size)
 			: [size8] "=&c"(size), [dst] "=&D" (__d0)
 			: [size1] "r"(size & 7), "[size8]" (size / 8), "[dst]"(addr),
 			  [ones] "r" ((unsigned long) -1), [eight] "r" (8UL));
+#ifdef CONFIG_X86_SMAP
 	clac();
+#endif
 	return size;
 }
 
