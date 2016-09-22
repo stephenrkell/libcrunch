@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <signal.h>
 #ifdef USE_REAL_LIBUNWIND
 #include <libunwind.h>
 #endif
@@ -24,6 +25,14 @@
 #include "relf.h"
 #include "libcrunch.h"
 #include "libcrunch_private.h"
+/* from libsystrap */
+int enumerate_operands(unsigned const char *ins, unsigned const char *end,
+	void *mcontext,
+	void (*saw_operand)(int /*type*/, unsigned int /*bytes*/, uint32_t */*val*/,
+		unsigned long */*p_reg*/, int */*p_mem_seg*/, unsigned long */*p_mem_off*/,
+		void */*arg*/),
+	void *arg
+	);
 
 #define NAME_FOR_UNIQTYPE(u) ((u) ? ((u)->name ?: "(unnamed type)") : "(unknown type)")
 
@@ -386,9 +395,108 @@ static void fill_separated_words(const char **out, const char *str, char sep, un
 	} while (*pos != '\0' && n_added < max);
 }
 
+static void saw_operand_cb(int type, unsigned int bytes, uint32_t *val,
+		unsigned long *p_reg, int *p_mem_seg, unsigned long *p_mem_off,
+		void *arg)
+{
+	void *trap_addr = arg;
+	
+	/* Does the operand's value match the trap addr? */
+	if ((void*) *val == trap_addr)
+	{
+		while (1) sleep(10); // attach gdb to continue coding
+	}
+}
+
+
+static void handle_sigsegv(int signum, siginfo_t *info, void *ucontext_as_void)
+{
+	//unsigned long *frame_base = __builtin_frame_address(0);
+	//struct ibcs_sigframe *p_frame = (struct ibcs_sigframe *) (frame_base + 1);
+	
+	/* If we got a segfault at an address that looks like a trap pointer, then
+	 * we have a few things to do.
+	 * 
+	 * Firstly, if it's trapped with the invalid-type tag, 
+	 * we need to check the trap address against some kind of whitelist. 
+	 * If the whitelist says all-clear, we
+	 * -- decode the instruction to figure out where the trapped pointer was living;
+	 * -- clear the trap bits at that location
+	 * -- resume the program from the trapping instruction.
+	 * Ideally the whitelist would be an index of all memory accesses and their
+	 * uniqtypes. 
+	 * If the whitelist says no, we probably want to print a warning and resume anyway,
+	 * though sometimes we'll want to abort the program instead.
+	 *
+	 * Secondly, if it's [else] a one-past or one-prev pointer, we really
+	 * can't allow this. So print a warning and (possibly) continue.
+	 */
+	
+	void *faulting_address = info->si_addr;
+	struct ucontext *ucontext = (struct ucontext *) ucontext_as_void;
+	void *access_address = (void*) ucontext->uc_mcontext.gregs[REG_RIP];
+	int dummy_ret;
+	char dummy_char;
+#define MSGLIT(s) dummy_ret = write(2, (s), sizeof (s) - 1)
+#define MSGBUF(s) dummy_ret = write(2, (s), strlen((s)))
+#define MSGCHAR(c) do { dummy_char = (c); dummy_ret = write(2, &dummy_char, 1); } while(0)
+#define HEXCHAR(n) (((n) > 9) ? ('a' + ((n)-10)) : '0' + (n))
+#define MSGADDR(a) MSGCHAR(HEXCHAR((a >> 60) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 56) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 52) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 48) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 44) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 40) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 36) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 32) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 28) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 24) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 20) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 16) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 12) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 8) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 4) % 16)); \
+                   MSGCHAR(HEXCHAR((a) % 16));
+	const char *kindstr;
+	switch ((uintptr_t) faulting_address >> LIBCRUNCH_TRAP_TAG_SHIFT)
+	{
+		case 1: // one-past
+			kindstr = "one-past";
+			break;
+		case 2: // one-prev
+			kindstr = "one-before";
+			break;
+		case 3: // invalid
+			kindstr = "type-invalid";
+			break;
+		default: // not one of ours
+			abort();
+	}
+	MSGLIT("*** libcrunch detected program access through a ");
+	MSGBUF(kindstr);
+	MSGLIT(" pointer 0x");
+	MSGADDR((unsigned long) access_address);
+	MSGLIT(" at 0x");
+	MSGADDR((unsigned long) faulting_address);
+	
+	/* How do we make execution continue? Need to decode the instruction
+	 * (to restart with a correct pointer)
+	 * or emulate the access (no need to restart; but slower).
+	 * We can ask libsystrap to decode the instruction operands for us. */
+	int ret = enumerate_operands((unsigned const char *) faulting_address, 
+		(unsigned const char *) faulting_address + 16,
+		&ucontext->uc_mcontext,
+		saw_operand_cb,
+		faulting_address);
+}
+
 static void install_segv_handler(void)
 {
-	
+	struct sigaction new_action = {
+		.sa_sigaction = handle_sigsegv,
+		.sa_flags = SA_SIGINFO
+	};
+	sigaction(SIGSEGV, &new_action, NULL);
 }
 
 static void early_init(void) __attribute__((constructor(101)));
@@ -430,7 +538,7 @@ static void clear_mem_refbits(void)
 {
 	int fd = open("/proc/self/clear_refs", O_WRONLY);
 	if (fd == -1) abort();
-	write(fd, "1\n", sizeof "1\n" - 1);
+	int dummy_ret __attribute__((unused)) = write(fd, "1\n", sizeof "1\n" - 1);
 	close(fd);
 }
 
