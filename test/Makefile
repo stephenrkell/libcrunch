@@ -167,12 +167,12 @@ checkrun-%: %/check-stamp
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n32 "$$err" | \
 		    match "       nontrivially passed" '[1-9][0-9]*' | \
 		    match "       failed inside"        '0' | \
 		    match "       failed otherwise"     '0' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n32 $$err; false)
 
 # Some cases are special and require only an exit status of zero
 checkrun-hello: hello/check-stamp
