@@ -2240,7 +2240,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 (* When differencing pointers of distinct type, what type denominates? *)
                 let unifyPointerTargetTypes pt1 pt2 = 
                     match (pt1, pt2) with
-                        (TPtr(t1, _), TPtr(t2, _)) when t1 = t2 -> t1
+                        (TPtr(t1, _), TPtr(t2, _)) when Cil.typeSig t1 = Cil.typeSig t2 -> t1
                       | (TPtr(TVoid(_), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
                       | (TPtr(TVoid(_), _), TPtr(TInt(IUChar, _), _)) -> TInt(IUChar, [])
                       | (TPtr(TVoid(_), _), TPtr(TInt(ISChar, _), _)) -> TInt(ISChar, [])
