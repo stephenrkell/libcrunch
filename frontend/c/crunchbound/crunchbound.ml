@@ -514,6 +514,7 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
         in
         let indexedExpr = Lval(indexedLval)
         in
+        (* let _ = output_string stderr ("indexedExpr is " ^ (expToString indexedExpr) ^ "\n") in let _ = flush stderr in *)
         let indexedType = Cil.typeOf indexedExpr
         in
         (* let lastOffsetIsAnIndex = match (List.rev offlist) with
@@ -808,7 +809,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniq
           | lv -> failwith ("unexpected lval: " ^ (lvalToString lv))
     end
     in
-      (exprTmpVar, 
+    let res = (exprTmpVar, 
             (* if we just created local bounds for the temporary, initialise them *)
             (
                 (* We either copy the bounds, if they're local, 
@@ -901,6 +902,12 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniq
             loc
       )
     ])
+    in
+    let resTmp, resInstrs = res
+    in
+    let _ = output_string stderr ("Finished 100; instrs are [" ^ 
+        ( List.fold_left (fun s -> fun xi -> s ^ (instToString xi) ^ ",") "" resInstrs )^ "]\n") in let _ = flush stderr in
+    res
     
 let pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals =
     (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
@@ -2056,12 +2063,28 @@ class crunchBoundVisitor = fun enclosingFile ->
              *)
              let offsetList = offsetToList initialOff
              in
+             (* Here
+                - we are recursing down ol, the list of offset components
+                - lhost is the working host; when we hoist a prefix, it gets replaced with a ( *temp ) expr
+                - origHost is always the original host, even after hoist/replace
+                - offsetsOkayWithoutCheck accumulates offsets from ol that we decided we didn't need to check
+                   ... meaning the working lvalue *up to the currently-processed offset*
+                       is always (lhost, offsetsOkayWithoutCheck)
+                - prevOffsetList accumulates all processed offsets
+                   ... meaning the original lvalue *up to the currently-processed offset* is always (origHost, prevOffsetList)
+              *)
              let rec hoistIndexing ol lhost offsetsOkayWithoutCheck origHost prevOffsetList = 
+                (* let _ = output_string stderr ("hoist indexing on" ^ 
+                    "\nlval " ^ (lvalToCilString (lhost, offsetFromList (offsetsOkayWithoutCheck @ ol))) ^
+                    "\ntype " ^ (typToString (Cil.typeOf (Lval(lhost, offsetFromList (offsetsOkayWithoutCheck @ ol))))) ^
+                    "\norig host " ^ (lvalToCilString (origHost, NoOffset)) ^
+                    "\nprev offset list " ^ (List.fold_left (fun s -> fun ox -> s ^ ", " ^ (offsetToString ox)) "" prevOffsetList)
+                    ^ "\n") in let _ = flush stderr in *)
                  match ol with 
                      [] -> (lhost, offsetFromList offsetsOkayWithoutCheck)
                    | NoOffset :: rest -> failwith "impossible: NoOffset in offset list"
                    | Field(fi, ign) :: rest -> 
-                         hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Field(fi, ign)]) lhost (prevOffsetList @ [Field(fi, ign)])
+                         hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Field(fi, ign)]) origHost (prevOffsetList @ [Field(fi, ign)])
                    | Index(indexExp, ign) :: rest -> 
                          let indexedType = Cil.typeOf (Lval(origHost, offsetFromList prevOffsetList))
                          in
@@ -2157,7 +2180,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             in
                             if not isPossiblyOOB then
                                 (* simple recursive call *)
-                                hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(indexExp, ign)]) lhost (prevOffsetList @ [Index(indexExp, ign)])
+                                hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(indexExp, ign)]) origHost (prevOffsetList @ [Index(indexExp, ign)])
                             else 
                                 (* if we started with x[i].rest, 
                                  * make a temporary to hold &x[0] + i, 
@@ -2186,10 +2209,12 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     !currentInst
                                     tempLoadExprs
                                 in
-                                (
+                                let res = (
                                     self#queueInstr checkInstrs;
-                                    hoistIndexing rest (Mem(Lval(Var(tempVar), NoOffset))) [] lhost (prevOffsetList @ [Index(intExp, ign)])
+                                    hoistIndexing rest (Mem(Lval(Var(tempVar), NoOffset))) [] origHost (prevOffsetList @ [Index(intExp, ign)])
                                 )
+                                in 
+                                res
              in
              let eventualLval = hoistIndexing offsetList initialHost [] initialHost []
              in
