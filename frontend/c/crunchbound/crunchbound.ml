@@ -479,7 +479,7 @@ type bounds_expr =
                                  * has the same bounds (i.e. in the same object). *)
 
 
-let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
+let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile = 
     if isStaticallyNullPtr e then BoundsBaseLimitRvals(zero, one)
     else
     let simplifiedPtrExp = simplifyPtrExprs e in
@@ -528,8 +528,11 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
         let baseExpr = CastE(ulongType, mkAddrOrStartOf indexedLval)
         in
         let limitExpr = BinOp(PlusA, baseExpr, BinOp(
-            Mult, makeIntegerConstant arrayElementCount, (SizeOf(arrayElementT)), ulongType), 
-            ulongType)
+            Mult, 
+            makeIntegerConstant arrayElementCount, 
+            (if tsIsUndefinedType (Cil.typeSig arrayElementT) wholeFile then one else SizeOf(arrayElementT)), 
+            ulongType),
+        ulongType)
         in
         BoundsBaseLimitRvals(baseExpr, limitExpr)
     in
@@ -686,7 +689,7 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
                NOTE: SoftBound differs here! It always recurses here.
                It *may* return MustFetch, although it will only fast-fetch
                from the shadow space. *)
-            boundsExprForExpr subE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs
+            boundsExprForExpr subE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile
       | Const(CStr(s)) ->  (* Ae can write down the bounds for string literals straight away.
                             * As usual, avoid introducing new pointer arithmetic; work in the
                             * integer (ulongType) domain. *)
@@ -791,7 +794,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniq
      * then copy from the temporary to the actual target. *)
     let loc = instrLoc currentInst in
     let exprTmpVar = Cil.makeTempVar ~name:"__cil_adjexpr_" enclosingFunction (typeOf ptrExp) in
-    let boundsForAdjustedExpr = boundsExprForExpr ptrExp currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+    let boundsForAdjustedExpr = boundsExprForExpr ptrExp currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
     in
     (* remember where the pointer we're adjusting was loaded from, if it was loaded *)
     let _ = match boundsForAdjustedExpr with 
@@ -941,7 +944,7 @@ let makeBoundsWriteInstruction ~doFetchOol enclosingFile enclosingFunction curre
      * We can infer the bounds if... *)
     let destBoundsLval = localLvalToBoundsFun justWrittenLval
     in
-    begin match boundsExprForExpr writtenE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs with 
+    begin match boundsExprForExpr writtenE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs enclosingFile with 
         BoundsLval(sourceBoundsLval) ->
             Set(destBoundsLval, Lval(sourceBoundsLval), loc)
       | BoundsBaseLimitRvals(baseExpr, limitExpr) ->
@@ -1397,15 +1400,15 @@ let containedPointerExprsForExpr e =
      |  _ when isNonVoidPointerType (Cil.typeOf e) -> [e]
      |  _ -> []
 
-let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 'a) (outerE : Cil.exp) currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs (* : 'a list *) = 
+let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 'a) (outerE : Cil.exp) currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs (* : 'a list *) wholeFile = 
     List.mapi (fun i -> fun ptrExp -> 
-        let boundExp = boundsExprForExpr ptrExp currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs
+        let boundExp = boundsExprForExpr ptrExp currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile 
         in
         forOne ptrExp boundExp (makeIntegerConstant (Int64.of_int i))
     ) (containedPointerExprsForExpr outerE)
     
-let concatMapForAllPointerBoundsInExprList f es currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs = 
-        List.flatten (List.map (fun e -> mapForAllPointerBoundsInExpr f e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs) es)
+let concatMapForAllPointerBoundsInExprList f es currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile = 
+        List.flatten (List.map (fun e -> mapForAllPointerBoundsInExpr f e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile) es)
 
 let doNonLocalPointerStoreInstr ptrE storeLv be l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions = 
     (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
@@ -1551,7 +1554,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             ],
                             loc
                             )
-                ) returnExp !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+                ) returnExp !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
                 in
                 (* PROBLEM. Goto and Switch make use of 'ref statements'. 
                  * This is completely stupid, but too hard to fix right now.
@@ -1738,7 +1741,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     )
               | _ -> failwith "internal error: formal parameter lacks bounds"
             ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingBounds))
-                !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+                !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
             in
             let formalBoundsInitList = List.mapi (fun i -> fun f -> f i) 
                 (List.rev formalBoundsInitFunReverseList)
@@ -1836,7 +1839,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                          * HMM. Might be too clever; "just fetch" is sane if fetches
                          * are cheap.
                          *)
-                        let boundsExpr = boundsExprForExpr e !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+                        let boundsExpr = boundsExprForExpr e !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
                         in
                         doNonLocalPointerStoreInstr e (lhost, loff) (boundsExpr) l enclosingFile f uniqtypeGlobals helperFunctions
                     )
@@ -1910,7 +1913,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     )
                         in
                         concatMapForAllPointerBoundsInExprList callForOneOffset (List.rev es) (* push r to l! *)
-                            !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs
+                            !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
                     )
                     in
                     let cookieStackAddrVar = ref None
@@ -1995,10 +1998,10 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 if hostIsLocal lhost !currentFuncAddressTakenLocalNames then (
                                     debug_print 0 "Local, so updating/invalidating its bounds.\n";
                                     (* we're popping/peeking, so reverse *)
-                                    List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs))
+                                    List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
                                 ) else ( (* non-local -- writing into the "heap"! *)
                                 debug_print 0 "Host is not local\n";
-                                List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneNonLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs))
+                                List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneNonLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
                                 )
                             ) (* end if pointer list non-empty *)
                             else (* no pointers *) []

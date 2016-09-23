@@ -30,9 +30,31 @@ int enumerate_operands(unsigned const char *ins, unsigned const char *end,
 	void *mcontext,
 	void (*saw_operand)(int /*type*/, unsigned int /*bytes*/, uint32_t */*val*/,
 		unsigned long */*p_reg*/, int */*p_mem_seg*/, unsigned long */*p_mem_off*/,
-		void */*arg*/),
+		int */*p_fromreg1*/, int */*p_fromreg2*/, void */*arg*/),
 	void *arg
 	);
+/* argh: more from libsystrap, also stolen from libdwarfpp */
+enum dwarf_regs_x86_64
+{
+	DWARF_X86_64_RAX     = 0,
+	DWARF_X86_64_RDX     = 1,
+	DWARF_X86_64_RCX     = 2,
+	DWARF_X86_64_RBX     = 3,
+	DWARF_X86_64_RSI     = 4,
+	DWARF_X86_64_RDI     = 5,
+	DWARF_X86_64_RBP     = 6,
+	DWARF_X86_64_RSP     = 7,
+	DWARF_X86_64_R8      = 8,
+	DWARF_X86_64_R9      = 9,
+	DWARF_X86_64_R10     = 10,
+	DWARF_X86_64_R11     = 11,
+	DWARF_X86_64_R12     = 12,
+	DWARF_X86_64_R13     = 13,
+	DWARF_X86_64_R14     = 14,
+	DWARF_X86_64_R15     = 15,
+	DWARF_X86_64_RIP     = 16
+};
+
 
 #define NAME_FOR_UNIQTYPE(u) ((u) ? ((u)->name ?: "(unnamed type)") : "(unknown type)")
 
@@ -394,20 +416,153 @@ static void fill_separated_words(const char **out, const char *str, char sep, un
 		while (*pos == sep) ++pos;
 	} while (*pos != '\0' && n_added < max);
 }
+#define MSGLIT(s) dummy_ret = write(2, (s), sizeof (s) - 1)
+#define MSGBUF(s) dummy_ret = write(2, (s), strlen((s)))
+#define MSGCHAR(c) do { dummy_char = (c); dummy_ret = write(2, &dummy_char, 1); } while(0)
+#define HEXCHAR(n) (((n) > 9) ? ('a' + ((n)-10)) : '0' + (n))
+#define DECCHAR(n) ('0' + (n))
+#define MSGADDR(a) MSGCHAR(HEXCHAR((a >> 60) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 56) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 52) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 48) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 44) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 40) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 36) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 32) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 28) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 24) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 20) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 16) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 12) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 8) % 16)); \
+                   MSGCHAR(HEXCHAR((a >> 4) % 16)); \
+                   MSGCHAR(HEXCHAR((a) % 16));
+#define MSGSHORT(a) MSGCHAR(DECCHAR((a / 10000) % 10)); \
+                  MSGCHAR(DECCHAR((a / 1000) % 10)); \
+                  MSGCHAR(DECCHAR((a / 100) % 10)); \
+                  MSGCHAR(DECCHAR((a / 10) % 10)); \
+                  MSGCHAR(DECCHAR((a) % 10)); \
 
-static void saw_operand_cb(int type, unsigned int bytes, uint32_t *val,
-		unsigned long *p_reg, int *p_mem_seg, unsigned long *p_mem_off,
-		void *arg)
+void try_register_fixup(int regnum, mcontext_t *p_mcontext)
 {
-	void *trap_addr = arg;
+	const char *kindstr;
+	char dummy_char;
+	int dummy_ret;
+	uintptr_t *p_savedval = 0;
 	
-	/* Does the operand's value match the trap addr? */
-	if ((void*) *val == trap_addr)
+	#define CASE(frag, FRAG) case DWARF_X86_64_ ##FRAG: \
+		p_savedval = (uintptr_t*) &p_mcontext->gregs[REG_ ##FRAG]; break;
+	switch (regnum)
 	{
-		while (1) sleep(10); // attach gdb to continue coding
+		CASE(r15, R15)
+		CASE(r14, R14)
+		CASE(r13, R13)
+		CASE(r12, R12)
+		CASE(rbp, RBP)
+		CASE(rbx, RBX)
+		CASE(r11, R11)
+		CASE(r10, R10)
+		CASE(r9,  R9)
+		CASE(r8,  R8)
+		CASE(rax, RAX)
+		CASE(rcx, RCX)
+		CASE(rdx, RDX)
+		CASE(rsi, RSI)
+		CASE(rdi, RDI)
+		CASE(rip, RIP)
+		case -1:
+		default:
+			MSGLIT("register mapping error");
+			return;
+	}
+	#undef CASE
+	
+	if (!p_savedval)
+	{
+		MSGLIT("register lookup error");
+		return;
+	}
+	
+	MSGLIT("register ");
+	MSGSHORT(regnum);
+	MSGLIT(" contents 0x");
+	MSGADDR(*p_savedval);
+	MSGLIT(" are ");
+	switch (*p_savedval >> LIBCRUNCH_TRAP_TAG_SHIFT) // FIXME: high addrs need handling
+	{
+		case 1: // one-past
+			kindstr = "one-past";
+			goto report;
+		case 2: // one-prev
+			kindstr = "one-before";
+			goto report;
+		case 3: // invalid
+			kindstr = "type-invalid";
+			goto report;
+		default: // not one of ours
+			MSGLIT("not a trap pointer");
+			return;
+		report:
+			MSGLIT("possibly a ");
+			MSGBUF(kindstr);
+			const int shiftamount = 8*sizeof(uintptr_t) - LIBCRUNCH_TRAP_TAG_SHIFT;
+			*p_savedval = (*p_savedval << shiftamount) >> shiftamount;
+			MSGLIT("trap pointer, so detrapping them; new value is ");
+			MSGADDR(*p_savedval);
+			break;
 	}
 }
 
+static void saw_operand_cb(int type, unsigned int bytes, uint32_t *val,
+		unsigned long *p_reg, int *p_mem_seg, unsigned long *p_mem_off,
+		int *p_fromreg1, int *p_fromreg2,
+		void *arg)
+{
+	mcontext_t *p_mcontext = (mcontext_t *) arg;
+	int dummy_ret;
+	char dummy_char;
+	
+	if (type != 1 /* OP_mem */) return;
+	
+
+	/* All the operands we're interested in are memory operands.
+	 * BUT we have to know how they were encoded in the instruction! */
+
+	MSGLIT("*** memory operand was computed from ");
+	if (!p_fromreg1 && !p_fromreg2)
+	{
+		MSGLIT("unknown values");
+		return;
+	}
+	if (p_fromreg1)
+	{
+		if (*p_fromreg1 == -1)
+		{
+			MSGLIT("unknown register");
+		}
+		else
+		{
+			MSGLIT("register ");
+			MSGSHORT((short) *p_fromreg1);
+		}
+		if (p_fromreg2) MSGLIT(" and ");
+	}
+	if (p_fromreg2)
+	{
+		if (*p_fromreg2 == -1)
+		{
+			MSGLIT("unknown register");
+		}
+		else
+		{
+			MSGLIT("register ");
+			MSGSHORT((short) *p_fromreg2);
+		}
+	}
+	
+	if (p_fromreg1 && *p_fromreg1 != -1) try_register_fixup(*p_fromreg1, p_mcontext);
+	if (p_fromreg2 && *p_fromreg2 != -1) try_register_fixup(*p_fromreg2, p_mcontext);
+}
 
 static void handle_sigsegv(int signum, siginfo_t *info, void *ucontext_as_void)
 {
@@ -432,62 +587,26 @@ static void handle_sigsegv(int signum, siginfo_t *info, void *ucontext_as_void)
 	 * can't allow this. So print a warning and (possibly) continue.
 	 */
 	
-	void *faulting_address = info->si_addr;
+	// void *faulting_access_location = info->si_addr;
+	/* Unbelievably, we can't seem to get the access location on Linux (si_addr
+	 * is zero, and is possibly not it anyway). So scan *all* operands for
+	 * trap-pointer values. This is prone to false positives! We should really
+	 * check the opcode that the operand really is being used as a pointer. */
 	struct ucontext *ucontext = (struct ucontext *) ucontext_as_void;
-	void *access_address = (void*) ucontext->uc_mcontext.gregs[REG_RIP];
+	void *faulting_code_address = (void*) ucontext->uc_mcontext.gregs[REG_RIP];
+	
 	int dummy_ret;
-	char dummy_char;
-#define MSGLIT(s) dummy_ret = write(2, (s), sizeof (s) - 1)
-#define MSGBUF(s) dummy_ret = write(2, (s), strlen((s)))
-#define MSGCHAR(c) do { dummy_char = (c); dummy_ret = write(2, &dummy_char, 1); } while(0)
-#define HEXCHAR(n) (((n) > 9) ? ('a' + ((n)-10)) : '0' + (n))
-#define MSGADDR(a) MSGCHAR(HEXCHAR((a >> 60) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 56) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 52) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 48) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 44) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 40) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 36) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 32) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 28) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 24) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 20) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 16) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 12) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 8) % 16)); \
-                   MSGCHAR(HEXCHAR((a >> 4) % 16)); \
-                   MSGCHAR(HEXCHAR((a) % 16));
-	const char *kindstr;
-	switch ((uintptr_t) faulting_address >> LIBCRUNCH_TRAP_TAG_SHIFT)
-	{
-		case 1: // one-past
-			kindstr = "one-past";
-			break;
-		case 2: // one-prev
-			kindstr = "one-before";
-			break;
-		case 3: // invalid
-			kindstr = "type-invalid";
-			break;
-		default: // not one of ours
-			abort();
-	}
-	MSGLIT("*** libcrunch detected program access through a ");
-	MSGBUF(kindstr);
-	MSGLIT(" pointer 0x");
-	MSGADDR((unsigned long) access_address);
-	MSGLIT(" at 0x");
-	MSGADDR((unsigned long) faulting_address);
+	MSGLIT("*** libcrunch caught segmentation fault\n");
 	
 	/* How do we make execution continue? Need to decode the instruction
 	 * (to restart with a correct pointer)
 	 * or emulate the access (no need to restart; but slower).
 	 * We can ask libsystrap to decode the instruction operands for us. */
-	int ret = enumerate_operands((unsigned const char *) faulting_address, 
-		(unsigned const char *) faulting_address + 16,
+	int ret = enumerate_operands((unsigned const char *) faulting_code_address, 
+		(unsigned const char *) faulting_code_address + 16,
 		&ucontext->uc_mcontext,
 		saw_operand_cb,
-		faulting_address);
+		&ucontext->uc_mcontext);
 }
 
 static void install_segv_handler(void)
