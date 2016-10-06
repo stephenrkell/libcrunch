@@ -686,7 +686,9 @@ class trumPtrExprVisitor = fun enclosingFile ->
           (* from any pointer (or int) to any function pointer is okay IFF we're being sloppy. 
            * We check on use if so. But not by default: there is a significant performance penalty
            * for check-on-use in some codebases (e.g. gcc). *)
-          if (sloppyFps && (tsIsFunctionPointer targetTs)) then DoChildren else 
+          if (sloppyFps && (tsIsFunctionPointer targetTs)) then DoChildren else
+          (* don't check casts of pointers that are clearly null *)
+          if isStaticallyNullPtr subex then DoChildren else
           (* To any void** or higher-degree void ptr is okay if we're not being strict. 
            * BUT we also have to check that the target degree is not greater than the 
            * source degree, or else do a check. 
