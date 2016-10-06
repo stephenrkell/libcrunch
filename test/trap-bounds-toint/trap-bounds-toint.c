@@ -24,6 +24,15 @@ int main(void)
 		printf("Saw a byte: %x\n", *pc);
 	}
 	
+	/* If we convert a cleanly in-bounds integer value back to int*,
+	 * we should also get something that works. Note that the termination
+	 * of this loop makes a totally out-of-bounds pointer, which is not
+	 * okay. It should yield a trap pointer, but not terminate the program. */
+	for (int *pi = (int*) (i - sizeof (int)); pi >= &is[0]; --pi)
+	{
+		printf("Saw an int: %d\n", *pi);
+	}
+	
 	return 0;
 }
 
