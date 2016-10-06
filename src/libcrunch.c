@@ -33,6 +33,7 @@ int enumerate_operands(unsigned const char *ins, unsigned const char *end,
 		int */*p_fromreg1*/, int */*p_fromreg2*/, void */*arg*/),
 	void *arg
 	);
+void raw_exit(int) __attribute__((noreturn));
 /* argh: more from libsystrap, also stolen from libdwarfpp */
 enum dwarf_regs_x86_64
 {
@@ -276,6 +277,7 @@ unsigned long __libcrunch_created_invalid_pointer;
 unsigned long __libcrunch_fetch_bounds_called;
 unsigned long __libcrunch_fetch_bounds_missed_cache;
 unsigned long __libcrunch_primary_secondary_transitions;
+unsigned long __libcrunch_fault_handler_fixups;
 
 struct __libcrunch_cache /* __thread */ __libcrunch_is_a_cache = {
 	.size_plus_one = 1 + LIBCRUNCH_MAX_IS_A_CACHE_SIZE,
@@ -366,6 +368,7 @@ static void print_exit_summary(void)
 	fprintf(crunch_stream_err, "calls to __fetch_bounds:                   % 9ld\n", __libcrunch_fetch_bounds_called /* FIXME: remove */);
 	fprintf(crunch_stream_err, "   of which missed cache:                  % 9ld\n", __libcrunch_fetch_bounds_missed_cache);
 	fprintf(crunch_stream_err, "calls requiring secondary checks           % 9ld\n", __libcrunch_primary_secondary_transitions);
+	fprintf(crunch_stream_err, "trap-pointer fixups in fault handler       % 9ld\n", __libcrunch_fault_handler_fixups);
 	fprintf(crunch_stream_err, "====================================================\n");
 	if (!verbose)
 	{
@@ -443,6 +446,7 @@ static void fill_separated_words(const char **out, const char *str, char sep, un
                   MSGCHAR(DECCHAR((a / 10) % 10)); \
                   MSGCHAR(DECCHAR((a) % 10)); \
 
+static __thread _Bool did_fixup;
 void try_register_fixup(int regnum, mcontext_t *p_mcontext)
 {
 	const char *kindstr;
@@ -509,6 +513,7 @@ void try_register_fixup(int regnum, mcontext_t *p_mcontext)
 			*p_savedval = (*p_savedval << shiftamount) >> shiftamount;
 			MSGLIT("trap pointer, so detrapping them; new value is ");
 			MSGADDR(*p_savedval);
+			did_fixup = 1;
 			break;
 	}
 }
@@ -602,11 +607,24 @@ static void handle_sigsegv(int signum, siginfo_t *info, void *ucontext_as_void)
 	 * (to restart with a correct pointer)
 	 * or emulate the access (no need to restart; but slower).
 	 * We can ask libsystrap to decode the instruction operands for us. */
+	did_fixup = 0;
 	int ret = enumerate_operands((unsigned const char *) faulting_code_address, 
 		(unsigned const char *) faulting_code_address + 16,
 		&ucontext->uc_mcontext,
 		saw_operand_cb,
 		&ucontext->uc_mcontext);
+	
+	/* If we fixed something up, we can try resuming execution.
+	 * Otherwise, there's no point. */
+	if (did_fixup)
+	{
+		/* okay, resume */
+		++__libcrunch_fault_handler_fixups;
+		did_fixup = 0;
+		return;
+	}
+	MSGLIT("*** libcrunch did not recover from segmentation fault, so terminating program\n");
+	raw_exit(128 + SIGSEGV);
 }
 
 static void install_segv_handler(void)
@@ -1591,11 +1609,11 @@ static _Bool is_generic_ultimate_pointee(struct uniqtype *ultimate_pointee_type)
 		|| ultimate_pointee_type == pointer_to___uniqtype__unsigned_char;
 }
 
-static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d)
+static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d, signed target_offset)
 {
 	struct uniqtype *cur_containing_uniqtype = NULL;
 	struct contained *cur_contained_pos = NULL;
-	signed target_offset_within_uniqtype = 0;
+	signed target_offset_within_uniqtype = target_offset;
 
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
 	 * are atomic. */
@@ -1615,6 +1633,8 @@ static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d)
 			return 1;
 		} else return 0;
 	}
+	
+	return 0;
 }
 
 static int pointer_degree(struct uniqtype *t)
@@ -1690,7 +1710,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	/* HACK */
 	reinstate_looseness_if_necessary(alloc_start, alloc_site, alloc_uniqtype);
 	
-	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
+	signed target_offset_within_alloc_uniqtype = (char*) obj - (char*) alloc_start;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
@@ -1698,20 +1718,20 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 			&& alloc_uniqtype->pos_maxoff != 0 
 			&& alloc_uniqtype->neg_maxoff == 0)
 	{
-		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
+		target_offset_within_alloc_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
 	
-	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
+	struct uniqtype *cur_alloc_subobj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
 	struct contained *cur_contained_pos = NULL;
 	
 	/* Descend the subobject hierarchy until our target offset is zero, i.e. we 
 	 * find the outermost thing in the subobject tree that starts at the address
 	 * we were passed (obj). */
-	while (target_offset_within_uniqtype != 0)
+	while (target_offset_within_alloc_uniqtype != 0)
 	{
 		_Bool success = __liballocs_first_subobject_spanning(
-				&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
+				&target_offset_within_alloc_uniqtype, &cur_alloc_subobj_uniqtype, &cur_containing_uniqtype,
 				&cur_contained_pos);
 		if (!success) goto loosely_like_a_failed;
 	}
@@ -1720,7 +1740,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	{
 		
 	// trivially, identical types are like one another
-	if (test_uniqtype == cur_obj_uniqtype) goto loosely_like_a_succeeded;
+	if (test_uniqtype == cur_alloc_subobj_uniqtype) goto loosely_like_a_succeeded;
 	
 	// if our check type is a pointer type
 	int real_degree;
@@ -1728,7 +1748,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 			&& 0 != (real_degree = is_generic_pointer_type_of_degree_at_least(test_uniqtype, 1)))
 	{
 		// the pointed-to object must have at least the same degree
-		if (holds_pointer_of_degree(alloc_uniqtype, real_degree))
+		if (holds_pointer_of_degree(cur_alloc_subobj_uniqtype, real_degree, 0))
 		{
 			++__libcrunch_succeeded;
 			return 1;
@@ -1740,14 +1760,14 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	
 	// arrays are special
 	_Bool matches;
-	if (__builtin_expect((cur_obj_uniqtype->is_array || test_uniqtype->is_array), 0))
+	if (__builtin_expect((cur_alloc_subobj_uniqtype->is_array || test_uniqtype->is_array), 0))
 	{
 		matches = 
-			test_uniqtype == cur_obj_uniqtype
+			test_uniqtype == cur_alloc_subobj_uniqtype
 		||  (test_uniqtype->is_array && test_uniqtype->array_len == 1 
-				&& test_uniqtype->contained[0].ptr == cur_obj_uniqtype)
-		||  (cur_obj_uniqtype->is_array && cur_obj_uniqtype->array_len == 1
-				&& cur_obj_uniqtype->contained[0].ptr == test_uniqtype);
+				&& test_uniqtype->contained[0].ptr == cur_alloc_subobj_uniqtype)
+		||  (cur_alloc_subobj_uniqtype->is_array && cur_alloc_subobj_uniqtype->array_len == 1
+				&& cur_alloc_subobj_uniqtype->contained[0].ptr == test_uniqtype);
 		/* We don't need to allow an array of one blah to be like a different
 		 * array of one blah, because they should be the same type. 
 		 * FIXME: there's a difficult case: an array of statically unknown length, 
@@ -1758,13 +1778,13 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	/* If we're not an array and nmemb is zero, we might have base types with
 	 * signedness complements. */
 	if (__builtin_expect(
-			!cur_obj_uniqtype->is_array && !test_uniqtype->is_array
-			&&  cur_obj_uniqtype->nmemb == 0 && test_uniqtype->nmemb == 0, 0))
+			!cur_alloc_subobj_uniqtype->is_array && !test_uniqtype->is_array
+			&&  cur_alloc_subobj_uniqtype->nmemb == 0 && test_uniqtype->nmemb == 0, 0))
 	{
 		/* Does the cur obj type have a signedness complement matching the test type? */
-		if (cur_obj_uniqtype->contained[0].ptr == test_uniqtype) goto loosely_like_a_succeeded;
+		if (cur_alloc_subobj_uniqtype->contained[0].ptr == test_uniqtype) goto loosely_like_a_succeeded;
 		/* Does the test type have a signedness complement matching the cur obj type? */
-		if (test_uniqtype->contained[0].ptr == cur_obj_uniqtype) goto loosely_like_a_succeeded;
+		if (test_uniqtype->contained[0].ptr == cur_alloc_subobj_uniqtype) goto loosely_like_a_succeeded;
 	}
 	
 	/* Okay, we can start the like-a test: for each element in the test type, 
@@ -1774,15 +1794,15 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	 * element in the test type is such an array, we skip over any number of
 	 * fields in the object type, until we reach the offset of the end element.  */
 	unsigned i_obj_subobj = 0, i_test_subobj = 0;
-	if (test_uniqtype != cur_obj_uniqtype) debug_printf(0, "__loosely_like_a proceeding on subobjects of (test) %s and (object) %s\n",
-		NAME_FOR_UNIQTYPE(test_uniqtype), NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
+	if (test_uniqtype != cur_alloc_subobj_uniqtype) debug_printf(0, "__loosely_like_a proceeding on subobjects of (test) %s and (object) %s\n",
+		NAME_FOR_UNIQTYPE(test_uniqtype), NAME_FOR_UNIQTYPE(cur_alloc_subobj_uniqtype));
 	for (; 
-		i_obj_subobj < cur_obj_uniqtype->nmemb && i_test_subobj < test_uniqtype->nmemb; 
+		i_obj_subobj < cur_alloc_subobj_uniqtype->nmemb && i_test_subobj < test_uniqtype->nmemb; 
 		++i_test_subobj, ++i_obj_subobj)
 	{
 		debug_printf(0, "Subobject types are (test) %s and (object) %s\n",
 			NAME_FOR_UNIQTYPE((struct uniqtype *) test_uniqtype->contained[i_test_subobj].ptr), 
-			NAME_FOR_UNIQTYPE((struct uniqtype *) cur_obj_uniqtype->contained[i_obj_subobj].ptr));
+			NAME_FOR_UNIQTYPE((struct uniqtype *) cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr));
 		
 		if (__builtin_expect(test_uniqtype->contained[i_test_subobj].ptr->is_array
 			&& (test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
@@ -1798,11 +1818,11 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 			      + test_uniqtype->contained[i_test_subobj].ptr->pos_maxoff;
 			
 			// ... if there's more in the test type, advance i_obj_subobj
-			while (i_obj_subobj + 1 < cur_obj_uniqtype->nmemb &&
-				cur_obj_uniqtype->contained[i_obj_subobj + 1].offset < target_off) ++i_obj_subobj;
+			while (i_obj_subobj + 1 < cur_alloc_subobj_uniqtype->nmemb &&
+				cur_alloc_subobj_uniqtype->contained[i_obj_subobj + 1].offset < target_off) ++i_obj_subobj;
 			/* We fail if we ran out of stuff in the actual object type
 			 * AND there is more to go in the test (cast-to) type. */
-			if (i_obj_subobj + 1 >= cur_obj_uniqtype->nmemb
+			if (i_obj_subobj + 1 >= cur_alloc_subobj_uniqtype->nmemb
 			 && test_uniqtype->nmemb > i_test_subobj + 1) goto try_deeper;
 				
 			continue;
@@ -1810,11 +1830,11 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 		
 		int generic_ptr_degree = 0;
 		matches = 
-				(test_uniqtype->contained[i_test_subobj].offset == cur_obj_uniqtype->contained[i_obj_subobj].offset)
+				(test_uniqtype->contained[i_test_subobj].offset == cur_alloc_subobj_uniqtype->contained[i_obj_subobj].offset)
 		 && (
 				// exact match
 				(test_uniqtype->contained[i_test_subobj].ptr
-				 == cur_obj_uniqtype->contained[i_obj_subobj].ptr)
+				 == cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr)
 				|| // loose match: if the test type has a generic ptr...
 				(
 					0 != (
@@ -1822,16 +1842,16 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 							test_uniqtype->contained[i_test_subobj].ptr, 1)
 					)
 					&& pointer_has_degree(
-						(struct uniqtype *) cur_obj_uniqtype->contained[i_obj_subobj].ptr,
+						(struct uniqtype *) cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr,
 						generic_ptr_degree
 					)
 				)
 				|| // loose match: signed/unsigned
 				(UNIQTYPE_IS_BASE_TYPE(test_uniqtype->contained[i_test_subobj].ptr)
-				 && UNIQTYPE_IS_BASE_TYPE(cur_obj_uniqtype->contained[i_obj_subobj].ptr)
+				 && UNIQTYPE_IS_BASE_TYPE(cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr)
 				 && 
 				 (((struct uniqtype *) test_uniqtype->contained[i_test_subobj].ptr)->
-				 	contained[0].ptr == ((struct uniqtype *) cur_obj_uniqtype->contained[i_obj_subobj].ptr))
+				 	contained[0].ptr == ((struct uniqtype *) cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr))
 				)
 		);
 		if (!matches) goto try_deeper;
@@ -1846,10 +1866,10 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	try_deeper:
 		debug_printf(0, "No dice; will try the object type one level down if there is one...\n");
 		success = __liballocs_first_subobject_spanning(
-				&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
+				&target_offset_within_alloc_uniqtype, &cur_alloc_subobj_uniqtype, &cur_containing_uniqtype,
 				&cur_contained_pos);
 		if (!success) goto loosely_like_a_failed;
-		debug_printf(0, "... got %s\n", NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
+		debug_printf(0, "... got %s\n", NAME_FOR_UNIQTYPE(cur_alloc_subobj_uniqtype));
 
 	} while (1);
 	
@@ -1927,7 +1947,7 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	
-	if (holds_pointer_of_degree(alloc_uniqtype, d))
+	if (holds_pointer_of_degree(alloc_uniqtype, d, target_offset_within_uniqtype))
 	{
 		++__libcrunch_succeeded;
 		return 1;

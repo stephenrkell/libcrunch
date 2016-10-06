@@ -25,6 +25,7 @@ extern unsigned long __libcrunch_created_invalid_pointer __attribute__((weak));
 extern unsigned long __libcrunch_fetch_bounds_called __attribute__((weak));
 extern unsigned long __libcrunch_fetch_bounds_missed_cache __attribute__((weak));
 extern unsigned long __libcrunch_primary_secondary_transitions __attribute__((weak));
+extern unsigned long __libcrunch_fault_handler_fixups __attribute__((weak));
 
 int __libcrunch_global_init(void) __attribute__((weak));
 // declare as const void *-returning, to simplify trumptr

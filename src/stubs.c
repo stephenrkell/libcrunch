@@ -19,7 +19,8 @@ unsigned long int __libcrunch_created_invalid_pointer = 0;
 unsigned long int __libcrunch_checked_pointer_adjustments = 0;
 unsigned long int __libcrunch_fetch_bounds_called = 0;
 unsigned long int __libcrunch_fetch_bounds_missed_cache = 0;
-unsigned long __libcrunch_primary_secondary_transitions = 0;
+unsigned long int __libcrunch_primary_secondary_transitions = 0;
+unsigned long int __libcrunch_fault_handler_fixups = 0;
 
 void __liballocs_systrap_init(void);
 static void init(void) __attribute__((constructor));
