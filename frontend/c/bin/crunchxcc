@@ -37,8 +37,8 @@ class CrunchXCC(CrunchCC):
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
             # Add temporary HACK to strip line numbers after preprocess
+            # "--commPrintLn", \
             includeArgs = [ \
-            "--commPrintLn", \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
             "-DLIBCRUNCH_USING_TRAP_PTRS", \
             "-include", \
