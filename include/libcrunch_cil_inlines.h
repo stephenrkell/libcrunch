@@ -1224,24 +1224,58 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 *         {1d55,22aa} 
 	 *         {4555,47ff}.
 	 * Okay, let's try it.
-	 * 
-	 * We store "size plus one", not size. This is so that 0 represents
-	 * a distinguished "max size" value. When we subtract one, we do so
-	 * in 64-bit space, meaning we wrap around to get the biggest positive
-	 * (unsigned) number, meaning primary checks trivially succeed.
-	 * 
 	 */
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
-	if (unlikely(__libcrunch_bounds_invalid(val_bounds, val)))
-	{
-		val_bounds = __fetch_bounds_ool(val, val, val_pointee_type);
-	}
 	unsigned long dest_addr = (unsigned long) dest;
 	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
 	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
+	
+	/* Being as lazy as we can here, but no lazier:
+	 * - we do the expensive ool fetch to avoid leaving stale bounds in the shadow space.
+	 * - we *only* need to do this if we're writing to a location with valid bounds!
+	 * PROBLEM: in some workloads, this will be pessimal because we load the pointer
+	 * many times, and fetch bounds each time. AHA, but when we load the pointer and
+	 * fetch bounds, we should store the bounds back where we got it from, no?
+	 * Actually that's hard, because of race conditions etc..
+	 * We might want to instrument *pointer loads*,
+	 * and then do a reaching-definitions analysis s.t. any load that
+	 * reaches an indexing or arithmetic operation
+	 * is eagerly "load and ensure bounds". Can be fooled by
+	 * putting a procedure boundary between the load and the indexing?
+	 * Hmm, not if we make that "indexing or write or pass or return".
+	 * So the only cases we don't load for are pointers that are loaded,
+	 * deref'd locally and then discarded.
+	 * FIXME: IMPLEMENT THIS in crunchbound.
+	 */
+	_Bool existing_shadow_bounds_valid = *((unsigned *) size_stored_addr) != 0; /* bounds valid? */
+	if (unlikely(
+				__libcrunch_bounds_invalid(val_bounds, val)
+			// && existing_shadow_bounds_valid
+			))
+	{
+		val_bounds = __fetch_bounds_ool(val, val, val_pointee_type);
+		if (__libcrunch_bounds_invalid(val_bounds, val)) __builtin_unreachable();
+	}
 
-	*((void **)    base_stored_addr) = (void*)    val_bounds.base;
-	*((unsigned *) size_stored_addr) = (unsigned) val_bounds.size;
+	/* If the shadow space holds bounds, we might be invaliding them, so we must write them.
+	 * Otherwise, only store bounds if we have valid bounds to begin with.
+	 * HMM: what about the nocrunch case? There we ensured that
+	 * the shadow space is always valid and max-bounds. The price
+	 * we pay is that we always write bounds here when storing a pointer.
+	 * If we didn't have valid bounds already, in val_bounds,
+	 * we just loaded them! In fairness, __fetch_bounds_ool is cheap
+	 * in the nocrunch case because it just returns max-bounds.
+	 * So now we just take the hit of writing them to the shadow space.
+	 * HMM: if we were feeling sneaky, __fetch_bounds_ool could return
+	 * something invalid. That would be what we wanted here (val_bounds
+	 * is dead after this call) but would cause other problems on other
+	 * calls to __fetch_bounds_ool (if there are any? perhaps only in
+	 * secondary checks, in which case fine?). */
+	if (!__libcrunch_bounds_invalid(val_bounds, val) || existing_shadow_bounds_valid)
+	{
+		*((void **)    base_stored_addr) = (void*)    val_bounds.base;
+		*((unsigned *) size_stored_addr) = (unsigned) val_bounds.size;
+	}
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
 	 * any locals. Hm. I think it's already allowed to assume that. */
