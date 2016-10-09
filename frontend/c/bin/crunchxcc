@@ -43,6 +43,7 @@ class CrunchXCC(CrunchCC):
             "-DLIBCRUNCH_USING_TRAP_PTRS", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
+            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../ptrintarith/ptrintarith.cmxs"), "--doptrintarith", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr" \
             ]
