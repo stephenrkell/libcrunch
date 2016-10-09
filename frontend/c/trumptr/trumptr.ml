@@ -688,7 +688,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
            * for check-on-use in some codebases (e.g. gcc). *)
           if (sloppyFps && (tsIsFunctionPointer targetTs)) then DoChildren else
           (* don't check casts of pointers that are clearly null *)
-          if isStaticallyNullPtr subex then DoChildren else
+          if (isStaticallyNullPtr subex || isStaticallyZero subex) then DoChildren else
           (* To any void** or higher-degree void ptr is okay if we're not being strict. 
            * BUT we also have to check that the target degree is not greater than the 
            * source degree, or else do a check. 
@@ -779,6 +779,18 @@ class trumPtrExprVisitor = fun enclosingFile ->
             (* We could use our own constant folding to detect always-null pointers here. 
                But we just let the compiler do it! It will inline our __is_aU and will
                simplify it down to nothing if the pointer is null. *)
+               
+               
+            (* FIXME: CIL will happily compile exprs like 
+            
+                   CastE(somePointerType, someArrayTypedExpr)
+                   
+                   ... for which we will do an unnecessary cast
+                       if the two types are compatible.
+                
+                SO don't do that!
+            
+            *)
           | TSPtr(ptdts, attrs) (* when not isStaticallyNullPtr subex *) -> begin
               debug_print 1 ("cast to typesig " ^ (Pretty.sprint 80 (d_typsig () ((* getConcreteType( *)Cil.typeSig(targetT) (* ) *) ))) ^ " from " ^ (Pretty.sprint 80 (d_typsig () (Cil.typeSig(Cil.typeOf(subex))))) ^ " %s needs checking!\n"); flush Pervasives.stderr; 
               (* enqueue the tmp var decl, assignment and assertion *)

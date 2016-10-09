@@ -2679,5 +2679,13 @@ __libcrunch_bounds_t
 (__attribute__((pure)) __fetch_bounds_ool)
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
-	return __fetch_bounds_from_cache_or_liballocs(ptr, derived_ptr, t, t->pos_maxoff);
+	++__libcrunch_fetch_bounds_called; // TEMP
+	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(
+			ptr, derived_ptr, t, t_sz
+	);
+	if (!__libcrunch_bounds_invalid(from_cache, ptr)) return from_cache;
+	++__libcrunch_fetch_bounds_missed_cache; /* This should hardly ever happen!
+	 * Only with uninstrumented code, or casts not on a recently malloc'd heap object,
+	 * or fetching char* bounds, or GPP bounds. */
+	return __fetch_bounds_internal(ptr, derived_ptr, t);
 }

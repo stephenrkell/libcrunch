@@ -1023,22 +1023,6 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
 /* In libcrunch.c. */
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache_or_liballocs)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache_or_liballocs)(const void *ptr, const void *derived_ptr, struct uniqtype *t, unsigned long t_sz)
-{
-#ifndef LIBCRUNCH_NOOP_INLINES
-	++__libcrunch_fetch_bounds_called; // TEMP
-	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(
-			ptr, derived_ptr, t, t_sz
-	);
-	if (!__libcrunch_bounds_invalid(from_cache, ptr)) return from_cache;
-	/* Else if libcrunch is linked in, we can delegate to it. */
-	++__libcrunch_fetch_bounds_missed_cache;
-	return __fetch_bounds_internal(ptr, derived_ptr, t);
-#else
-	return __libcrunch_make_invalid_bounds(ptr);
-#endif
-}
 extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
 extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
 {
@@ -1282,8 +1266,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from)
 {
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	if (loaded_from)
@@ -1318,6 +1302,33 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	}
 #endif
 	return __libcrunch_make_invalid_bounds(ptr);
+}
+
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from)
+{
+	/* We could choose to inline or not:
+	 * - shadow-space lookup
+	 * - cache lookup
+	 * - whole-hog liballocs lookup.
+	 *
+	 * We choose just the shadow space, for now.
+	 * 
+	 * NOTE that __fetch_bounds_ool is exactly the complement of this function, 
+	 * i.e. it does the lookups necessary assuming we, __fetch_bounds_inl, have failed. */
+	return __fetch_bounds_from_shadow_space(ptr, loaded_from);
+}
+
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
+{
+	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from);
+	if (unlikely(__libcrunch_bounds_invalid(bounds, ptr)))
+	{
+		bounds = __fetch_bounds_ool(ptr, derived, t);
+		if (__libcrunch_bounds_invalid(bounds, ptr)) __builtin_unreachable();
+	}
+	return bounds;
 }
 
 extern __thread unsigned long *__bounds_sp;

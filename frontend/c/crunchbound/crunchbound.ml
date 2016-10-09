@@ -49,6 +49,7 @@ module H = Hashtbl
 type helperFunctionsRecord = {
  mutable fetchBoundsInl : fundec; 
  mutable fetchBoundsOol : fundec; 
+ mutable fetchBoundsFull : fundec; 
  mutable makeBounds : fundec; 
  mutable pushLocalArgumentBounds : fundec; 
  mutable pushArgumentBoundsBaseLimit : fundec; 
@@ -789,6 +790,17 @@ match ptrE with
     | Const(_) -> false
     | _ -> true
 
+let pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals =
+    (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
+    let ptrT = exprConcreteType e
+    in
+    let ts = match ptrT with 
+        TSPtr(targetTs, _) -> targetTs
+      | _ -> failwith "fetching bounds for a non-pointer"
+    in
+    let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
+    in
+    mkAddrOf (Var(uniqtypeGlobal), NoOffset)
 
 let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ptrExp intExp localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
     (* To avoid leaking bad pointers when writing to a shared location, 
@@ -910,21 +922,59 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniq
     in
     let resTmp, resInstrs = res
     in
-    let _ = output_string stderr ("Finished 100; instrs are [" ^ 
+    let _ = output_string stderr ("Finished hoistAndCheckAdjustment; instrs are [" ^ 
         ( List.fold_left (fun s -> fun xi -> s ^ (instToString xi) ^ ",") "" resInstrs )^ "]\n") in let _ = flush stderr in
     res
-    
-let pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals =
-    (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
-    let ptrT = exprConcreteType e
+
+let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals castFromExp castExp castToTS localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
+    let loc = instrLoc currentInst in
+    let exprTmpVar = Cil.makeTempVar ~name:"__cil_castexpr_" enclosingFunction (typeOf castExp) in
+    (* By definition, a pointer created by a bounds-changing cast was not loaded from anywhere; 
+     * it is newly created. *)
+    let boundsForAdjustedExpr = boundsExprForExpr castExp currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
     in
-    let ts = match ptrT with 
-        TSPtr(targetTs, _) -> targetTs
-      | _ -> failwith "fetching bounds for a non-pointer"
+    let _ = match boundsForAdjustedExpr with 
+        MustFetch(None) -> ()
+      | _ -> failwith ("internal error: boundsExprForExpr on type-changing cast `" ^ 
+        (expToString castExp) ^ 
+        "', CIL form `" ^ (expToCilString castExp) ^
+        "' did not say MustFetch(None)")
     in
-    let uniqtypeGlobal = ensureUniqtypeGlobal ts enclosingFile uniqtypeGlobals
+    (* Since exprTmpVar is a non-address-taken local pointer, we want it to have 
+     * local bounds. *)
+    let exprTmpBoundsVar = begin match localLvalToBoundsFun (Var(exprTmpVar), NoOffset) with
+            (Var(bvi), NoOffset) -> bvi
+          | lv -> failwith ("unexpected lval: " ^ (lvalToString lv))
+    end
     in
-    mkAddrOf (Var(uniqtypeGlobal), NoOffset)
+    let res = (exprTmpVar, 
+            (* We've just created local bounds for the temporary, so initialise them.
+             * But do it after we assign to the temporary, so that we pick up
+             * what trumptr left behind in the cache, hopefully. *)
+                [
+                Set( (Var(exprTmpVar), NoOffset), castExp, loc );
+                Call( Some(Var(exprTmpBoundsVar), NoOffset),
+                               (Lval(Var(helperFunctions.fetchBoundsFull.svar),NoOffset)),
+                               [
+                                   (*  const void *ptr *)
+                                   (Lval(Var(exprTmpVar), NoOffset));
+                                   (* derived_ptr is the same *)
+                                   (Lval(Var(exprTmpVar), NoOffset));
+                                   (* where did we load it from? *)
+                                   CastE(voidPtrPtrType, nullPtr);
+                                   (* what's the type we're asking about? *)
+                                   pointeeUniqtypeGlobalPtr castExp enclosingFile uniqtypeGlobals
+                               ],
+                               loc
+                        )
+            ]
+      )
+    in
+    let resTmp, resInstrs = res
+    in
+    let _ = output_string stderr ("Finished hoistCast; instrs are [" ^ 
+        ( List.fold_left (fun s -> fun xi -> s ^ (instToString xi) ^ ",") "" resInstrs )^ "]\n") in let _ = flush stderr in
+    res
 
 (* We're writing some pointer value to a *local* pointer, hence also 
  * to a local bounds var. *)
@@ -1101,6 +1151,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
   val mutable helperFunctions = {
      fetchBoundsInl = emptyFunction "__fetch_bounds_inl";
      fetchBoundsOol = emptyFunction "__fetch_bounds_ool";
+     fetchBoundsFull = emptyFunction "__fetch_bounds_full";
      makeBounds = emptyFunction "__make_bounds";
      pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
      pushArgumentBoundsBaseLimit = emptyFunction "__push_argument_bounds_base_limit";
@@ -1135,6 +1186,14 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
     in
     let boundsPtrType = TPtr(boundsType, [])
     in
+    helperFunctions.fetchBoundsInl <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__fetch_bounds_inl" (TFun(boundsType, 
+                            Some [ 
+                                   ("ptr", voidConstPtrType, []);
+                                   ("maybe_loaded_from", voidPtrPtrType, [])
+                                 ], 
+                            false, []))
+    ;
     helperFunctions.fetchBoundsOol <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__fetch_bounds_ool" (TFun(boundsType, 
                             Some [ 
@@ -1145,11 +1204,14 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                  ], 
                             false, []))
     ;
-    helperFunctions.fetchBoundsInl <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__fetch_bounds_inl" (TFun(boundsType, 
+    helperFunctions.fetchBoundsFull <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__fetch_bounds_full" (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
-                                   ("maybe_loaded_from", voidPtrPtrType, [])
+                                   ("derived_ptr", voidConstPtrType, []);
+                                   ("maybe_loaded_from", voidPtrPtrType, []);
+                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), []) (* ;
+                                   ("t_sz", ulongType, []) *)
                                  ], 
                             false, []))
     ;
@@ -2135,6 +2197,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                               in
                               match maybeBound with
                                 None -> 
+                                    (* FIXME: write test cases for this flexible-array and 
+                                     * static-zero stuff. *)
                                     (* No bound on the array. 
                                      * We let statically-zero bounds through without check
                                      * *if* the array is not inside a struct 
@@ -2334,7 +2398,32 @@ class crunchBoundVisitor = fun enclosingFile ->
                     ]
                     ;
                     CastE(t, Lval(Var(tmpVar), NoOffset))
-                else e
+                else if (tsIsNonVoidPointer targetTs) && (* NOTE: SoftBound differs here *)
+                    not (getConcreteType (decayArrayToCompatiblePointer subexTs)
+                     = getConcreteType (decayArrayToCompatiblePointer targetTs))
+                      (* both concrete, so already de-consted etc., but arrays matter *) &&
+                    (not (isStaticallyNullPtr subex) && not (isStaticallyZero subex))
+                    then begin
+                    debug_print 0 ("Cast may change bounds: source `" ^ 
+                        (typsigToString (decayArrayToCompatiblePointer subexTs)) ^ 
+                        "', dest `" ^ 
+                        (typsigToString (decayArrayToCompatiblePointer targetTs)) ^ "'\n");
+                    flush stderr;
+                    let tempVar, checkInstrs = hoistCast enclosingFile f
+                                    helperFunctions uniqtypeGlobals 
+                                    (* castFromExp *) subex
+                                    (* castExp *) e
+                                    (* castToTS *) targetTs
+                                    (* localLvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)
+                                    !currentFuncAddressTakenLocalNames
+                                    !currentInst
+                                    tempLoadExprs
+                    in
+                    (
+                        self#queueInstr checkInstrs;
+                        (Lval(Var(tempVar), NoOffset))
+                    )
+                end else e
           (* Now we just need to handle pointer arithmetic. 
            * We let it stand if we're at top level; otherwise we hoist it
            * to another temporary. *)
