@@ -2553,7 +2553,7 @@ void * __check_derive_ptr_internal(
 		 * shadow space first. Since this is a slow path already, the
 		 * inline fast-paths have presumably already tried and failed
 		 * to fetch bounds this way, so we don't repeat the effort here. */
-		bounds = __fetch_bounds_from_cache_or_liballocs(derivedfrom, derived, t, t_sz);
+		bounds = __fetch_bounds_ool(derivedfrom, derived, t);
 		if (derivedfrom_bounds) *derivedfrom_bounds = bounds;
 	}
 	
@@ -2681,7 +2681,7 @@ __libcrunch_bounds_t
 {
 	++__libcrunch_fetch_bounds_called; // TEMP
 	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(
-			ptr, derived_ptr, t, t_sz
+			ptr, derived_ptr, t, t->pos_maxoff
 	);
 	if (!__libcrunch_bounds_invalid(from_cache, ptr)) return from_cache;
 	++__libcrunch_fetch_bounds_missed_cache; /* This should hardly ever happen!
