@@ -2359,6 +2359,9 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		&alloc_uniqtype,
 		&alloc_site);
 	
+	_Bool is_cacheable = 0;
+	if (a) is_cacheable = a->is_cacheable;/* || ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
+	
 	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
 	{
 		if (!(alloc_start && alloc_size_bytes)) goto abort_returning_max_bounds;
@@ -2420,7 +2423,6 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK */) ? alloc_uniqtype->pos_maxoff : 0;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
-	_Bool is_cacheable = a->is_cacheable/* || ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)*/;
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
 			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK test for -1 */
