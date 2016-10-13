@@ -160,10 +160,96 @@ void __libcrunch_scan_lazy_typenames(void *typelib_handle)
 		}
 	}
 }
-
-static ElfW(Dyn) *get_dynamic_section(void *handle)
+int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *data)
 {
-	return ((struct link_map *) handle)->l_ld;
+	/* NOTE: we don't do this any more.
+	 *
+	 * There are several reasons. One is that it's less efficient than a 
+	 * compile-time solution that instruments static initializers.
+	 * Another is that it complicates initialization: the hook gets called
+	 * very early, when it might not be safe to run liballocs queries -- yet
+	 * a query is necessary to initialize the bounds.
+	 * 
+	 * The static solution has the problem that bounds may not be available
+	 * at compile time, in the case of something like
+	 * 
+	 * extern int blah[];
+	 * static int *p = &blah[0];
+	 *
+	 * ... since the bounds for p depend on the exact size of blah, which is
+	 * not decided until link time. However, that could be resolved using
+	 * only link-time mechanisms, e.g. probing the size of symbol blah
+	 * (if only we could insert a relocation that is expanded with the link-time
+	 * size of a symbol!).
+	 */
+// 	struct object_metadata *p_meta = (struct object_metadata *) data;
+// 	const char *real_name = dynobj_name_from_dlpi_name(info->dlpi_name, (void*) info->dlpi_addr);
+// 	
+// 	/* Get the bounds of the initialized data sections in this object.
+// 	 * We make do with the data segment for now. */
+// 	char *data_begin = NULL;
+// 	char *data_end = NULL;
+// 	for (int i = 0; i < info->dlpi_phnum; ++i)
+// 	{
+// 		if (info->dlpi_phdr[i].p_type == PT_LOAD && 
+// 				(info->dlpi_phdr[i].p_flags & PF_R)
+// 				&& (info->dlpi_phdr[i].p_flags & PF_W))
+// 		{
+// 			/* Check this is the first data phdr we've seen. */
+// 			if (data_begin)
+// 			{
+// 				debug_printf(1, "saw multiple data segments in %s; bailing\n", real_name);
+// 				return 1;
+// 			}
+// 			data_begin = (char*) info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
+// 			data_end = data_begin + info->dlpi_phdr[i].p_memsz;
+// 		}
+// 	}
+// 	if (!data_begin)
+// 	{
+// 		debug_printf(1, "found no data segment for %s; bailing\n", real_name);
+// 		return 1;
+// 	}
+// 	
+// 	/* Walk the static allocations in its meta-object, visiting any that
+// 	 * - fall within the bounds of the initialized data section(s), and
+// 	 * - have uniqtypes that are pointers. */
+// 	if (!p_meta || !p_meta->types_handle)
+// 	{
+// 		debug_printf(1, "no types handle for %s; bailing\n", real_name);
+// 		return 1;
+// 	}
+// 	
+// 	void *p_statics = dlsym(p_meta->types_handle, "statics");
+// 	if (!p_statics)
+// 	{
+// 		debug_printf(1, "no statics metadata for %s; bailing\n", real_name);
+// 		return 1;
+// 	}
+// 	
+// 	for (struct static_allocsite_entry *p_static = p_statics;
+// 				p_static->entry.allocsite;
+// 				++p_static)
+// 	{
+// 		if ((char*) p_static->entry.allocsite >= data_begin
+// 					&& (char*) p_static->entry.allocsite < data_end)
+// 		{
+// 			/* FIXME: pointer-containing types too! */
+// 			if (UNIQTYPE_IS_POINTER_TYPE(p_static->entry.uniqtype))
+// 			{
+// 				debug_printf(0, "saw a static pointer alloc named %s\n", p_static->name);
+// 				__shadow_store_bounds_for((void**) p_static->entry.allocsite,
+// 						__fetch_bounds_internal(
+// 							*(void**) p_static->entry.allocsite,
+// 							*(void**) p_static->entry.allocsite,
+// 							UNIQTYPE_POINTEE_TYPE(p_static->entry.uniqtype)
+// 						));
+// 			}
+// 			// else debug_printf(0, "... not of pointer type\n", p_static->name);
+// 		}
+// 	}
+// 	
+	return 0;
 }
 
 static ElfW(Dyn) *get_dynamic_entry_from_section(void *dynsec, unsigned long tag)
@@ -173,11 +259,6 @@ static ElfW(Dyn) *get_dynamic_entry_from_section(void *dynsec, unsigned long tag
 		&& dynamic_section->d_tag != tag) ++dynamic_section;
 	if (dynamic_section->d_tag == DT_NULL) return NULL;
 	return dynamic_section;
-}
-
-static ElfW(Dyn) *get_dynamic_entry_from_handle(void *handle, unsigned long tag)
-{
-	return get_dynamic_entry_from_section(((struct link_map *) handle)->l_ld, tag);
 }
 
 static _Bool is_lazy_uniqtype(const void *u)
@@ -667,10 +748,6 @@ static void early_init(void)
 	atexit(print_exit_summary);
 }
 
-static struct uniqtype *pointer_to___uniqtype__void;
-static struct uniqtype *pointer_to___uniqtype__signed_char;
-static struct uniqtype *pointer_to___uniqtype__unsigned_char;
-
 static void clear_mem_refbits(void)
 {
 	int fd = open("/proc/self/clear_refs", O_WRONLY);
@@ -690,24 +767,6 @@ int __libcrunch_global_init(void)
 	
 	// we must have initialized liballocs
 	__liballocs_ensure_init();
-	
-	/* Snarf the addresses of certain uniqtypes, if they're present.
-	 * Because the Unix linker is broken (see notes below on uniquing),
-	 * we can't have uniqueness of anything defined in a preload,
-	 * and from a preload we also can't bind to anything defined elsewhere.
-	 * So we use the dynamic linker to work around this mess. */
-	pointer_to___uniqtype__void = dlsym(RTLD_DEFAULT, "__uniqtype__void");
-	pointer_to___uniqtype__signed_char = dlsym(RTLD_DEFAULT, "__uniqtype__signed_char$8");
-	pointer_to___uniqtype__unsigned_char = dlsym(RTLD_DEFAULT, "__uniqtype__unsigned_char$8");
-	if (!pointer_to___uniqtype__void || !pointer_to___uniqtype__signed_char
-			|| !pointer_to___uniqtype__unsigned_char)
-	{
-		debug_printf(0, "looks uninstrumented!");
-		abort(); 
-		/* This breaks the case of loading instrumented shared libraries
-		 * into an uninstrumented executable with preload active. It *can* 
-		 * be unbroken, with a little effort. */
-	}
 	
 	/* We always include "signed char" in the lazy heap types. (FIXME: this is a 
 	 * C-specificity we'd rather not have here, but live with it for now.

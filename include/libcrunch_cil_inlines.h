@@ -1188,6 +1188,16 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 
 #endif
 
+#define BASE_STORED(ptr) ((void**)(((unsigned long) (ptr)) ^ 0x700000000000ul))
+#define SIZE_STORED(ptr) ((unsigned *)((((unsigned long) (ptr)) >> 1) + 0x080000000000ul))
+
+extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds);
+extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds)
+{
+	*(BASE_STORED(stored_pointer_addr)) = (void*)    val_bounds.base;
+	*(SIZE_STORED(stored_pointer_addr)) = (unsigned) val_bounds.size;
+}
+
 extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type);
 extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type)
 {
@@ -1211,8 +1221,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 */
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	unsigned long dest_addr = (unsigned long) dest;
-	unsigned long base_stored_addr = dest_addr ^ 0x700000000000ul;
-	unsigned long size_stored_addr = (dest_addr >> 1) + 0x080000000000ul;
+	unsigned long base_stored_addr = (unsigned long) BASE_STORED(dest);
+	unsigned long size_stored_addr = (unsigned long) SIZE_STORED(dest);
 	
 	/* Being as lazy as we can here, but no lazier:
 	 * - we do the expensive ool fetch to avoid leaving stale bounds in the shadow space.
@@ -1229,7 +1239,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 * Hmm, not if we make that "indexing or write or pass or return".
 	 * So the only cases we don't load for are pointers that are loaded,
 	 * deref'd locally and then discarded.
-	 * FIXME: IMPLEMENT THIS in crunchbound.
+	 * FIXME: IMPLEMENT THIS in crunchbound. ACTUALLY: don't. Lazy is slower!
 	 */
 	_Bool existing_shadow_bounds_valid = *((unsigned *) size_stored_addr) != 0; /* bounds valid? */
 	if (unlikely(
@@ -1257,8 +1267,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 * secondary checks, in which case fine?). */
 	if (!__libcrunch_bounds_invalid(val_bounds, val) || existing_shadow_bounds_valid)
 	{
-		*((void **)    base_stored_addr) = (void*)    val_bounds.base;
-		*((unsigned *) size_stored_addr) = (unsigned) val_bounds.size;
+		__shadow_store_bounds_for((void**) dest, val_bounds);
 	}
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
@@ -1273,11 +1282,11 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	if (loaded_from)
 	{
 		unsigned long loaded_from_addr = (unsigned long) loaded_from;
-		unsigned long base_stored_addr = loaded_from_addr ^ 0x700000000000ul;
-		unsigned long size_stored_addr = (loaded_from_addr >> 1) + 0x080000000000ul;
+		unsigned long base_stored_addr = (unsigned long) BASE_STORED(loaded_from);
+		unsigned long size_stored_addr = (unsigned long) SIZE_STORED(loaded_from);
 
 		__libcrunch_bounds_t b = (__libcrunch_bounds_t) {
-			.base = *((unsigned long *)         base_stored_addr),
+			.base = (unsigned long) *((void **)         base_stored_addr),
 			/* For the size, we do it sneakily. To ensure that 
 			 * loading "0x ffff ffff" maps to "max bounds", 
 			 * we need a 32-to-64 transformation that generates

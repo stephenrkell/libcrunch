@@ -71,6 +71,15 @@ type helperFunctionsRecord = {
  mutable primarySecondaryTransition : fundec
 }
 
+let stringStartswith s pref = 
+  if (String.length s) >= (String.length pref) 
+  then (String.sub s 0 (String.length pref)) = pref 
+  else false
+
+let varIsOurs vi = stringStartswith vi.vname "__liballocs_" 
+             || stringStartswith vi.vname "__libcrunch_" 
+              || stringEndsWith vi.vdecl.file "libcrunch_cil_inlines.h"
+
 let instrLoc (maybeInst : Cil.instr option) =
    match maybeInst with 
    Some(i) -> Cil.get_instrLoc i
@@ -224,6 +233,11 @@ let rec boundsTForT (t : Cil.typ) gs =
         " is " ^ (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "none") ^ 
         "\n");
     maybeBoundsT
+
+let exprNeedsBounds expr enclosingFile =
+    match boundsTForT (Cil.typeOf expr) enclosingFile.globals with
+        Some(_) -> true
+      | None -> false
 
 let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (host : Cil.lhost) (prevOffsets : Cil.offset) gs = 
     debug_print 0 ("Hello from boundsIndexExprForOffset\n");
@@ -1295,7 +1309,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                    ("ptr", voidConstPtrType, []);
                                    ("base", ulongType, []);
                                    ("limit", ulongType, [])
-                                 ], 
+                                 ],
                             false, []))
     ;
     
@@ -1530,18 +1544,135 @@ let doNonLocalPointerStoreInstr ptrE storeLv be l enclosingFile enclosingFunctio
           l
     )]
 
-let stringStartswith s pref = 
-  if (String.length s) >= (String.length pref) 
-  then (String.sub s 0 (String.length pref)) = pref 
-  else false
-
 let instrIsCheck checkDeriveFun instr = match instr with
     Call(_, Lval(Var(funvar), NoOffset), _, _) when funvar == checkDeriveFun -> true
   | _ -> false
 
+let makeShadowBoundsInitializerCalls helperFunctions enclosingFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals =
+    (* The instructions we need to generate are like doNonLocalPointerStoreInstr,
+     * except that we always do a slow fetch. *)
+    (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
+    let boundsType = try findStructTypeByName wholeFile.globals "__libcrunch_bounds_s"
+      with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+    in
+    (* What do we do if we have to fetch the bounds of the stored value?
+     * This means that we don't *locally* know the bounds of the stored
+     * value. And the value need have no relationship to the pointer
+     * currently stored at the address. And the value we're storing is
+     * probably *local*, i.e. coming from a temporary. So the right 
+     * solution is probably to be eager about fetching bounds, if we're
+     * storing bounds. Is this an optional mode? HMM, yes, we can do this.
+     * If we turn makeInvalidBoundsFun into a make-invalid-or-fetch-fast?
+     * THEN must distinguish makeInvalid from receiveArg
+     *)
+    let be = boundsExprForExpr initializationValExpr
+        (* currentFuncAddressTakenLocalNames *) [] 
+        (* localLvalToBoundsFun *) (fun _ -> failwith "no local lvals!")
+        (* tempLoadExprs *) VarinfoMap.empty
+        wholeFile
+    in
+    let (boundsExpr, preInstrs) = match be with
+            BoundsLval(blv) -> (Lval(blv), [])
+          | BoundsBaseLimitRvals(eb, el)
+             -> let bTemp = Cil.makeTempVar enclosingFunc ~name:"__cil_boundsrv_" boundsType
+                in
+                let blv = (Var(bTemp), NoOffset)
+                in
+                (Lval(blv), 
+                 [makeCallToMakeBounds (Some(blv)) eb el initializerLocation (helperFunctions.makeBounds)]
+                )
+          | MustFetch(maybeLoadedFromE) -> 
+                let bTemp = Cil.makeTempVar enclosingFunc ~name:"__cil_boundsfetched_" boundsType
+                in
+                (Lval(Var(bTemp), NoOffset), 
+                 [Call( Some(Var(bTemp), NoOffset),
+                   (Lval(Var(helperFunctions.fetchBoundsOol.svar),NoOffset)),
+                   [
+                       (*  const void *ptr *)
+                       initializationValExpr;
+                       (* where did we fetch this from? *)
+                       CastE(voidPtrPtrType, nullPtr);
+                      
+                   ],
+                   initializerLocation
+                )]
+                )
+    in
+    let instrsToAppend = preInstrs @ 
+    [Call( None, 
+          Lval(Var(helperFunctions.storePointerNonLocal.svar), NoOffset), 
+          [ 
+            CastE(voidConstPtrPtrType, mkAddrOf initializedPtrLv) ;
+            initializationValExpr ;
+            boundsExpr;
+            pointeeUniqtypeGlobalPtr initializationValExpr wholeFile uniqtypeGlobals
+          ],
+          initializerLocation
+    )]
+    in
+    instrsToAppend
+
+let appendShadowBoundsInitializer helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals =
+    let instrsToAppend = makeShadowBoundsInitializerCalls helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals
+    in
+    initFunc.sbody <- { battrs = []; bstmts = [{
+            labels = [];
+            skind = (let origInstrList = match (List.hd initFunc.sbody.bstmts).skind with
+                Instr(orig) -> orig
+                | _ -> failwith "initializer function is not a single Instr statement"
+                in Instr(origInstrList @ instrsToAppend));
+            sid = 0;
+            succs = [];
+            preds = []
+        }]}
+
+let rec reverseMapOverInitializedLvalues revAcc f lhost lofflist (someInit : Cil.init option) someLocation = 
+match someInit with
+    None -> revAcc
+    (* In both the other cases, we need to
+     * - make the lvalue that is being assigned to
+     * - if it is of pointer type, we should have a single init
+     * - if it is of non-pointer type, we may have a compound init
+            that we need to recurse down
+            by enumerating all the lvalues 
+     *     *)
+    | Some(SingleInit(anInitExpr)) -> 
+        (* For each initialized thing, *)
+        ((f (lhost, offsetFromList lofflist) anInitExpr) :: revAcc)
+    | Some(CompoundInit(t, offsetInitPairs)) ->
+        (* We want to cons the result items on in reverse order. *)
+        List.fold_left (fun newRevAcc -> fun (anOffset, anInit) ->
+            reverseMapOverInitializedLvalues newRevAcc f lhost (lofflist @ [anOffset]) (Some(anInit)) someLocation
+        ) revAcc offsetInitPairs
+
+let mapOverInitializedLvalues f lv someInit someLocation = 
+    let (lhost, loff) = lv in
+    List.rev (reverseMapOverInitializedLvalues [] f lhost (offsetToList loff) someInit someLocation)
+
 class crunchBoundVisitor = fun enclosingFile -> 
                                object(self)
   inherit (crunchBoundBasicVisitor enclosingFile)
+  
+  val initFunc : fundec = emptyFunction "__libcrunch_crunchbound_init" 
+
+  initializer
+    (* Create a constructor function to hold the bounds write instructions
+     * we are creating. This is a bit like CIL's "global initializer", which
+     * we deliberately avoid using because CIL wants to put the call to it
+     * in main(), which would be silly... we should use constructors instead. *)
+    begin
+        initFunc.svar <- findOrCreateFunc enclosingFile "__libcrunch_crunchbound_init" 
+            (TFun(TVoid([]), Some([]), false, [Attr("constructor", [AInt(101)])]))
+            ;
+        initFunc.sbody <- { battrs = []; bstmts = [{
+            labels = [];
+            skind = Instr([]);
+            sid = 0;
+            succs = [];
+            preds = []
+        }]};
+        enclosingFile.globals <- enclosingFile.globals @ [GFun(initFunc, initFunc.svar.vdecl)]
+    end
 
   (* Remember the set of __uniqtype objects for which we've created a global
    * weak extern. *)
@@ -1678,6 +1809,39 @@ class crunchBoundVisitor = fun enclosingFile ->
         ) (* end Return case (outer) *)
    | _ -> DoChildren
 
+  method vglob (g: global) : global list visitAction = 
+    match g with 
+        GVar(gvi, gii, loc) when exprNeedsBounds (Lval(Var(gvi), NoOffset)) enclosingFile ->
+         if varIsOurs gvi then SkipChildren
+         else (
+            (debug_print 0 ("Saw global needing bounds, name `" ^ gvi.vname ^ "'\n"));
+            List.iter (fun containedPtrExpr -> 
+                        match containedPtrExpr with
+                            Lval(lh, loff) ->
+                                appendShadowBoundsInitializer
+                                    helperFunctions initFunc loc
+                                    (lh, loff) (CastE(voidPtrType, zero)) enclosingFile
+                                    uniqtypeGlobals
+                            | _ -> failwith "error: statically initializing a non-lvalue"
+                    ) (containedPointerExprsForExpr (Lval(Var(gvi), NoOffset)))
+                    ;
+                    let createCalls lv initExpr = 
+                        if exprNeedsBounds (Lval(lv)) enclosingFile 
+                        then
+                            appendShadowBoundsInitializer
+                                helperFunctions initFunc loc 
+                                lv initExpr enclosingFile 
+                                uniqtypeGlobals
+                        else ()
+                    in
+                    let _ = mapOverInitializedLvalues createCalls (Var(gvi), NoOffset) gii.init loc
+                    in ()
+                    
+            ;
+            DoChildren)
+        | _ -> DoChildren
+    
+
   method vfunc (f: fundec) : fundec visitAction = 
       currentFunc := Some(f);
       currentFuncCallerIsInstFlag := None;
@@ -1705,13 +1869,82 @@ class crunchBoundVisitor = fun enclosingFile ->
       currentFuncAddressTakenLocalNames := !tempAddressTakenLocalNames
       ;
       (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
-      if stringStartswith f.svar.vname "__liballocs_" 
-          || stringEndsWith f.svar.vdecl.file "libcrunch_cil_inlines.h"
-          then (currentFunc := None; currentFuncCallerIsInstFlag := None; SkipChildren)
+      if varIsOurs f.svar then (currentFunc := None; currentFuncCallerIsInstFlag := None; SkipChildren)
       else
           let currentFuncCallerIsInstFlagVar = Cil.makeTempVar f ~name:"__caller_is_inst_" boolType
           in 
           currentFuncCallerIsInstFlag := Some(currentFuncCallerIsInstFlagVar);
+      (* Handle (static) variables that have global initializers.
+       * GAH. This is hard because static variables are local.
+       * We can't take their address from outside of the scope that declares them.
+       * So we have to make our initializer be a run-once block at the start
+       * of the function. BLARGH. That's annoying, but we can do it.
+       * Let's only do it if we have such a static, though.
+       * 
+       * ACTUALLY: CIL doesn't have local statics! They get promoted to globals.
+       *)
+      (*
+      let staticsNeedingBoundsInitialization = 
+      List.map (fun localvi -> localvi.vstorage = Static && 
+            (* this counts pointer-containing structs etc.*)
+            exprNeedsBounds (Lval(Var(localvi), NoOffset)) enclosingFile) f.slocals
+      in
+      if (not (0 = List.length staticsNeedingBoundsInitialization)) then
+         let initFlag = Cil.makeTempVar f ~name:"__done_static_pointer_bounds_init_" boolType in
+         initFlag.vstorage <- Static;
+         f.sbody <- {
+            battrs = f.sbody.battrs;
+            bstmts = [{ labels = []
+                      ; skind = If(UnOp(LNot, Lval(Var(initFlag), NoOffset), boolType), mkBlock [{ labels = [];
+                          skind = Instr([Set((Var(initFlag), NoOffset), one, f.svar.vdecl)]
+                            @ List.fold_left (fun instrs -> fun aVar -> 
+                                if (aVar.vstorage <> Static
+                                     || not (exprNeedsBounds (Lval(Var(aVar), NoOffset)) enclosingFile))
+                                then instrs
+                                else instrs @ (List.flatten (
+                                    (* HACK. To make sure we catch everything,
+                                     * first we map over all contained pointer exprs 
+                                     *      for all static locals,
+                                     *      and store the bounds of the null pointer.
+                                     * Then for each contained pointer that is initialized, we
+                                     * output a write something.
+                                     *)
+                                    List.map (fun containedPtrExpr -> 
+                                        match containedPtrExpr with
+                                            Lval(lh, loff) ->
+                                                makeShadowBoundsInitializerCalls
+                                                helperFunctions initFunc f.svar.vdecl
+                                                (lh, loff) (CastE(voidPtrType, zero)) enclosingFile 
+                                                uniqtypeGlobals
+                                            | _ -> failwith "error: statically initializing a non-lvalue"
+                                    ) (containedPointerExprsForExpr (Lval(Var(aVar), NoOffset)))
+                                    @
+                                    (
+                                    let createCalls lv initExpr = 
+                                        if exprNeedsBounds (Lval(lv)) enclosingFile 
+                                        then
+                                            makeShadowBoundsInitializerCalls 
+                                                helperFunctions initFunc f.svar.vdecl
+                                                lv initExpr enclosingFile
+                                                uniqtypeGlobals
+                                        else []
+                                    in
+                                    mapOverInitializedLvalues createCalls (Var(aVar), NoOffset) aVar.vinit.init aVar.vdecl
+                                    ))
+                                )
+                            ) [] f.slocals
+                          )
+                        ; sid = 0
+                        ; succs = []
+                        ; preds = []
+                        }], mkBlock [], f.svar.vdecl)
+                      ; sid = 0
+                      ; succs = []
+                      ; preds = []
+                      }] @ f.sbody.bstmts
+         }
+      else ();
+    *)
           (* We've done computeFileCFG, so no need to do the CFG info thing *)
           (* Figure out which pointer locals also need cached bounds. 
           
@@ -1933,9 +2166,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     end
               | Call(olv, calledE, es, l) -> 
                   (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
-                  if (match calledE with Lval(Var(fvi), NoOffset) when stringStartswith fvi.vname "__liballocs_" 
-                      || stringEndsWith fvi.vdecl.file "libcrunch_cil_inlines.h"
-                      -> true
+                  if (match calledE with Lval(Var(fvi), NoOffset) when varIsOurs fvi -> true
                     | _ -> false)
                   then changedInstrs
                   else
@@ -2733,6 +2964,8 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
   inherit (crunchBoundBasicVisitor enclosingFile)
   
   method vfunc (f: fundec) : fundec visitAction = 
+      if varIsOurs f.svar then SkipChildren
+      else
       (* The idea here is to duplicate the function body in two.
        * In the top half, we turn "full" checks into "primary only" checks.
        * In the bottom half, we leave them be, but label them.
