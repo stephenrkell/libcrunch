@@ -1852,9 +1852,9 @@ class crunchBoundVisitor = fun enclosingFile ->
       let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
         with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
       in
-      (debug_print 0 ("CIL dump of function `" ^ f.svar.vname ^ "': ");
+      (* (debug_print 0 ("CIL dump of function `" ^ f.svar.vname ^ "': ");
        Cil.dumpBlock (new plainCilPrinterClass) stderr 0 f.sbody;
-       debug_print 0 "\n");
+       debug_print 0 "\n"); *)
       (* Do our own scan for AddrOf and StartOf. 
        * The CIL one is not trustworthy, because any array subexpression
        * has internally been tripped via a StartOf (perhaps now rewritten? FIXME)
@@ -2744,7 +2744,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                             in
                             let accRuns = maybeSplitInstrs [] [] is
                             in
-                            debug_print 0 ("Split an Instr sequence into " ^ (string_of_int (List.length accRuns)) ^ "\n");
+                            (* debug_print 0 ("Split an Instr sequence into " ^ (string_of_int (List.length accRuns)) ^ "\n"); *)
                             (* Okay, now we have the runs, make a block. *)
                             {
                                 labels = s.labels;
@@ -2767,7 +2767,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                                         preds = []
                                     }) accRuns)
                                     in
-                                    Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 b;
+                                    (* Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 b; *)
                                     b
                                     );
                                 sid = s.sid;
@@ -2987,11 +2987,11 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
             | None -> failwith "couldn't copy function body"
       )  
       in
-      debug_print 0 ("Labelling primary checks in function " ^ f.svar.vname ^ " original body\n");
+      (* debug_print 0 ("Labelling primary checks in function " ^ f.svar.vname ^ " original body\n"); *)
       f.sbody <- visitCilBlock (new checkStatementLabelVisitor "primary_check" helperFunctions.checkDerivePtr.svar) f.sbody;
-      debug_print 0 ("After visit, original body is as follows\n");
-      Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
-      debug_print 0 ("Labelling full checks in copied body of function " ^ f.svar.vname ^ "\n");
+      (* debug_print 0 ("After visit, original body is as follows\n");
+      Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody; *)
+      (* debug_print 0 ("Labelling full checks in copied body of function " ^ f.svar.vname ^ "\n"); *)
       let labelledSecondaryBody = visitCilBlock (new checkStatementLabelVisitor "full_check" helperFunctions.checkDerivePtr.svar) secondaryBody in
       let findStmtByLabel = fun ident -> (
           let found = ref None
@@ -3003,7 +3003,7 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
           )
       )
       in 
-      debug_print 0 ("After visit, copied body is as follows\n");
+      (* debug_print 0 ("After visit, copied body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 labelledSecondaryBody;
       debug_print 0 ("... and original body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
@@ -3011,7 +3011,7 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       f.sbody <- visitCilBlock (new primaryToSecondaryJumpVisitor helperFunctions.checkDerivePtr.svar helperFunctions.primaryCheckDerivePtr.svar findStmtByLabel enclosingFile) f.sbody;
       debug_print 0 ("Finally, function body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
-      debug_print 0 ("Finished with function " ^ f.svar.vname ^ "\n");
+      debug_print 0 ("Finished with function " ^ f.svar.vname ^ "\n"); *)
       (* Our new body is a Block containing both *)
       f.sbody <- {
         battrs = f.sbody.battrs;
