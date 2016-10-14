@@ -88,8 +88,8 @@ let instrLoc (maybeInst : Cil.instr option) =
 let varinfoIsLocal vi currentFuncAddressTakenLocalNames = not vi.vglob && 
     ( let isAT = (List.mem vi.vname currentFuncAddressTakenLocalNames)
       in
-        (if isAT then debug_print 0 ("Local var " ^ vi.vname ^ " would count as local " ^ 
-        "but is address-taken\n") else ())
+        (if isAT then () (* debug_print 0 ("Local var " ^ vi.vname ^ " would count as local " ^ 
+        "but is address-taken\n")*) else ())
         ;
         not isAT
     )
@@ -118,9 +118,9 @@ let boundsTAsNumber maybeBoundsT gs =
       | _ -> failwith "not a bounds type (asNumber)"
 
 let boundsTTimesN maybeBoundsT (n : int64) gs =
-    debug_print 0 ((Int64.to_string n) ^ " times bounds type " ^ 
+    (* debug_print 0 ((Int64.to_string n) ^ " times bounds type " ^ 
         (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
-        " is: "); flush stderr;
+        " is: "); flush stderr; *)
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
     in
     let prod = match maybeBoundsT with
@@ -140,14 +140,14 @@ let boundsTTimesN maybeBoundsT (n : int64) gs =
             )
       | _ -> failwith "not a bounds type (*)"
     in
-    debug_print 0 ((match prod with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
-        "\n"); flush stderr; 
+    (* debug_print 0 ((match prod with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        "\n"); flush stderr; *)
     prod
 
 let boundsTPlusN maybeBoundsT (n : int64) gs =
-    debug_print 0 ((Int64.to_string n) ^ " plus bounds type " ^ 
+    (* debug_print 0 ((Int64.to_string n) ^ " plus bounds type " ^ 
         (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
-        " is: "); flush stderr;
+        " is: "); flush stderr; *)
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
     in
     let sum = match maybeBoundsT with
@@ -168,8 +168,8 @@ let boundsTPlusN maybeBoundsT (n : int64) gs =
             ))
       | _ -> failwith "not a bounds type (+)"
     in
-    debug_print 0 ((match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
-        "\n");
+    (* debug_print 0 ((match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+        "\n"); *)
     sum
 
 let boundsTPlusBoundsT maybeBoundsT1 maybeBoundsT2 gs =
@@ -188,13 +188,13 @@ let boundsTPlusBoundsT maybeBoundsT1 maybeBoundsT2 gs =
             boundsTPlusN maybeBoundsT1 m gs
       | _ -> failwith "not a bounds type (T plus T)"
     in
-    debug_print 0 ("Sum of bounds types " ^ 
+    (* debug_print 0 ("Sum of bounds types " ^ 
         (match maybeBoundsT1 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " and " ^ 
         (match maybeBoundsT2 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " is " ^
         (match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
-        "\n");
+        "\n"); *)
     sum
 
 let rec boundsTForT (t : Cil.typ) gs = 
@@ -1592,7 +1592,8 @@ let makeShadowBoundsInitializerCalls helperFunctions enclosingFunc initializerLo
                        initializationValExpr;
                        (* where did we fetch this from? *)
                        CastE(voidPtrPtrType, nullPtr);
-                      
+                       (* pointee type *)
+                       pointeeUniqtypeGlobalPtr initializationValExpr wholeFile uniqtypeGlobals
                    ],
                    initializerLocation
                 )]
@@ -2728,7 +2729,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                                 match instrs with
                                   [] -> List.rev (cur :: rev_acc)
                                 | x :: more when instrIsCheck checkDeriveFun x ->
-                                      debug_print 0 "Saw a check\n";
+                                      (* debug_print 0 "Saw a check\n"; *)
                                       (* accumulate a singleton, then start a new run of instrs *)
                                       let new_singleton = [x]
                                       in
@@ -2821,7 +2822,7 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                     (* We're expecting that the check statement is labelled with a "full check" *)
                     let secondaryCheckLabelIdent = match outerS.labels with
                         [Label(ident, _, _)] ->
-                            debug_print 0 ("Found label ident: " ^ ident ^ "\n");
+                            (* debug_print 0 ("Found label ident: " ^ ident ^ "\n"); *)
                             let prefix = String.sub ident 0 (String.length "__crunchbound_primary_check")
                             in
                             let suffix = (
@@ -2829,7 +2830,7 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                                 then String.sub ident (String.length ("__crunchbound_primary_check")) (String.length ident - String.length ("__crunchbound_primary_check"))
                                 else "")
                             in
-                            debug_print 0 ("Prefix, suffix: " ^ prefix ^ ", " ^ suffix ^ "\n");
+                            (* debug_print 0 ("Prefix, suffix: " ^ prefix ^ ", " ^ suffix ^ "\n"); *)
                             "__crunchbound_full_check" ^ suffix
                       | _ -> failwith "check statement does not have a check label"
                     in 
@@ -2979,7 +2980,7 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       (* Now we can visit the statements *)
       let copiedBlock = ref None
       in
-      debug_print 0 ("Copying body of function " ^ f.svar.vname ^ "\n");
+      (* debug_print 0 ("Copying body of function " ^ f.svar.vname ^ "\n"); *)
       let secondaryBody = (
           visitCilBlock (new copyBlockVisitor copiedBlock "__bottomhalf_") f.sbody;
           match !copiedBlock with

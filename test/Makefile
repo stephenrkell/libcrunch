@@ -128,7 +128,7 @@ noquery-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	if $(MAKE) cleanrun-noquery-$* 1>$$out 2>$$err && \
-           ! grep '^queries handled.* [1-9]+[0-9]*$$' $$err; then touch "$@"; else false; fi
+           ! grep '^queries handled.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
 # Bounds cases might not report passed type checks
 checkrun-bounds-%: bounds-%/check-stamp
