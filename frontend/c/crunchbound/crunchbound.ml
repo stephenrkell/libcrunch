@@ -88,7 +88,7 @@ let instrLoc (maybeInst : Cil.instr option) =
 let varinfoIsLocal vi currentFuncAddressTakenLocalNames = not vi.vglob && 
     ( let isAT = (List.mem vi.vname currentFuncAddressTakenLocalNames)
       in
-        (if isAT then () (* debug_print 0 ("Local var " ^ vi.vname ^ " would count as local " ^ 
+        (if isAT then () (* debug_print 1 ("Local var " ^ vi.vname ^ " would count as local " ^ 
         "but is address-taken\n")*) else ())
         ;
         not isAT
@@ -118,7 +118,7 @@ let boundsTAsNumber maybeBoundsT gs =
       | _ -> failwith "not a bounds type (asNumber)"
 
 let boundsTTimesN maybeBoundsT (n : int64) gs =
-    (* debug_print 0 ((Int64.to_string n) ^ " times bounds type " ^ 
+    (* debug_print 1 ((Int64.to_string n) ^ " times bounds type " ^ 
         (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " is: "); flush stderr; *)
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
@@ -140,12 +140,12 @@ let boundsTTimesN maybeBoundsT (n : int64) gs =
             )
       | _ -> failwith "not a bounds type (*)"
     in
-    (* debug_print 0 ((match prod with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+    (* debug_print 1 ((match prod with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         "\n"); flush stderr; *)
     prod
 
 let boundsTPlusN maybeBoundsT (n : int64) gs =
-    (* debug_print 0 ((Int64.to_string n) ^ " plus bounds type " ^ 
+    (* debug_print 1 ((Int64.to_string n) ^ " plus bounds type " ^ 
         (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " is: "); flush stderr; *)
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
@@ -168,7 +168,7 @@ let boundsTPlusN maybeBoundsT (n : int64) gs =
             ))
       | _ -> failwith "not a bounds type (+)"
     in
-    (* debug_print 0 ((match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
+    (* debug_print 1 ((match sum with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         "\n"); *)
     sum
 
@@ -188,7 +188,7 @@ let boundsTPlusBoundsT maybeBoundsT1 maybeBoundsT2 gs =
             boundsTPlusN maybeBoundsT1 m gs
       | _ -> failwith "not a bounds type (T plus T)"
     in
-    (* debug_print 0 ("Sum of bounds types " ^ 
+    (* debug_print 1 ("Sum of bounds types " ^ 
         (match maybeBoundsT1 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
         " and " ^ 
         (match maybeBoundsT2 with Some(boundsT) -> typToString boundsT | _ -> "(none)") ^ 
@@ -228,7 +228,7 @@ let rec boundsTForT (t : Cil.typ) gs =
       | TEnum(ei, attrs) -> None
       | TBuiltin_va_list(attrs) -> None
     in
-    debug_print 0 ("Bounds type for " ^ 
+    debug_print 1 ("Bounds type for " ^ 
         (typToString t) ^ 
         " is " ^ (match maybeBoundsT with Some(boundsT) -> typToString boundsT | _ -> "none") ^ 
         "\n");
@@ -240,16 +240,16 @@ let exprNeedsBounds expr enclosingFile =
       | None -> false
 
 let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (host : Cil.lhost) (prevOffsets : Cil.offset) gs = 
-    debug_print 0 ("Hello from boundsIndexExprForOffset\n");
+    debug_print 1 ("Hello from boundsIndexExprForOffset\n");
     let bounds_t = findStructTypeByName gs "__libcrunch_bounds_s"
     in
     let indexExpr = match offs with
         Field(fi, nextOffset) -> 
-            debug_print 0 ("Hit Field case\n");
+            debug_print 1 ("Hit Field case\n");
             let compTypeBeingIndexed = Cil.typeOf (Lval(host, prevOffsets))
             in
             let rec addEarlierFields = fun acc -> fun someFis -> (
-                debug_print 0 ("In addEarlierFields\n");
+                debug_print 1 ("In addEarlierFields\n");
                 match someFis with
                     [] -> acc
                   | someFi :: more -> 
@@ -261,7 +261,7 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
             in
             let earlierFields = addEarlierFields [] fi.fcomp.cfields
             in
-            debug_print 0 ("Found " ^ (string_of_int (List.length earlierFields)) ^ "\n");
+            debug_print 1 ("Found " ^ (string_of_int (List.length earlierFields)) ^ "\n");
             (* Add up all the boundsTs for *earlier* fields in the struct. *)
             let fieldOffsetAsBoundsT = List.fold_left 
                 (fun x -> fun y -> boundsTPlusBoundsT x y gs) 
@@ -270,12 +270,12 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
             in
             let fieldOffset = boundsTAsNumber fieldOffsetAsBoundsT gs
             in
-            debug_print 0 ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
+            debug_print 1 ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
             boundsIndexExprForOffset
                 (BinOp(PlusA, startIndexExpr, makeIntegerConstant fieldOffset, intType))
                 nextOffset host (offsetAppend prevOffsets (Field(fi, NoOffset))) gs
       | Index(intExp, nextOffset) -> 
-            debug_print 0 ("Hit Index case\n");
+            debug_print 1 ("Hit Index case\n");
             (* We're indexing into an array at intExp (which we've already 
              * checked is in bounds).
              *
@@ -290,7 +290,7 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
              *)
             let offsetUpToHere = offsetAppend prevOffsets (Index(intExp, NoOffset))
             in
-            debug_print 0 ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
+            debug_print 1 ("Recursing on nextOffset in (ignore host): " ^ (lvalToString (host, nextOffset)) ^ "\n");
             let zeroIndexExpr = boundsIndexExprForOffset startIndexExpr nextOffset
                 host offsetUpToHere gs
             in
@@ -305,7 +305,7 @@ let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (
             ), intType))
       | NoOffset -> startIndexExpr
     in
-    debug_print 0 ("Bounds index expression for indexing " ^ 
+    debug_print 1 ("Bounds index expression for indexing " ^ 
         (lvalToString (host, prevOffsets)) ^ " giving " ^ 
         (lvalToString (host, offsetFromList ((offsetToList prevOffsets) @ (offsetToList offs)))) ^ 
         " is " ^ (expToString indexExpr) ^ "\n");
@@ -325,14 +325,14 @@ let makeSizeOfPointeeType ptrExp =
     SizeOf(decayPointeeArrayT pointeeT)
 
 let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Cil.varinfo VarinfoMap.t ref) = 
-    debug_print 0 ("Ensuring we have bounds local for " ^ vi.vname ^ "\n");
+    debug_print 1 ("Ensuring we have bounds local for " ^ vi.vname ^ "\n");
     try  
         let found = VarinfoMap.find vi !boundsLocals
         in 
-        debug_print 0 ("Already exists\n");
+        debug_print 1 ("Already exists\n");
         found
     with Not_found -> 
-     debug_print 0 ("Creating new bounds local for local " ^ vi.vname ^ "\n");
+     debug_print 1 ("Creating new bounds local for local " ^ vi.vname ^ "\n");
      let maybe_bt = boundsTForT vi.vtype enclosingFile.globals 
      in
      let bt = match maybe_bt with
@@ -348,17 +348,17 @@ let getOrCreateBoundsLocal vi enclosingFunction enclosingFile (boundsLocals : Ci
      newLocalVi
 
 let boundsLvalForLocalLval (boundsLocals : Cil.varinfo VarinfoMap.t ref) enclosingFunction enclosingFile ((lh, loff) : lval) : lval =
-    debug_print 0 ("Hello from boundsLvalForLocalLval, lval " ^ (lvalToString (lh, loff)) ^ "\n");
+    debug_print 1 ("Hello from boundsLvalForLocalLval, lval " ^ (lvalToString (lh, loff)) ^ "\n");
     let gs = enclosingFile.globals
     in
     match lh with
         Var(local_vi) -> 
-            debug_print 0 ("Hello from Var case, name " ^ local_vi.vname ^ "\n");
+            debug_print 1 ("Hello from Var case, name " ^ local_vi.vname ^ "\n");
             let boundsVi = getOrCreateBoundsLocal local_vi enclosingFunction enclosingFile boundsLocals 
             in 
             let indexExpr = boundsIndexExprForOffset zero loff (Var(local_vi)) NoOffset gs
             in
-            debug_print 0 ("Bounds index expr is `" ^ (expToString indexExpr) ^ "'\n");
+            debug_print 1 ("Bounds index expr is `" ^ (expToString indexExpr) ^ "'\n");
             let offs = (
                 match Cil.typeSig (Cil.typeOf (Lval(Var(boundsVi), NoOffset))) with
                     TSArray(_) -> Index(indexExpr, NoOffset)
@@ -438,11 +438,11 @@ let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames =
      * Non-lvalue pointers that are not derived from other pointers
      * are always StartOf or AddrOf, which we handle separately.
      *)
-    debug_print 0 ("Getting loaded-from addr for ptr expr: " ^ (expToCilString someE) ^ "\n");
+    debug_print 1 ("Getting loaded-from addr for ptr expr: " ^ (expToCilString someE) ^ "\n");
     match someE with
     |   Lval(loadHost, loadOffs) 
             when not (hostIsLocal loadHost currentFuncAddressTakenLocalNames) -> 
-            debug_print 0 ("It's a non-local lval\n");
+            debug_print 1 ("It's a non-local lval\n");
             Some(simplifyPtrExprs (mkAddrOf (loadHost, loadOffs)))
     |   Lval(Var(vi), loadOffs) -> (
           (* We might also be dealing with a temporary whose original loaded-from expression
@@ -450,11 +450,11 @@ let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames =
           try
                let foundE = VarinfoMap.find vi tempLoadExprMap
                in
-               debug_print 0 ("Found a saved loaded-from expr: " ^ (
+               debug_print 1 ("Found a saved loaded-from expr: " ^ (
                 match foundE with Some(fe) -> expToString fe | None -> "(saved None)") ^ "\n");
                foundE
           with Not_found -> 
-                debug_print 0 ("Didn't find a saved loaded-from expr\n");
+                debug_print 1 ("Didn't find a saved loaded-from expr\n");
                 None
           )
     |   StartOf(Mem(memExp), NoOffset) -> (* memExp points to an array which we make decay to ptr. *)
@@ -469,7 +469,7 @@ let getLoadedFromAddr someE tempLoadExprMap currentFuncAddressTakenLocalNames =
              *)
             Some(memExp) (* FIXME: is this always an lvalue? might need to recurse? *)
     |   _ -> 
-        debug_print 0 ("It's not an lvalue\n");
+        debug_print 1 ("It's not an lvalue\n");
         None
         
 let rec multiplyAccumulateArrayBounds acc t = 
@@ -498,12 +498,12 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
     if isStaticallyNullPtr e then BoundsBaseLimitRvals(zero, one)
     else
     let simplifiedPtrExp = simplifyPtrExprs e in
-    debug_print 0 ("Getting bounds expr for expr " ^ (expToString simplifiedPtrExp) ^ "\n");
+    debug_print 1 ("Getting bounds expr for expr " ^ (expToString simplifiedPtrExp) ^ "\n");
     match simplifiedPtrExp with 
         Lval(Var(vi), offs) when varinfoIsLocal vi currentFuncAddressTakenLocalNames -> 
             BoundsLval(localLvalToBoundsFun (Var(vi), offs))
       | _ ->
-    debug_print 0 ("Expr has no local bounds\n");
+    debug_print 1 ("Expr has no local bounds\n");
     let maybeLoadedFromExpr = getLoadedFromAddr simplifiedPtrExp tempLoadExprs currentFuncAddressTakenLocalNames in
     let rec offsetContainsField offs = match offs with
             NoOffset -> false
@@ -511,7 +511,7 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
           | Index(intExp, rest) -> offsetContainsField rest
     in
     let handleAddrOfVarOrField someHost someOffset = 
-        debug_print 0 "Handling AddrOf(var or field)...\n";
+        debug_print 1 "Handling AddrOf(var or field)...\n";
         let rec splitLeadingIndexesAndReverse revAccIndexes offlist = match offlist with
             [] -> (revAccIndexes, [])
           | Field(fi, ign)     :: more -> 
@@ -572,7 +572,7 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
             in
             BoundsLval(sourceBoundsLval)
       | AddrOf(Var(someVi), someOffset)  -> (
-        debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 1)\n");
+        debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 1)\n");
         try handleAddrOfVarOrField (Var(someVi)) someOffset
         with Not_found -> MustFetch(None)
         )
@@ -634,7 +634,7 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
              * "no array bound available" case. We handle untrustworthy bounds by
              * other means (CHECK).
              *)
-            debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 2)\n");
+            debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 2)\n");
             try handleAddrOfVarOrField (Var(someVi)) (offsetFromList (
                (offsetToList someOffset) @ [Index(zero, NoOffset)]
             ))
@@ -648,7 +648,7 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
              * This works much like the variable-subobject case. 
              * Note that offsets never deref! So we're always staying within
              * the same object. *) (
-              debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 3)\n");
+              debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 3)\n");
               handleAddrOfVarOrField (Mem(memExp)) someOffset
             )
             (* ELSE
@@ -661,7 +661,7 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
              *)
       | StartOf(Mem(memExp), someOffset) 
         when offsetContainsField someOffset -> (
-             debug_print 0 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 4)\n");
+             debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 4)\n");
              handleAddrOfVarOrField (Mem(memExp)) (offsetFromList (
                (offsetToList someOffset) @ [Index(zero, NoOffset)]
              ))
@@ -742,12 +742,12 @@ let rec boundsExprForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsF
              * we do the write. PROBLEM: we've split this across a function call,
              * __check_derive_ptr. HMM. Perhaps this transformation hasn't happened yet?
              *)
-      | _ -> (debug_print 0 ("Expr " ^ (expToString e) ^ " hit default MustFetch case, " ^
+      | _ -> (debug_print 1 ("Expr " ^ (expToString e) ^ " hit default MustFetch case, " ^
                 (match maybeLoadedFromExpr with None -> "without" | _ -> "with") ^ " a loaded-from expr\n");
                 MustFetch(maybeLoadedFromExpr))
 
 let checkInLocalBounds enclosingFile enclosingFunction helperFunctions uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
-    debug_print 0 ("Making local bounds check for indexing expression " ^ 
+    debug_print 1 ("Making local bounds check for indexing expression " ^ 
         (expToString (Lval(localHost, offsetFromList prevOffsets))) ^ 
         " by index expression " ^ (expToString (intExp)) ^ "\n");
     (* To avoid leaking bad pointers when writing to a shared location, 
@@ -998,7 +998,7 @@ let makeBoundsWriteInstruction ~doFetchOol enclosingFile enclosingFunction curre
      * do we copy bounds, 
      *       make them ourselves, 
      *    or fetch them? *)
-    debug_print 0 ("Making bounds write instructions... matching writtenE: " ^ expToString writtenE ^ "\n");
+    debug_print 1 ("Making bounds write instructions... matching writtenE: " ^ expToString writtenE ^ "\n");
     (* We only get called if we definitely want to update the bounds for 
      * justWrittenLval.
      * It follows that justWrittenLval is a pointer
@@ -1466,7 +1466,7 @@ let containedPointerExprsForExpr e =
                     (offsetToList someOff) @ (offsetToList off)
                 ) in
                 let _ = if offsets != [NoOffset] then
-                    debug_print 0 ("Expression `" ^ (expToString e) ^ "' contains a pointer: `" ^ 
+                    debug_print 1 ("Expression `" ^ (expToString e) ^ "' contains a pointer: `" ^ 
                         (expToString (Lval(someHost, newOff))) ^ "'\n")
                     else ()
                 in
@@ -1815,7 +1815,7 @@ class crunchBoundVisitor = fun enclosingFile ->
         GVar(gvi, gii, loc) when exprNeedsBounds (Lval(Var(gvi), NoOffset)) enclosingFile ->
          if varIsOurs gvi then SkipChildren
          else (
-            (debug_print 0 ("Saw global needing bounds, name `" ^ gvi.vname ^ "'\n"));
+            (debug_print 1 ("Saw global needing bounds, name `" ^ gvi.vname ^ "'\n"));
             List.iter (fun containedPtrExpr -> 
                         match containedPtrExpr with
                             Lval(lh, loff) ->
@@ -1853,9 +1853,9 @@ class crunchBoundVisitor = fun enclosingFile ->
       let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
         with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
       in
-      (* (debug_print 0 ("CIL dump of function `" ^ f.svar.vname ^ "': ");
+      (* (debug_print 1 ("CIL dump of function `" ^ f.svar.vname ^ "': ");
        Cil.dumpBlock (new plainCilPrinterClass) stderr 0 f.sbody;
-       debug_print 0 "\n"); *)
+       debug_print 1 "\n"); *)
       (* Do our own scan for AddrOf and StartOf. 
        * The CIL one is not trustworthy, because any array subexpression
        * has internally been tripped via a StartOf (perhaps now rewritten? FIXME)
@@ -1864,7 +1864,7 @@ class crunchBoundVisitor = fun enclosingFile ->
       in
       let _ = visitCilBlock (new addressTakenVisitor tempAddressTakenLocalNames) f.sbody
       in
-      debug_print 0 ("Address-taken locals in `" ^ f.svar.vname ^ "' : [" ^ (
+      debug_print 1 ("Address-taken locals in `" ^ f.svar.vname ^ "' : [" ^ (
         List.fold_left (fun l -> fun r -> l ^ (if l = "" then "" else ", ") ^ r) "" !tempAddressTakenLocalNames
       ^ "]\n"));
       currentFuncAddressTakenLocalNames := !tempAddressTakenLocalNames
@@ -1994,7 +1994,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 in
                 match boundsT with
                     Some(bt) -> 
-                        debug_print 0 ("Creating bounds for local " ^ 
+                        debug_print 1 ("Creating bounds for local " ^ 
                             vi.vname ^ "; bounds have type " ^ (typToString bt) ^ "\n");
                         let created = getOrCreateBoundsLocal vi f enclosingFile boundsLocals
                         in
@@ -2124,7 +2124,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                         if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
                             && hostIsLocal lhost !currentFuncAddressTakenLocalNames
                         then (
-                            debug_print 0 ("Saw write to a local non-void pointer lval: " ^ (
+                            debug_print 1 ("Saw write to a local non-void pointer lval: " ^ (
                                 lvalToString (lhost, loff)
                             ) ^ ", so updating its bounds\n")
                             ;
@@ -2133,7 +2133,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                         else if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
                             && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames)
                         then (
-                            debug_print 0 ("Saw write to a non-local pointer lval: " ^ (
+                            debug_print 1 ("Saw write to a non-local pointer lval: " ^ (
                                 lvalToString (lhost, loff)
                             ) ^ ", so calling out the bounds-store hook\n")
                             ;
@@ -2162,7 +2162,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                         )
                         else []
                     in begin
-                    debug_print 0 "Queueing some instructions\n";
+                    debug_print 1 "Queueing some instructions\n";
                     changedInstrs @ instrsToAppend
                     end
               | Call(olv, calledE, es, l) -> 
@@ -2195,7 +2195,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     begin
                         let boundsPassInstructions = if (not passesBounds) then [] else (
                             let callForOneOffset ptrExpr boundsExpr offsetExpr = 
-                                debug_print 0 ("Pushing bounds for pointer-contained-in-argument expr " ^ (expToString ptrExpr) ^ "\n");
+                                debug_print 1 ("Pushing bounds for pointer-contained-in-argument expr " ^ (expToString ptrExpr) ^ "\n");
                                 match boundsExpr with
                                     BoundsLval(blv) -> 
                                         Call( None,
@@ -2258,7 +2258,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 in
                                 if not (list_empty (containedPointerExprsForExpr (Lval(lhost, loff))))
                                 then (
-                                    debug_print 0 ("Saw call writing to a non-void pointer lval: " ^ (
+                                    debug_print 1 ("Saw call writing to a non-void pointer lval: " ^ (
                                         lvalToString (lhost, loff)
                                     ) ^ "\n");
                                     let writeOne boundsLval ptrExpr _ offsetExpr = 
@@ -2311,11 +2311,11 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         )
                                     in
                                     if hostIsLocal lhost !currentFuncAddressTakenLocalNames then (
-                                        debug_print 0 "Local, so updating/invalidating its bounds.\n";
+                                        debug_print 1 "Local, so updating/invalidating its bounds.\n";
                                         (* we're popping/peeking, so reverse *)
                                         List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
                                     ) else ( (* non-local -- writing into the "heap"! *)
-                                    debug_print 0 "Host is not local\n";
+                                    debug_print 1 "Host is not local\n";
                                     List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneNonLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
                                     )
                                 ) (* end if pointer list non-empty *)
@@ -2542,8 +2542,8 @@ class crunchBoundVisitor = fun enclosingFile ->
         )
 
   method vexpr (outerE: exp) : exp visitAction = 
-    debug_print 0 (("Visiting expression: " ^ (expToString outerE)) ^ "\n");
-    debug_print 0 (("CIL form: " ^ (expToCilString outerE)) ^ "\n");
+    debug_print 1 (("Visiting expression: " ^ (expToString outerE)) ^ "\n");
+    debug_print 1 (("CIL form: " ^ (expToCilString outerE)) ^ "\n");
     match !currentFunc with
         None -> (* expression outside function *) SkipChildren
       | Some(f) -> 
@@ -2636,7 +2636,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                       (* both concrete, so already de-consted etc., but arrays matter *) &&
                     (not (isStaticallyNullPtr subex) && not (isStaticallyZero subex))
                     then begin
-                    debug_print 0 ("Cast may change bounds: source `" ^ 
+                    debug_print 1 ("Cast may change bounds: source `" ^ 
                         (typsigToString (decayArrayToCompatiblePointer subexTs)) ^ 
                         "', dest `" ^ 
                         (typsigToString (decayArrayToCompatiblePointer targetTs)) ^ "'\n");
@@ -2666,16 +2666,16 @@ class crunchBoundVisitor = fun enclosingFile ->
               |  _ -> None
           end in match maybeAdjustment with
             None -> begin
-                debug_print 0 ("Leaving expression alone because it does no pointer arithmetic: " ^ (expToString e) ^ "\n");
+                debug_print 1 ("Leaving expression alone because it does no pointer arithmetic: " ^ (expToString e) ^ "\n");
                 e
             end
           | Some(ptrExp, intExp) -> 
                 if isStaticallyZero intExp then begin
-                    debug_print 0 ("Leaving expression alone because its adjustment is always zero: " ^ (expToString e) ^ "\n");
+                    debug_print 1 ("Leaving expression alone because its adjustment is always zero: " ^ (expToString e) ^ "\n");
                     e
                 end
                 else begin
-                    debug_print 0 ("Not top-level, so rewrite to use temporary\n");
+                    debug_print 1 ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
                     let tempVar, checkInstrs = hoistAndCheckAdjustment enclosingFile f
                                     helperFunctions uniqtypeGlobals 
@@ -2729,7 +2729,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                                 match instrs with
                                   [] -> List.rev (cur :: rev_acc)
                                 | x :: more when instrIsCheck checkDeriveFun x ->
-                                      (* debug_print 0 "Saw a check\n"; *)
+                                      (* debug_print 1 "Saw a check\n"; *)
                                       (* accumulate a singleton, then start a new run of instrs *)
                                       let new_singleton = [x]
                                       in
@@ -2745,7 +2745,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                             in
                             let accRuns = maybeSplitInstrs [] [] is
                             in
-                            (* debug_print 0 ("Split an Instr sequence into " ^ (string_of_int (List.length accRuns)) ^ "\n"); *)
+                            (* debug_print 1 ("Split an Instr sequence into " ^ (string_of_int (List.length accRuns)) ^ "\n"); *)
                             (* Okay, now we have the runs, make a block. *)
                             {
                                 labels = s.labels;
@@ -2822,7 +2822,7 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                     (* We're expecting that the check statement is labelled with a "full check" *)
                     let secondaryCheckLabelIdent = match outerS.labels with
                         [Label(ident, _, _)] ->
-                            (* debug_print 0 ("Found label ident: " ^ ident ^ "\n"); *)
+                            (* debug_print 1 ("Found label ident: " ^ ident ^ "\n"); *)
                             let prefix = String.sub ident 0 (String.length "__crunchbound_primary_check")
                             in
                             let suffix = (
@@ -2830,7 +2830,7 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                                 then String.sub ident (String.length ("__crunchbound_primary_check")) (String.length ident - String.length ("__crunchbound_primary_check"))
                                 else "")
                             in
-                            (* debug_print 0 ("Prefix, suffix: " ^ prefix ^ ", " ^ suffix ^ "\n"); *)
+                            (* debug_print 1 ("Prefix, suffix: " ^ prefix ^ ", " ^ suffix ^ "\n"); *)
                             "__crunchbound_full_check" ^ suffix
                       | _ -> failwith "check statement does not have a check label"
                     in 
@@ -2980,7 +2980,7 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       (* Now we can visit the statements *)
       let copiedBlock = ref None
       in
-      (* debug_print 0 ("Copying body of function " ^ f.svar.vname ^ "\n"); *)
+      (* debug_print 1 ("Copying body of function " ^ f.svar.vname ^ "\n"); *)
       let secondaryBody = (
           visitCilBlock (new copyBlockVisitor copiedBlock "__bottomhalf_") f.sbody;
           match !copiedBlock with
@@ -2988,31 +2988,31 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
             | None -> failwith "couldn't copy function body"
       )  
       in
-      (* debug_print 0 ("Labelling primary checks in function " ^ f.svar.vname ^ " original body\n"); *)
+      (* debug_print 1 ("Labelling primary checks in function " ^ f.svar.vname ^ " original body\n"); *)
       f.sbody <- visitCilBlock (new checkStatementLabelVisitor "primary_check" helperFunctions.checkDerivePtr.svar) f.sbody;
-      (* debug_print 0 ("After visit, original body is as follows\n");
+      (* debug_print 1 ("After visit, original body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody; *)
-      (* debug_print 0 ("Labelling full checks in copied body of function " ^ f.svar.vname ^ "\n"); *)
+      (* debug_print 1 ("Labelling full checks in copied body of function " ^ f.svar.vname ^ "\n"); *)
       let labelledSecondaryBody = visitCilBlock (new checkStatementLabelVisitor "full_check" helperFunctions.checkDerivePtr.svar) secondaryBody in
       let findStmtByLabel = fun ident -> (
           let found = ref None
           in
           (visitCilBlock (new findStmtByNameVisitor ident found) labelledSecondaryBody;
           match !found with
-              None -> debug_print 0 ("Label not found: " ^ ident ^ "\n"); raise Not_found
+              None -> debug_print 1 ("Label not found: " ^ ident ^ "\n"); raise Not_found
             | Some(stmt) -> ref stmt
           )
       )
       in 
-      (* debug_print 0 ("After visit, copied body is as follows\n");
+      (* debug_print 1 ("After visit, copied body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 labelledSecondaryBody;
-      debug_print 0 ("... and original body is as follows\n");
+      debug_print 1 ("... and original body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
-      debug_print 0 ("Inserting primary/secondary jumps in function " ^ f.svar.vname ^ "\n");
+      debug_print 1 ("Inserting primary/secondary jumps in function " ^ f.svar.vname ^ "\n");
       f.sbody <- visitCilBlock (new primaryToSecondaryJumpVisitor helperFunctions.checkDerivePtr.svar helperFunctions.primaryCheckDerivePtr.svar findStmtByLabel enclosingFile) f.sbody;
-      debug_print 0 ("Finally, function body is as follows\n");
+      debug_print 1 ("Finally, function body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
-      debug_print 0 ("Finished with function " ^ f.svar.vname ^ "\n"); *)
+      debug_print 1 ("Finished with function " ^ f.svar.vname ^ "\n"); *)
       (* Our new body is a Block containing both *)
       f.sbody <- {
         battrs = f.sbody.battrs;

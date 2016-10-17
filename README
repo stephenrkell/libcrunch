@@ -45,6 +45,45 @@ $ make -C test                # if this succeeds, be amazed
 $ frontend/c/bin/crunchcc -o hello /path/to/hello.c  # your code here
 $ LD_PRELOAD=`pwd`/lib/libcrunch_preload.so ./hello  # marvel!
 
+Tips for non-Debian or non-jessie users:
+
+- You must have Dave Anderson's (ex-SGI) libdwarf, not elfutils's
+  (libdw1) version. The libdwarfpp build will, by default, look for its
+  dwarf.h and libdwarf.h in /usr/include.  If this libdwarf's headers
+  are not in /usr/include (some distros put them in
+  /usr/include/libdwarf instead), set LIBDWARFPP_CONFIGURE_FLAGS to
+  "--with-libdwarf-includes=/path/to/includes" so that liballocs's
+  contrib build process will configure libdwarfpp appropriately.
+
+- Some problems have been reported with gcc 5.x and later. I can't
+  reproduce them right now myself, but for now the recommended gcc is
+  the 4.9 series. Bug reports for build errors occurring on 5.x and
+  later are welcome.
+
+- Be careful of build skew with libelf. Again, there are two versions:
+  libelf0 and libelf1. It doesn't much matter which you use, but you
+  should use the same at all times.
+
+- On *BSD: you must first install g++, and build boost 1.55 from source
+  using it. Add the relevant prefix to CFLAGS, CXXFLAGS and LDFLAGS.
+  This is for library/symbol reasons not compiler reasons: mixing
+  libstdc++ and libc++ in one process doesn't work, and libc++fileno
+  doesn't work with libc++ at present (relevant feature request: a
+  fileno() overload for ofstream/ifstream objects). Note that currently,
+  the liballocs runtime doesn't build or run on the BSDs; however, the
+  tools should do.
+
+- Changes with cxxabi: again, build skew with these can be problematic,
+  especially if you're relying on a system-supplied build of some C++
+  library such as libboost* -- since it needn't be built using the same
+  ABI that your currently-installed C++ compiler is using. If you get
+  link errors with C++ symbol names, chances are you have a mismatch of
+  ABI. This is another reason to use g++ 4.9.x for everything (including
+  your own build of boost, as appropriate), since it predates the new
+  cxxabi.
+
+
+
 Liballocs models programs during execution in terms of /typed
 allocations/. It reifies data types, providing fast access to
 per-allocation metadata. Libcrunch extends this with check functions,
