@@ -831,6 +831,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniq
        | _ -> ()
     in
     let checkResultVar = Cil.makeTempVar ~name:"__cil_boundscheck_" enclosingFunction boolType in
+    checkResultVar.vattr <- [Attr("unused", [])];
     (* Since exprTmpVar is a non-address-taken local pointer, we might want it to have 
      * local bounds. Only create them if we don't have to fetch them (i.e. to propagate
      * local bounds info that we already have, not to early grab bounds info for expressions
@@ -936,7 +937,7 @@ let hoistAndCheckAdjustment enclosingFile enclosingFunction helperFunctions uniq
     in
     let resTmp, resInstrs = res
     in
-    let _ = output_string stderr ("Finished hoistAndCheckAdjustment; instrs are [" ^ 
+    let _ = debug_print 1 ("Finished hoistAndCheckAdjustment; instrs are [" ^ 
         ( List.fold_left (fun s -> fun xi -> s ^ (instToString xi) ^ ",") "" resInstrs )^ "]\n") in let _ = flush stderr in
     res
 
@@ -986,7 +987,7 @@ let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ca
     in
     let resTmp, resInstrs = res
     in
-    let _ = output_string stderr ("Finished hoistCast; instrs are [" ^ 
+    let _ = debug_print 1 ("Finished hoistCast; instrs are [" ^ 
         ( List.fold_left (fun s -> fun xi -> s ^ (instToString xi) ^ ",") "" resInstrs )^ "]\n") in let _ = flush stderr in
     res
 
@@ -2047,7 +2048,7 @@ class crunchBoundVisitor = fun enclosingFile ->
             let writeCallerInstFlag
              = [Call(Some(Var(currentFuncCallerIsInstFlagVar), NoOffset), 
                 Lval(Var(helperFunctions.tweakArgumentBoundsCookie.svar), NoOffset), 
-                [mkAddrOf (Var(f.svar), NoOffset)], instrLoc !currentInst)]
+                [CastE(voidConstPtrType, mkAddrOf (Var(f.svar), NoOffset))], instrLoc !currentInst)]
             in
             f.sbody <- { 
                 battrs = f.sbody.battrs; 
@@ -2241,10 +2242,11 @@ class crunchBoundVisitor = fun enclosingFile ->
                             if passesBounds || returnsBounds then (
                             let spVar = Cil.makeTempVar f ~name:"__cookie_stackaddr" ulongPtrType
                             in
+                            spVar.vattr <- [Attr("unused", [])];
                             cookieStackAddrVar := Some(spVar);
                             [Call(None, 
                                 Lval(Var(helperFunctions.pushArgumentBoundsCookie.svar), NoOffset), 
-                                [mkAddrOf calleeLval], instrLoc !currentInst);
+                                [CastE(voidConstPtrType, mkAddrOf calleeLval)], instrLoc !currentInst);
                              (* also remember the cookie stackaddr *)
                              Set((Var(spVar), NoOffset), boundsSpExpr, instrLoc !currentInst)
                             ]
@@ -2392,7 +2394,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                    ... meaning the original lvalue *up to the currently-processed offset* is always (origHost, prevOffsetList)
               *)
              let rec hoistIndexing ol lhost offsetsOkayWithoutCheck origHost prevOffsetList = 
-                (* let _ = output_string stderr ("hoist indexing on" ^ 
+                (* let _ = debug_print 1 ("hoist indexing on" ^ 
                     "\nlval " ^ (lvalToCilString (lhost, offsetFromList (offsetsOkayWithoutCheck @ ol))) ^
                     "\ntype " ^ (typToString (Cil.typeOf (Lval(lhost, offsetFromList (offsetsOkayWithoutCheck @ ol))))) ^
                     "\norig host " ^ (lvalToCilString (origHost, NoOffset)) ^

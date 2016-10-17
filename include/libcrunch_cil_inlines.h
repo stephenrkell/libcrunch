@@ -1220,8 +1220,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 * Okay, let's try it.
 	 */
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
-	unsigned long dest_addr = (unsigned long) dest;
-	unsigned long base_stored_addr = (unsigned long) BASE_STORED(dest);
+	unsigned long dest_addr __attribute__((unused)) = (unsigned long) dest;
+	unsigned long base_stored_addr __attribute__((unused)) = (unsigned long) BASE_STORED(dest);
 	unsigned long size_stored_addr = (unsigned long) SIZE_STORED(dest);
 	
 	/* Being as lazy as we can here, but no lazier:
@@ -1281,7 +1281,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	if (loaded_from)
 	{
-		unsigned long loaded_from_addr = (unsigned long) loaded_from;
+		unsigned long loaded_from_addr __attribute__((unused)) = (unsigned long) loaded_from;
 		unsigned long base_stored_addr = (unsigned long) BASE_STORED(loaded_from);
 		unsigned long size_stored_addr = (unsigned long) SIZE_STORED(loaded_from);
 
