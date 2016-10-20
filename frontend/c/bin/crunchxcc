@@ -41,7 +41,8 @@ class CrunchXCC(CrunchCC):
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
             "-DLIBCRUNCH_USING_TRAP_PTRS", \
-            "-include", \
+            "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
+           "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../ptrintarith/ptrintarith.cmxs"), "--doptrintarith", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
