@@ -592,8 +592,9 @@ void try_register_fixup(int regnum, mcontext_t *p_mcontext)
 			MSGBUF(kindstr);
 			const int shiftamount = 8*sizeof(uintptr_t) - LIBCRUNCH_TRAP_TAG_SHIFT;
 			*p_savedval = (*p_savedval << shiftamount) >> shiftamount;
-			MSGLIT("trap pointer, so detrapping them; new value is ");
+			MSGLIT(" trap pointer, so detrapping them; new value is ");
 			MSGADDR(*p_savedval);
+			MSGLIT("\n");
 			did_fixup = 1;
 			break;
 	}
@@ -617,7 +618,7 @@ static void saw_operand_cb(int type, unsigned int bytes, uint32_t *val,
 	MSGLIT("*** memory operand was computed from ");
 	if (!p_fromreg1 && !p_fromreg2)
 	{
-		MSGLIT("unknown values");
+		MSGLIT("unknown values\n");
 		return;
 	}
 	if (p_fromreg1)
@@ -637,12 +638,13 @@ static void saw_operand_cb(int type, unsigned int bytes, uint32_t *val,
 	{
 		if (*p_fromreg2 == -1)
 		{
-			MSGLIT("unknown register");
+			MSGLIT("unknown register\n");
 		}
 		else
 		{
 			MSGLIT("register ");
 			MSGSHORT((short) *p_fromreg2);
+			MSGLIT("\n");
 		}
 	}
 	
