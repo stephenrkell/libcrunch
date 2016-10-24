@@ -1666,6 +1666,7 @@ class crunchBoundVisitor = fun enclosingFile ->
         initFunc.svar <- findOrCreateFunc enclosingFile "__libcrunch_crunchbound_init" 
             (TFun(TVoid([]), Some([]), false, [Attr("constructor", [AInt(101)])]))
             ;
+        initFunc.svar.vstorage <- Static;
         initFunc.sbody <- { battrs = []; bstmts = [{
             labels = [];
             skind = Instr([]);
