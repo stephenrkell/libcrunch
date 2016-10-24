@@ -34,9 +34,10 @@ class CrunchXCC(CrunchCC):
 #            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimpleaddr/vsimpleaddr.cmxs"), "--dovsimpleAddr", \
 
         if len(sourceFiles) > 0 and allSourceFilesAreC:
+            #"-DLIBCRUNCH_TRACE_BOUNDS_STACK", \
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
-            # Add temporary HACK to strip line numbers after preprocess
+            # temporary HACK to strip line numbers after preprocess
             #"--commPrintLn",
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
