@@ -91,15 +91,13 @@ libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
  -Bsymbolic # important for _etext in preload hooks
 # -Wl,--wrap,__liballocs_nudge_mmap \
 
-LDFLAGS += -L$(LIBDLBIND)/lib
-LDLIBS += -ldlbind
-
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
 
-libcrunch_preload.so: LDLIBS += $(LIBUNWIND_LDLIBS)
+libcrunch_preload.so: LDFLAGS += -L$(LIBDLBIND)/lib
+libcrunch_preload.so: LDLIBS += $(LIBUNWIND_LDLIBS) -ldlbind 
 libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %allocs_preload.a,$+) \
 $(LDFLAGS) \
@@ -127,7 +125,7 @@ libcrunch_nomemtable.o: libcrunch.c
 	$(CC) $(CFLAGS) -DNO_MEMTABLE -c -o "$@" $+
 
 libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
-	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz -ldlbind -Wl,--wrap,__liballocs_nudge_mmap
+	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz -Wl,--wrap,__liballocs_nudge_mmap
 
 libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(LD) -r -o "$@" $+ --wrap __liballocs_nudge_mmap
