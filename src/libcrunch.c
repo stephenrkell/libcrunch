@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <link.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -56,8 +57,12 @@ enum dwarf_regs_x86_64
 	DWARF_X86_64_RIP     = 16
 };
 
-
-#define NAME_FOR_UNIQTYPE(u) ((u) ? ((u)->name ?: "(unnamed type)") : "(unknown type)")
+#ifndef MIN
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#endif
+#ifndef MAX
+#define MAX(x, y) (((x) < (y)) ? (y) : (x))
+#endif
 
 /* Heap storage sized using a "loose" data type, like void*,
  * is marked as loose, and becomes non-loose when a cast to a non-loose type.
@@ -104,7 +109,7 @@ struct suppression *suppressions;
 static int print_type_cb(struct uniqtype *t, void *ignored)
 {
 	fprintf(crunch_stream_err, "uniqtype addr %p, name %s, size %d bytes\n", 
-		t, t->name, t->pos_maxoff);
+		t, UNIQTYPE_NAME(t), t->pos_maxoff);
 	fflush(crunch_stream_err);
 	return 0;
 }
@@ -114,7 +119,7 @@ static int match_typename_cb(struct uniqtype *t, void *ignored)
 	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
 	{
 		if (!lazy_heap_types[i] && 
-			0 == strcmp(t->name, lazy_heap_typenames[i]))
+			0 == strcmp(UNIQTYPE_NAME(t), lazy_heap_typenames[i]))
 		{
 			// install this type in the lazy_heap_type slot
 			lazy_heap_types[i] = t;
@@ -1020,8 +1025,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
-			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK test for -1 */
-			&& alloc_uniqtype->neg_maxoff == 0)
+			&& alloc_uniqtype->pos_maxoff != UNIQTYPE_POS_MAXOFF_UNBOUNDED)
 	{
 		// HACK: for now, assume that the repetition continues to the end
 		range_limit = (char*) alloc_start + alloc_size_bytes;
@@ -1042,7 +1046,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
-	struct contained *cur_contained_pos = NULL;
+	struct uniqtype_rel_info *cur_contained_pos = NULL;
 
 	signed cumulative_offset_searched = 0;
 	_Bool success = __liballocs_find_matching_subobject(target_offset_within_uniqtype, 
@@ -1090,7 +1094,7 @@ int __is_a_internal(const void *obj, const void *arg)
 	{
 		++__libcrunch_failed;
 		
-		if (!is_suppressed(test_uniqtype->name, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
+		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
 		{
 			if (should_report_failure_at(__builtin_return_address(0)))
 			{
@@ -1111,14 +1115,14 @@ int __is_a_internal(const void *obj, const void *arg)
 							"obj is %ld bytes into a %s%s%s "
 							"(deepest subobject: %s at offset %d) "
 							"originating at %p\n", 
-						obj, test_uniqtype, test_uniqtype->name,
+						obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
 						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 						(long)((char*) obj - (char*) alloc_start),
 						a ? a->name : "(no allocator)",
 						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 						NAME_FOR_UNIQTYPE(alloc_uniqtype), 
 						(cur_obj_uniqtype ? 
-							((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : cur_obj_uniqtype->name) 
+							((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : UNIQTYPE_NAME(cur_obj_uniqtype)) 
 							: "(none)"), 
 						cumulative_offset_searched, 
 						alloc_site);
@@ -1165,15 +1169,14 @@ int __like_a_internal(const void *obj, const void *arg)
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
-			&& alloc_uniqtype->pos_maxoff != 0 
-			&& alloc_uniqtype->neg_maxoff == 0)
+			&& alloc_uniqtype->pos_maxoff != 0)
 	{
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
-	struct contained *cur_contained_pos = NULL;
+	struct uniqtype_rel_info *cur_contained_pos = NULL;
 	
 	/* Descend the subobject hierarchy until our target offset is zero, i.e. we 
 	 * find the outermost thing in the subobject tree that starts at the address
@@ -1191,14 +1194,15 @@ int __like_a_internal(const void *obj, const void *arg)
 	
 	// arrays are special
 	_Bool matches;
-	if (__builtin_expect((cur_obj_uniqtype->is_array || test_uniqtype->is_array), 0))
+	if (__builtin_expect((UNIQTYPE_IS_ARRAY_TYPE(cur_obj_uniqtype)
+			|| UNIQTYPE_IS_ARRAY_TYPE(test_uniqtype)), 0))
 	{
 		matches = 
 			test_uniqtype == cur_obj_uniqtype
-		||  (test_uniqtype->is_array && test_uniqtype->array_len == 1 
-				&& test_uniqtype->contained[0].ptr == cur_obj_uniqtype)
-		||  (cur_obj_uniqtype->is_array && cur_obj_uniqtype->array_len == 1
-				&& cur_obj_uniqtype->contained[0].ptr == test_uniqtype);
+		||  (UNIQTYPE_IS_ARRAY_TYPE(test_uniqtype) && UNIQTYPE_ARRAY_LENGTH(test_uniqtype) == 1
+				&& UNIQTYPE_ARRAY_ELEMENT_TYPE(test_uniqtype) == cur_obj_uniqtype)
+		||  (UNIQTYPE_IS_ARRAY_TYPE(cur_obj_uniqtype) && UNIQTYPE_ARRAY_LENGTH(cur_obj_uniqtype) == 1
+				&& UNIQTYPE_ARRAY_ELEMENT_TYPE(cur_obj_uniqtype) == test_uniqtype);
 		/* We don't need to allow an array of one blah to be like a different
 		 * array of one blah, because they should be the same type. 
 		 * FIXME: there's a difficult case: an array of statically unknown length, 
@@ -1206,15 +1210,13 @@ int __like_a_internal(const void *obj, const void *arg)
 		if (matches) goto like_a_succeeded; else goto like_a_failed;
 	}
 	
-	/* If we're not an array and nmemb is zero, we might have base types with
-	 * signedness complements. */
-	if (!cur_obj_uniqtype->is_array && !test_uniqtype->is_array
-			&&  cur_obj_uniqtype->nmemb == 0 && test_uniqtype->nmemb == 0)
+	/* We might have base types with signedness complements. */
+	if (!UNIQTYPE_IS_BASE_TYPE(cur_obj_uniqtype) && !UNIQTYPE_IS_BASE_TYPE(test_uniqtype))
 	{
 		/* Does the cur obj type have a signedness complement matching the test type? */
-		if (cur_obj_uniqtype->contained[0].ptr == test_uniqtype) goto like_a_succeeded;
+		if (UNIQTYPE_BASE_TYPE_SIGNEDNESS_COMPLEMENT(cur_obj_uniqtype) == test_uniqtype) goto like_a_succeeded;
 		/* Does the test type have a signedness complement matching the cur obj type? */
-		if (test_uniqtype->contained[0].ptr == cur_obj_uniqtype) goto like_a_succeeded;
+		if (UNIQTYPE_BASE_TYPE_SIGNEDNESS_COMPLEMENT(test_uniqtype) == cur_obj_uniqtype) goto like_a_succeeded;
 	}
 	
 	/* Okay, we can start the like-a test: for each element in the test type, 
@@ -1225,39 +1227,41 @@ int __like_a_internal(const void *obj, const void *arg)
 	 * fields in the object type, until we reach the offset of the end element.  */
 	unsigned i_obj_subobj = 0, i_test_subobj = 0;
 	for (; 
-		i_obj_subobj < cur_obj_uniqtype->nmemb && i_test_subobj < test_uniqtype->nmemb; 
+		i_obj_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_obj_uniqtype)
+			 && i_test_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype); 
 		++i_test_subobj, ++i_obj_subobj)
 	{
-		if (__builtin_expect(test_uniqtype->contained[i_test_subobj].ptr->is_array
-			&& (test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
+		if (__builtin_expect(UNIQTYPE_IS_ARRAY_TYPE(test_uniqtype->related[i_test_subobj].un.memb.ptr)
+			&& (UNIQTYPE_ARRAY_ELEMENT_TYPE(test_uniqtype->related[i_test_subobj].un.memb.ptr)
 					== pointer_to___uniqtype__signed_char
-			|| test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
+			|| UNIQTYPE_ARRAY_ELEMENT_TYPE(test_uniqtype->related[i_test_subobj].un.memb.ptr)
 					== pointer_to___uniqtype__unsigned_char), 0))
 		{
 			// we will skip this field in the test type
 			signed target_off =
-				test_uniqtype->nmemb > i_test_subobj + 1
-			 ?  test_uniqtype->contained[i_test_subobj + 1].offset
-			 :  test_uniqtype->contained[i_test_subobj].offset
-			      + test_uniqtype->contained[i_test_subobj].ptr->pos_maxoff;
+				UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype) > i_test_subobj + 1
+			 ?  test_uniqtype->related[i_test_subobj + 1].un.memb.off
+			 :  test_uniqtype->related[i_test_subobj].un.memb.off
+			      + test_uniqtype->related[i_test_subobj].un.memb.ptr->pos_maxoff;
 			
 			// ... if there's more in the test type, advance i_obj_subobj
-			while (i_obj_subobj + 1 < cur_obj_uniqtype->nmemb &&
-				cur_obj_uniqtype->contained[i_obj_subobj + 1].offset < target_off) ++i_obj_subobj;
+			while (i_obj_subobj + 1 < UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_obj_uniqtype) &&
+				cur_obj_uniqtype->related[i_obj_subobj + 1].un.memb.off
+					< target_off) ++i_obj_subobj;
 			/* We fail if we ran out of stuff in the target object type
 			 * AND there is more to go in the test type. */
-			if (i_obj_subobj + 1 >= cur_obj_uniqtype->nmemb
-			 && test_uniqtype->nmemb > i_test_subobj + 1) goto like_a_failed;
+			if (i_obj_subobj + 1 >= UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_obj_uniqtype)
+			 && UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype) > i_test_subobj + 1) goto like_a_failed;
 				
 			continue;
 		}
 		matches = 
-				test_uniqtype->contained[i_test_subobj].offset == cur_obj_uniqtype->contained[i_obj_subobj].offset
-		 && 	test_uniqtype->contained[i_test_subobj].ptr == cur_obj_uniqtype->contained[i_obj_subobj].ptr;
+				test_uniqtype->related[i_test_subobj].un.memb.off == cur_obj_uniqtype->related[i_obj_subobj].un.memb.off
+		 && 	test_uniqtype->related[i_test_subobj].un.memb.ptr == cur_obj_uniqtype->related[i_obj_subobj].un.memb.ptr;
 		if (!matches) goto like_a_failed;
 	}
 	// if we terminated because we ran out of fields in the target type, fail
-	if (i_test_subobj < test_uniqtype->nmemb) goto like_a_failed;
+	if (i_test_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype)) goto like_a_failed;
 	
 like_a_succeeded:
 	++__libcrunch_succeeded;
@@ -1274,12 +1278,12 @@ like_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(test_uniqtype->name, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
+		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
 		{
 			if (should_report_failure_at(__builtin_return_address(0)))
 			{
 				debug_printf(0, "Failed check __like_a(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
-					obj, test_uniqtype, test_uniqtype->name,
+					obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
 					a ? a->name : "(no allocator)",
 					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
@@ -1321,15 +1325,14 @@ int __named_a_internal(const void *obj, const void *arg)
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
-			&& alloc_uniqtype->pos_maxoff != 0 
-			&& alloc_uniqtype->neg_maxoff == 0)
+			&& alloc_uniqtype->pos_maxoff != 0)
 	{
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
 	
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
-	struct contained *cur_contained_pos = NULL;
+	struct uniqtype_rel_info *cur_contained_pos = NULL;
 	signed cumulative_offset_searched = 0;
 
 	/* Look for a matching subobject. */
@@ -1344,7 +1347,7 @@ int __named_a_internal(const void *obj, const void *arg)
 			/* This means we got a subobject of *some* type. Does it match
 			 * the name? */
 			// FIXME: cache names
-			if 	(0 == strcmp(test_typestr, cur_obj_uniqtype->name)) goto named_a_succeeded;
+			if 	(0 == strcmp(test_typestr, UNIQTYPE_NAME(cur_obj_uniqtype))) goto named_a_succeeded;
 			else
 			{
 				/* If we can descend to the first member of this type
@@ -1354,10 +1357,10 @@ int __named_a_internal(const void *obj, const void *arg)
 				 * members. Ideally we want to refactor find_matching_subobject 
 				 * so that it can match by name, but that seems to bring callbacks,
 				 * meaning we must be careful not to forestall compiler optimisations. */
-				if (cur_obj_uniqtype->nmemb > 0
-						&& cur_obj_uniqtype->contained[0].offset == 0)
+				if (UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_obj_uniqtype) > 0
+						&& cur_obj_uniqtype->related[0].un.memb.off == 0)
 				{
-					cur_obj_uniqtype = cur_obj_uniqtype->contained[0].ptr;
+					cur_obj_uniqtype = cur_obj_uniqtype->related[0].un.memb.ptr;
 					continue;
 				} else goto named_a_failed;
 			}
@@ -1380,7 +1383,7 @@ named_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(test_typestr, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
+		if (!is_suppressed(test_typestr, __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
 		{
 			if (should_report_failure_at(__builtin_return_address(0)))
 			{
@@ -1424,7 +1427,7 @@ __check_args_internal(const void *obj, int nargs, ...)
 	
 	assert(fun_uniqtype);
 	assert(alloc_start == obj);
-	assert(UNIQTYPE_IS_SUBPROGRAM(fun_uniqtype));
+	assert(UNIQTYPE_IS_SUBPROGRAM_TYPE(fun_uniqtype));
 	
 	/* Walk the arguments that the function expects. Simultaneously, 
 	 * walk our arguments. */
@@ -1436,11 +1439,11 @@ __check_args_internal(const void *obj, int nargs, ...)
 	
 	_Bool success = 1;
 	int i;
-	for (i = 0; i < nargs && i < fun_uniqtype->array_len; ++i)
+	for (i = 0; i < nargs && i < fun_uniqtype->un.subprogram.narg; ++i)
 	{
 		void *argval = va_arg(ap, void*);
-		/* contained[0] is the return type */
-		struct uniqtype *expected_arg = fun_uniqtype->contained[i+1].ptr;
+		/* related[0] is the return type */
+		struct uniqtype *expected_arg = fun_uniqtype->related[i+MIN(1,fun_uniqtype->un.subprogram.nret)].un.t.ptr;
 		/* We only check casts that are to pointer targets types.
 		 * How to test this? */
 		if (UNIQTYPE_IS_POINTER_TYPE(expected_arg))
@@ -1450,7 +1453,7 @@ __check_args_internal(const void *obj, int nargs, ...)
 		}
 		if (!success) break;
 	}
-	if (i == nargs && i < fun_uniqtype->array_len)
+	if (i == nargs && i < fun_uniqtype->un.subprogram.narg)
 	{
 		/* This means we exhausted nargs before we got to the end of the array.
 		 * In other words, the function takes more arguments than we were passed
@@ -1458,7 +1461,7 @@ __check_args_internal(const void *obj, int nargs, ...)
 		 * Not good! */
 		success = 0;
 	}
-	if (i < nargs && i == fun_uniqtype->array_len)
+	if (i < nargs && i == fun_uniqtype->un.subprogram.narg)
 	{
 		/* This means we were passed more args than the uniqtype told us about. 
 		 * FIXME: check for its varargs-ness. If it's varargs, we're allowed to
@@ -1513,10 +1516,10 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 		else
 		{
 			/* If we're not a function, that's bad. */
-			if (UNIQTYPE_IS_SUBPROGRAM(alloc_uniqtype))
+			if (UNIQTYPE_IS_SUBPROGRAM_TYPE(alloc_uniqtype))
 			{
 				/* If our argument counts don't match, that's bad. */
-				if (alloc_uniqtype->array_len == test_uniqtype->array_len)
+				if (alloc_uniqtype->un.subprogram.narg == test_uniqtype->un.subprogram.narg)
 				{
 					/* For each argument, we want to make sure that 
 					 * the "implicit" cast done on the argument, from
@@ -1528,8 +1531,8 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 					
 					/* Would the cast from the return value to the post-cast return value
 					 * always succeed? If so, this cast is okay. */
-					struct uniqtype *alloc_return_type = alloc_uniqtype->contained[0].ptr;
-					struct uniqtype *cast_return_type = test_uniqtype->contained[0].ptr;
+					struct uniqtype *alloc_return_type = alloc_uniqtype->related[0].un.t.ptr;
+					struct uniqtype *cast_return_type = test_uniqtype->related[0].un.t.ptr;
 					
 					/* HACK: a little bit of C-specifity is creeping in here.
 					 * FIXME: adjust this to reflect sloppy generic-pointer-pointer matches! 
@@ -1567,14 +1570,16 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 					 * cast-to return type. */
 					success &= would_always_succeed(alloc_return_type, cast_return_type);
 					
-					if (success) for (int i = 1; i <= alloc_uniqtype->array_len; ++i)
+					if (success) for (int i_rel = MIN(1, alloc_uniqtype->un.subprogram.nret);
+						i_rel < MIN(1, alloc_uniqtype->un.subprogram.nret) + 
+								alloc_uniqtype->un.subprogram.narg; ++i_rel)
 					{
 						/* ARGH. Are these the right way round?  
 						 * The "implicit cast" is from the cast-to arg type to the 
 						 * alloc'd arg type. */
 						success &= would_always_succeed(
-							test_uniqtype->contained[i].ptr,
-							alloc_uniqtype->contained[i].ptr
+							test_uniqtype->related[i_rel].un.t.ptr,
+							alloc_uniqtype->related[i_rel].un.t.ptr
 						);
 
 						if (!success) break;
@@ -1599,7 +1604,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(test_uniqtype->name, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
+		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
 		{
 			if (should_report_failure_at(__builtin_return_address(0)))
 			{
@@ -1619,7 +1624,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 					debug_printf(0, "Failed check __is_a_function_refining(%p, %p a.k.a. \"%s\") at %p (%s), "
 							"found an allocation of a %s%s%s "
 							"originating at %p\n", 
-						obj, test_uniqtype, test_uniqtype->name,
+						obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
 						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 						a ? a->name : "(no allocator)",
 						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
@@ -1673,7 +1678,7 @@ static _Bool is_generic_ultimate_pointee(struct uniqtype *ultimate_pointee_type)
 static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d, signed target_offset)
 {
 	struct uniqtype *cur_containing_uniqtype = NULL;
-	struct contained *cur_contained_pos = NULL;
+	struct uniqtype_rel_info *cur_contained_pos = NULL;
 	signed target_offset_within_uniqtype = target_offset;
 
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
@@ -1776,15 +1781,14 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
-			&& alloc_uniqtype->pos_maxoff != 0 
-			&& alloc_uniqtype->neg_maxoff == 0)
+			&& alloc_uniqtype->pos_maxoff != 0)
 	{
 		target_offset_within_alloc_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
 	
 	struct uniqtype *cur_alloc_subobj_uniqtype = alloc_uniqtype;
 	struct uniqtype *cur_containing_uniqtype = NULL;
-	struct contained *cur_contained_pos = NULL;
+	struct uniqtype_rel_info *cur_contained_pos = NULL;
 	
 	/* Descend the subobject hierarchy until our target offset is zero, i.e. we 
 	 * find the outermost thing in the subobject tree that starts at the address
@@ -1821,14 +1825,15 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	
 	// arrays are special
 	_Bool matches;
-	if (__builtin_expect((cur_alloc_subobj_uniqtype->is_array || test_uniqtype->is_array), 0))
+	if (__builtin_expect(UNIQTYPE_IS_ARRAY_TYPE(cur_alloc_subobj_uniqtype)
+			|| UNIQTYPE_IS_ARRAY_TYPE(test_uniqtype), 0))
 	{
 		matches = 
 			test_uniqtype == cur_alloc_subobj_uniqtype
-		||  (test_uniqtype->is_array && test_uniqtype->array_len == 1 
-				&& test_uniqtype->contained[0].ptr == cur_alloc_subobj_uniqtype)
-		||  (cur_alloc_subobj_uniqtype->is_array && cur_alloc_subobj_uniqtype->array_len == 1
-				&& cur_alloc_subobj_uniqtype->contained[0].ptr == test_uniqtype);
+		||  (UNIQTYPE_IS_ARRAY_TYPE(test_uniqtype) && UNIQTYPE_ARRAY_LENGTH(test_uniqtype) == 1 
+				&& UNIQTYPE_ARRAY_ELEMENT_TYPE(test_uniqtype) == cur_alloc_subobj_uniqtype)
+		||  (UNIQTYPE_IS_ARRAY_TYPE(cur_alloc_subobj_uniqtype) && UNIQTYPE_ARRAY_LENGTH(cur_alloc_subobj_uniqtype) == 1
+				&& UNIQTYPE_ARRAY_ELEMENT_TYPE(cur_alloc_subobj_uniqtype) == test_uniqtype);
 		/* We don't need to allow an array of one blah to be like a different
 		 * array of one blah, because they should be the same type. 
 		 * FIXME: there's a difficult case: an array of statically unknown length, 
@@ -1836,16 +1841,17 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 		if (matches) goto loosely_like_a_succeeded; else goto try_deeper;
 	}
 	
-	/* If we're not an array and nmemb is zero, we might have base types with
-	 * signedness complements. */
+	/* We might have base types with signedness complements. */
 	if (__builtin_expect(
-			!cur_alloc_subobj_uniqtype->is_array && !test_uniqtype->is_array
-			&&  cur_alloc_subobj_uniqtype->nmemb == 0 && test_uniqtype->nmemb == 0, 0))
+			!UNIQTYPE_IS_BASE_TYPE(cur_alloc_subobj_uniqtype) 
+			|| UNIQTYPE_IS_BASE_TYPE(test_uniqtype), 0))
 	{
 		/* Does the cur obj type have a signedness complement matching the test type? */
-		if (cur_alloc_subobj_uniqtype->contained[0].ptr == test_uniqtype) goto loosely_like_a_succeeded;
+		if (UNIQTYPE_BASE_TYPE_SIGNEDNESS_COMPLEMENT(cur_alloc_subobj_uniqtype)
+				== test_uniqtype) goto loosely_like_a_succeeded;
 		/* Does the test type have a signedness complement matching the cur obj type? */
-		if (test_uniqtype->contained[0].ptr == cur_alloc_subobj_uniqtype) goto loosely_like_a_succeeded;
+		if (UNIQTYPE_BASE_TYPE_SIGNEDNESS_COMPLEMENT(test_uniqtype)
+				== cur_alloc_subobj_uniqtype) goto loosely_like_a_succeeded;
 	}
 	
 	/* Okay, we can start the like-a test: for each element in the test type, 
@@ -1858,67 +1864,69 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	if (test_uniqtype != cur_alloc_subobj_uniqtype) debug_printf(0, "__loosely_like_a proceeding on subobjects of (test) %s and (object) %s\n",
 		NAME_FOR_UNIQTYPE(test_uniqtype), NAME_FOR_UNIQTYPE(cur_alloc_subobj_uniqtype));
 	for (; 
-		i_obj_subobj < cur_alloc_subobj_uniqtype->nmemb && i_test_subobj < test_uniqtype->nmemb; 
+		i_obj_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_alloc_subobj_uniqtype)
+			&& i_test_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype); 
 		++i_test_subobj, ++i_obj_subobj)
 	{
 		debug_printf(0, "Subobject types are (test) %s and (object) %s\n",
-			NAME_FOR_UNIQTYPE((struct uniqtype *) test_uniqtype->contained[i_test_subobj].ptr), 
-			NAME_FOR_UNIQTYPE((struct uniqtype *) cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr));
+			NAME_FOR_UNIQTYPE((struct uniqtype *) test_uniqtype->related[i_test_subobj].un.memb.ptr), 
+			NAME_FOR_UNIQTYPE((struct uniqtype *) cur_alloc_subobj_uniqtype->related[i_obj_subobj].un.memb.ptr));
 		
-		if (__builtin_expect(test_uniqtype->contained[i_test_subobj].ptr->is_array
-			&& (test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
+		if (__builtin_expect(UNIQTYPE_IS_ARRAY_TYPE(test_uniqtype->related[i_test_subobj].un.memb.ptr)
+			&& (UNIQTYPE_ARRAY_ELEMENT_TYPE(test_uniqtype->related[i_test_subobj].un.memb.ptr)
 					== pointer_to___uniqtype__signed_char
-			|| test_uniqtype->contained[i_test_subobj].ptr->contained[0].ptr
+			|| UNIQTYPE_ARRAY_ELEMENT_TYPE(test_uniqtype->related[i_test_subobj].un.memb.ptr)
 					== pointer_to___uniqtype__unsigned_char), 0))
 		{
 			// we will skip this field in the test type
 			signed target_off =
-				test_uniqtype->nmemb > i_test_subobj + 1
-			 ?  test_uniqtype->contained[i_test_subobj + 1].offset
-			 :  test_uniqtype->contained[i_test_subobj].offset
-			      + test_uniqtype->contained[i_test_subobj].ptr->pos_maxoff;
+				UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype) > i_test_subobj + 1
+			 ?  test_uniqtype->related[i_test_subobj + 1].un.memb.off
+			 :  test_uniqtype->related[i_test_subobj].un.memb.off
+			      + test_uniqtype->related[i_test_subobj].un.memb.ptr->pos_maxoff;
 			
 			// ... if there's more in the test type, advance i_obj_subobj
-			while (i_obj_subobj + 1 < cur_alloc_subobj_uniqtype->nmemb &&
-				cur_alloc_subobj_uniqtype->contained[i_obj_subobj + 1].offset < target_off) ++i_obj_subobj;
+			while (i_obj_subobj + 1 < UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_alloc_subobj_uniqtype) &&
+				cur_alloc_subobj_uniqtype->related[i_obj_subobj + 1].un.memb.off < target_off) ++i_obj_subobj;
 			/* We fail if we ran out of stuff in the actual object type
 			 * AND there is more to go in the test (cast-to) type. */
-			if (i_obj_subobj + 1 >= cur_alloc_subobj_uniqtype->nmemb
-			 && test_uniqtype->nmemb > i_test_subobj + 1) goto try_deeper;
+			if (i_obj_subobj + 1 >= UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_alloc_subobj_uniqtype)
+			 && UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype) > i_test_subobj + 1) goto try_deeper;
 				
 			continue;
 		}
 		
 		int generic_ptr_degree = 0;
 		matches = 
-				(test_uniqtype->contained[i_test_subobj].offset == cur_alloc_subobj_uniqtype->contained[i_obj_subobj].offset)
+				(test_uniqtype->related[i_test_subobj].un.memb.off
+				== cur_alloc_subobj_uniqtype->related[i_obj_subobj].un.memb.off)
 		 && (
 				// exact match
-				(test_uniqtype->contained[i_test_subobj].ptr
-				 == cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr)
+				(test_uniqtype->related[i_test_subobj].un.memb.ptr
+				 == cur_alloc_subobj_uniqtype->related[i_obj_subobj].un.memb.ptr)
 				|| // loose match: if the test type has a generic ptr...
 				(
 					0 != (
 						generic_ptr_degree = is_generic_pointer_type_of_degree_at_least(
-							test_uniqtype->contained[i_test_subobj].ptr, 1)
+							test_uniqtype->related[i_test_subobj].un.memb.ptr, 1)
 					)
 					&& pointer_has_degree(
-						(struct uniqtype *) cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr,
+						(struct uniqtype *) cur_alloc_subobj_uniqtype->related[i_obj_subobj].un.memb.ptr,
 						generic_ptr_degree
 					)
 				)
 				|| // loose match: signed/unsigned
-				(UNIQTYPE_IS_BASE_TYPE(test_uniqtype->contained[i_test_subobj].ptr)
-				 && UNIQTYPE_IS_BASE_TYPE(cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr)
+				(UNIQTYPE_IS_BASE_TYPE(test_uniqtype->related[i_test_subobj].un.memb.ptr)
+				 && UNIQTYPE_IS_BASE_TYPE(cur_alloc_subobj_uniqtype->related[i_obj_subobj].un.memb.ptr)
 				 && 
-				 (((struct uniqtype *) test_uniqtype->contained[i_test_subobj].ptr)->
-				 	contained[0].ptr == ((struct uniqtype *) cur_alloc_subobj_uniqtype->contained[i_obj_subobj].ptr))
+				 (UNIQTYPE_BASE_TYPE_SIGNEDNESS_COMPLEMENT((struct uniqtype *) test_uniqtype->related[i_test_subobj].un.memb.ptr)
+					== ((struct uniqtype *) cur_alloc_subobj_uniqtype->related[i_obj_subobj].un.memb.ptr))
 				)
 		);
 		if (!matches) goto try_deeper;
 	}
 	// if we terminated because we ran out of fields in the target type, fail
-	if (i_test_subobj < test_uniqtype->nmemb) goto try_deeper;
+	if (i_test_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype)) goto try_deeper;
 	
 	// if we got here, we succeeded
 	goto loosely_like_a_succeeded;
@@ -1951,12 +1959,12 @@ loosely_like_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(test_uniqtype->name, __builtin_return_address(0), alloc_uniqtype ? alloc_uniqtype->name : NULL))
+		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
 		{
 			if (should_report_failure_at(__builtin_return_address(0)))
 			{
 				debug_printf(0, "Failed check __loosely_like_a(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p\n", 
-					obj, test_uniqtype, test_uniqtype->name,
+					obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
 					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
 					a ? a->name : "(no allocator)",
 					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
@@ -1997,8 +2005,7 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
-			&& alloc_uniqtype->pos_maxoff != 0 
-			&& alloc_uniqtype->neg_maxoff == 0)
+			&& alloc_uniqtype->pos_maxoff != 0)
 	{
 		target_offset_within_uniqtype %= alloc_uniqtype->pos_maxoff;
 	}
@@ -2042,7 +2049,7 @@ struct match_cb_args
 	signed target_offset;
 };
 static int match_pointer_subobj_strict_cb(struct uniqtype *spans, signed span_start_offset, 
-		unsigned depth, struct uniqtype *containing, struct contained *contained_pos, 
+		unsigned depth, struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
 		signed containing_span_start_offset, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
@@ -2057,7 +2064,7 @@ static int match_pointer_subobj_strict_cb(struct uniqtype *spans, signed span_st
 	return 0;
 }
 static int match_pointer_subobj_generic_cb(struct uniqtype *spans, signed span_start_offset, 
-		unsigned depth, struct uniqtype *containing, struct contained *contained_pos, 
+		unsigned depth, struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
 		signed containing_span_start_offset, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
@@ -2102,15 +2109,14 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site)
 			&& obj_alloc_uniqtype
-			&& obj_alloc_uniqtype->pos_maxoff != 0 
-			&& obj_alloc_uniqtype->neg_maxoff == 0)
+			&& obj_alloc_uniqtype->pos_maxoff != 0)
 	{
 		obj_target_offset_within_uniqtype %= obj_alloc_uniqtype->pos_maxoff;
 	}
 	
 	struct uniqtype *cur_obj_uniqtype = obj_alloc_uniqtype;
-	struct uniqtype *cur_containing_uniqtype = NULL;		
-	struct contained *cur_contained_pos = NULL;
+	struct uniqtype *cur_containing_uniqtype = NULL;
+	struct uniqtype_rel_info *cur_contained_pos = NULL;
 	
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
 	 * are atomic. */
@@ -2182,8 +2188,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		 * element size. Otherwise just take the whole-block offset. */
 		if (ALLOC_IS_DYNAMICALLY_SIZED(value_alloc_start, value_alloc_site)
 				&& value_alloc_uniqtype
-				&& value_alloc_uniqtype->pos_maxoff != 0 
-				&& value_alloc_uniqtype->neg_maxoff == 0)
+				&& value_alloc_uniqtype->pos_maxoff != 0)
 		{
 			value_target_offset_within_uniqtype %= value_alloc_uniqtype->pos_maxoff;
 		}
@@ -2313,7 +2318,7 @@ struct bounds_cb_arg
 };
 
 static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned depth,
-	struct uniqtype *containing, struct contained *contained_pos, 
+	struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
 	signed containing_span_start_offset, void *arg_void)
 {
 	struct bounds_cb_arg *arg = (struct bounds_cb_arg *) arg_void;
@@ -2327,7 +2332,7 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 	 * we actually want to range over the outermost bounds.
 	 * This is not the case of arrays of structs of arrays.
 	 * So we want to clear the state once we descend through a non-array. */
-	if (UNIQTYPE_IS_ARRAY(containing))
+	if (UNIQTYPE_IS_ARRAY_TYPE(containing))
 	{
 		arg->innermost_containing_array_type_span_start_offset
 		 = containing_span_start_offset;
@@ -2338,10 +2343,10 @@ static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned 
 			arg->outermost_containing_array_type_span_start_offset
 			 = containing_span_start_offset;
 			arg->outermost_containing_array_t = containing;
-			arg->accum_array_bounds = UNIQTYPE_ARRAY_LEN(containing);
+			arg->accum_array_bounds = UNIQTYPE_ARRAY_LENGTH(containing);
 			if (arg->accum_array_bounds < 1) arg->accum_array_bounds = 0;
 		}
-		else arg->accum_array_bounds *= UNIQTYPE_ARRAY_LEN(containing);
+		else arg->accum_array_bounds *= UNIQTYPE_ARRAY_LENGTH(containing);
 	}
 	else
 	{
@@ -2472,22 +2477,20 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	 * Does this handle nested arrays of (arrays of) structs?
 	 * 
 	 */
-	if (__builtin_expect( t->pos_maxoff == 65536 /* HACK test for -1 */ , 0))
+	if (__builtin_expect( t->pos_maxoff == UNIQTYPE_POS_MAXOFF_UNBOUNDED, 0))
 	{
 		goto return_min_bounds;
 	}
 	
 	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
 	char *alloc_instance_start_pos = (char*) alloc_start;
-	unsigned short alloc_period = (alloc_uniqtype->neg_maxoff == 0 
-			&& alloc_uniqtype->pos_maxoff > 0
-			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK */) ? alloc_uniqtype->pos_maxoff : 0;
+	unsigned short alloc_period = (alloc_uniqtype->pos_maxoff > 0
+			&& alloc_uniqtype->pos_maxoff != UNIQTYPE_POS_MAXOFF_UNBOUNDED /* HACK */) ? alloc_uniqtype->pos_maxoff : 0;
 	/* If we're searching in a heap array, we need to take the offset modulo the 
 	 * element size. Otherwise just take the whole-block offset. */
 	if (ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site)
 			&& alloc_uniqtype
-			&& alloc_uniqtype->pos_maxoff != 65535 /* HACK test for -1 */
-			&& alloc_uniqtype->neg_maxoff == 0)
+			&& alloc_uniqtype->pos_maxoff != UNIQTYPE_POS_MAXOFF_UNBOUNDED)
 	{
 		/* Test for regularity in the heap block itself. */
 		alloc_instance_start_pos += alloc_uniqtype->pos_maxoff * 
@@ -2516,10 +2519,10 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		{
 			// bounds are the whole array
 			const char *lower = alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset;
-			const char *upper = (arg.innermost_containing_array_t->array_len == 0) ? /* use the allocation's limit */ 
+			const char *upper = (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) == 0) ? /* use the allocation's limit */ 
 					alloc_start + alloc_size_bytes
 					: alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset
-						+ (arg.innermost_containing_array_t->array_len * t->pos_maxoff);
+						+ (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) * t->pos_maxoff);
 			if (is_cacheable) cache_bounds(lower, upper, t, 1, alloc_uniqtype->pos_maxoff, alloc_start);
 			return __make_bounds(
 				(unsigned long) lower,
@@ -2545,7 +2548,7 @@ return_min_bounds:
 
 return_alloc_bounds:
 	{
-		char *base = (char*) alloc_start - alloc_uniqtype->neg_maxoff;
+		char *base = (char*) alloc_start;
 		char *limit = (char*) alloc_start + alloc_size_bytes;
 		unsigned long size = limit - base;
 		
