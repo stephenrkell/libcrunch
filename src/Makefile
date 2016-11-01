@@ -2,6 +2,7 @@ THIS_MAKEFILE := $(realpath $(lastword $(MAKEFILE_LIST)))
 SRCROOT := $(dir $(THIS_MAKEFILE))../
 TRAP_SYSCALLS ?= $(realpath $(SRCROOT)/../trap-syscalls)
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
+LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
 
 CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
@@ -79,6 +80,10 @@ libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
  -Wl,--defsym,__private_posix_memalign=__wrap_dlposix_memalign \
  -Wl,--exclude-libs=dlmalloc.a \
  -Bsymbolic # important for _etext in preload hooks
+# -Wl,--wrap,__liballocs_nudge_mmap \
+
+LDFLAGS += -L$(LIBDLBIND)/lib
+LDLIBS += -ldlbind
 
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
@@ -92,6 +97,7 @@ $(LDFLAGS) \
 -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
 -Wl,--no-whole-archive -Wl,-Bdynamic \
 $(LDLIBS)
+#-Wl,--wrap,__liballocs_nudge_mmap \
 
 libcrunch_preload.a: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a
 	$(AR) r "$@" $+
@@ -112,10 +118,10 @@ libcrunch_nomemtable.o: libcrunch.c
 	$(CC) $(CFLAGS) -DNO_MEMTABLE -c -o "$@" $+
 
 libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
-	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz
+	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz -ldlbind -Wl,--wrap,__liballocs_nudge_mmap
 
 libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
-	$(LD) -r -o "$@" $+
+	$(LD) -r -o "$@" $+ --wrap __liballocs_nudge_mmap
 
 # have to preload the hooks yourself if you want them to hook!
 
