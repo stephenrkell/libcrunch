@@ -2784,7 +2784,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 		_Bool success = 1;
 		signed target_offset = 0;
 		struct uniqtype *cur_containing_uniqtype = NULL;
-		struct contained *cur_contained_pos = NULL;
+		struct uniqtype_rel_info *cur_contained_pos = NULL;
 		while (success)
 		{
 			success = __liballocs_first_subobject_spanning(
