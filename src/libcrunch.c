@@ -585,7 +585,7 @@ void try_register_fixup(int regnum, mcontext_t *p_mcontext)
 			kindstr = "type-invalid";
 			goto report;
 		default: // not one of ours
-			MSGLIT("not a trap pointer");
+			MSGLIT("not a trap pointer\n");
 			return;
 		report:
 			MSGLIT("possibly a ");
@@ -2109,7 +2109,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	}
 	
 	struct uniqtype *cur_obj_uniqtype = obj_alloc_uniqtype;
-	struct uniqtype *cur_containing_uniqtype = NULL;
+	struct uniqtype *cur_containing_uniqtype = NULL;		
 	struct contained *cur_contained_pos = NULL;
 	
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
@@ -2751,4 +2751,76 @@ __libcrunch_bounds_t
 	 * Only with uninstrumented code, or casts not on a recently malloc'd heap object,
 	 * or fetching char* bounds, or GPP bounds. */
 	return __fetch_bounds_internal(ptr, derived_ptr, t);
+}
+
+void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type);
+void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type)
+{
+	/* This is like __store_pointer_nonlocal but the lvalue we're writing through has void* type.
+	 * To accommodate polymorphic code, it gets complicated.
+	 * We want to make a *fast* guess about the actual pointee type of the target storage.
+	 * If it's non-void*, write some non-invalid bounds
+	 * The calling instrumentation may have given us a guess of the source value's real
+	 * pointer type.
+	 * It's not our job to check their compatibility (trumptr does that).
+	 * 
+	 * NOTE: cache interactions with trumptr get tricky here. We want trumptr's 
+	 * write-checking to go first, so that more stuff is in the cache.
+	 * Recall that trumptr's instrumentation pass happens *after* crunchbound,
+	 * so its checks imdeed do end up immediately after the write instruction.
+	 * That's good for us, because we can profit from their effects on the cache. */
+#ifndef LIBCRUNCH_NO_SHADOW_SPACE
+	unsigned long size_stored_addr = (unsigned long) SIZE_STORED(dest);
+
+//	struct uniqtype *cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
+//	struct uniqtype *cached_target_alloc_ptr_type = NULL;
+	struct uniqtype *cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
+	if (cached_target_alloc_type)
+	{
+		/* descend containment until we get a pointer. */
+		_Bool success = 1;
+		signed target_offset = 0;
+		struct uniqtype *cur_containing_uniqtype = NULL;
+		struct contained *cur_contained_pos = NULL;
+		while (success)
+		{
+			success = __liballocs_first_subobject_spanning(
+				&target_offset, &cached_target_alloc_type, &cur_containing_uniqtype,
+				&cur_contained_pos);
+		}
+		if (!UNIQTYPE_IS_POINTER_TYPE(cached_target_alloc_type)) cached_target_alloc_type = NULL;
+	}
+	
+	if (cached_target_alloc_type)
+	{
+		assert(UNIQTYPE_IS_POINTER_TYPE(cached_target_alloc_type));
+		if (!static_guessed_srcval_pointee_type)
+		{
+			/* Okay, try the cache for that too. We don't officially need the type
+			 * of the srcval, but for now I'm more comfortable if we check it agrees. */
+			static_guessed_srcval_pointee_type = __libcrunch_get_cached_object_type(srcval);
+		}
+		if (!static_guessed_srcval_pointee_type
+			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == static_guessed_srcval_pointee_type)
+		{
+			/* Okay, go with the bounds the caller gave us. If they're invalid, the usual
+			 *  __store_pointer_nonlocal thing wil try fetching them, using the type. */
+			__store_pointer_nonlocal(dest, srcval, val_bounds, UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type));
+		}
+		else
+		{
+			/* That's a pity. Report it.
+			 * FIXME: what about what the cache says about the pointee value */
+			warnx("void** bounds store: disagreed about types");
+			abort();
+		}
+	}
+	else
+	{
+		/* The cache didn't know what we're writing to. Write invalid bounds for now. 
+		 * FIXME: we may find that doing the slow thing is actually faster. */
+		__shadow_store_bounds_for((void**) dest, __libcrunch_make_invalid_bounds(srcval),
+			(void*)0);
+	}
+#endif
 }

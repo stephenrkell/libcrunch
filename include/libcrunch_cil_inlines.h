@@ -450,7 +450,7 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 	}
 #endif
 	__libcrunch_check_cache_sanity(cache);
-	return ((void*)0);
+	return (void*)0;
 }
 
 extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline)) __libcrunch_cache_lookup_notype )(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period);
@@ -485,7 +485,20 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 	}
 #endif
 	__libcrunch_check_cache_sanity(cache);
-	return ((void*)0);
+	return (void*)0;
+}
+
+extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline)) __libcrunch_get_cached_object_type)(const void *addr);
+extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline)) __libcrunch_get_cached_object_type)(const void *addr)
+{
+	struct __libcrunch_cache_entry_s *found = __libcrunch_cache_lookup_notype(
+		&__libcrunch_is_a_cache,
+		addr, 0);
+	/* This will give us "zero-offset matches", but not contained matches. 
+	 * I.e. we know that "addr" is a "found->uniqtype", but we pass over
+	 * cases where some cached allocation spans "addr" at a non-zero offset. */
+	if (found) return found->uniqtype;
+	return (void*)0;
 }
 
 extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
@@ -1193,21 +1206,12 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 #define BASE_STORED(ptr) ((void**)(((unsigned long) (ptr)) ^ 0x700000000000ul))
 #define SIZE_STORED(ptr) ((unsigned *)((((unsigned long) (ptr)) >> 1) + 0x080000000000ul))
 
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds);
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds)
+extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t);
+extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t)
 {
-#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	unsigned long b = val_bounds.base;
-	*(BASE_STORED(stored_pointer_addr)) = (void*)    b;
-#else
-	*(BASE_STORED(stored_pointer_addr)) = (void*)    val_bounds.base;
-#endif
-	*(SIZE_STORED(stored_pointer_addr)) = (unsigned) val_bounds.size;
-}
-
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type);
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type)
-{
+	/* This is necessary for polymorphic code requiring "grubbed" pointer type info
+	 * -- see crunchbound. */
+	if (!t) val_bounds = __libcrunch_make_invalid_bounds(/* HACK */ *stored_pointer_addr);
 	/* HMM. Stick with XOR top-three-bits thing for the base.
 	 * we need {0000,0555} -> {7000,7555}
 	 *         {2aaa,2fff} -> {5aaa,5fff}
@@ -1226,6 +1230,18 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 *         {4555,47ff}.
 	 * Okay, let's try it.
 	 */
+#ifdef LIBCRUNCH_WORDSIZE_BOUNDS
+	unsigned long b = val_bounds.base;/* promote to full width */
+	*(BASE_STORED(stored_pointer_addr)) = (void*)    b;/* (necessary hack to avoid compiler warnings) */
+#else
+	*(BASE_STORED(stored_pointer_addr)) = (void*)    val_bounds.base;
+#endif
+	*(SIZE_STORED(stored_pointer_addr)) = (unsigned) val_bounds.size;
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type);
+extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type)
+{
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	unsigned long dest_addr __attribute__((unused)) = (unsigned long) dest;
 	unsigned long base_stored_addr __attribute__((unused)) = (unsigned long) BASE_STORED(dest);
@@ -1247,6 +1263,9 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 * So the only cases we don't load for are pointers that are loaded,
 	 * deref'd locally and then discarded.
 	 * FIXME: IMPLEMENT THIS in crunchbound. ACTUALLY: don't. Lazy is slower!
+	 *
+	 * The above is a good indication of how counterintuitive the performance of
+	 * this stuff can be.
 	 */
 	_Bool existing_shadow_bounds_valid = *((unsigned *) size_stored_addr) != 0; /* bounds valid? */
 	if (unlikely(
@@ -1274,13 +1293,27 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 	 * secondary checks, in which case fine?). */
 	if (!__libcrunch_bounds_invalid(val_bounds, val) || existing_shadow_bounds_valid)
 	{
-		__shadow_store_bounds_for((void**) dest, val_bounds);
+		__shadow_store_bounds_for((void**) dest, val_bounds, val_pointee_type);
 	}
 	
 	/* FIXME: want to tell the compiler that these writes don't alias with
 	 * any locals. Hm. I think it's already allowed to assume that. */
 #endif
 }
+
+/* HACK */
+// extern __liballocs_walk_subobjects_spanning_rec(
+// 	signed accum_offset, unsigned accum_depth,
+// 	const signed target_offset_within_u,
+// 	struct uniqtype *u, 
+// 	int (*cb)(struct uniqtype *spans, signed span_start_offset, unsigned depth,
+// 		struct uniqtype *containing, struct contained *contained_pos, 
+// 		signed containing_span_start_offset, void *arg),
+// 	void *arg
+// 	);
+
+/* This is now and out-of-line path. */
+extern void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type);
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from)
@@ -1324,8 +1357,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	return __libcrunch_make_invalid_bounds(ptr);
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t)
 {
 	/* We could choose to inline or not:
 	 * - shadow-space lookup
@@ -1342,7 +1375,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
 {
-	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from);
+	if (!t) return __libcrunch_make_invalid_bounds(derived);
+	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from, t);
 	if (unlikely(__libcrunch_bounds_invalid(bounds, ptr)))
 	{
 		bounds = __fetch_bounds_ool(ptr, derived, t);
@@ -1449,12 +1483,12 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bo
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from);
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from)
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from, struct uniqtype *t);
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from, struct uniqtype *t)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	__libcrunch_bounds_t *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
-	*b = __fetch_bounds_inl(ptr, loaded_from);
+	*b = __fetch_bounds_inl(ptr, loaded_from, t);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	warnx("Pushed bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);
@@ -1562,14 +1596,14 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_boun
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from);
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from)
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from, struct uniqtype *t);
+extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from, struct uniqtype *t)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	if (really)
 	{
 		__libcrunch_bounds_t *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
-		*b = __fetch_bounds_inl(ptr, loaded_from);
+		*b = __fetch_bounds_inl(ptr, loaded_from, t);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 		warnx("Pushed result bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);

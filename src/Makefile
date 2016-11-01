@@ -1,11 +1,15 @@
 THIS_MAKEFILE := $(realpath $(lastword $(MAKEFILE_LIST)))
 SRCROOT := $(dir $(THIS_MAKEFILE))../
+srcdir := $(dir $(THIS_MAKEFILE))
 TRAP_SYSCALLS ?= $(realpath $(SRCROOT)/../trap-syscalls)
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
+
+CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS
 
 CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
 
+#CFLAGS += -fkeep-inline-functions
 CFLAGS += -std=gnu99 -g -fPIC -I../include
 # debugging version
 ifneq ($(DEBUG),)
@@ -47,6 +51,11 @@ C_DEPS := $(patsubst %.c,.%.d,$(C_SRC))
 CC_DEPS := $(patsubst %.cc,.%.d,$(CC_SRC))
 
 DEPS := $(C_DEPS) $(CC_DEPS)
+
+ifneq ($(realpath .),$(realpath $(srcdir)))
+$(warning Build directory is $(realpath .))
+VPATH := $(srcdir):$(VPATH)
+endif
 
 $(C_DEPS): .%.d : %.c
 	$(CC) -MM $(CFLAGS) "$<"  > "$@"

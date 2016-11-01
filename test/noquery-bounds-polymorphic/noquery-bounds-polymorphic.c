@@ -21,13 +21,21 @@ void frob_voids(void **pptr1, void **pptr2)
 	}
 }
 
+/* We need to be able to cache bounds for these, but *not* have them
+ * do fetches at startup as they are initialised. So make them static-storage
+ * but initialize inside main(). */
+int xs[2] = { 42, 69105 };
+int *ptr[2];
 
 int main(void)
 {
 	report_void(main);
-	int xs[] = { 42, 69105 };
-	int *ptr[] = { &xs[1], &xs[0] };
-	frob_voids(&ptr[0], &ptr[1]);
+	ptr[0] = &xs[1];
+	ptr[1] = &xs[0];
+	/* We want to get type info about "ptr" into the cache, so we can test 
+	 * __store_pointer_nonlocal_via_voidptrptr's ability to grub around in it. */
+	
+	frob_voids((void**) &ptr[0], (void**) &ptr[1]);
 	/* Now adjust one of them -- we should still get its bounds as if it's int*. */
 	printf("After frobbing, *(ptr[0] + 1) is: %d\n", *(ptr[0] + 1));
 	return 0;
