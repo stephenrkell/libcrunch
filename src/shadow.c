@@ -74,14 +74,14 @@ static int check_maps_cb(struct proc_entry *ent, char *linebuf, void *arg)
  * initialisation, we don't rely on any dynamic linker or libc state. */
 static void init_shadow_space(void) __attribute__((constructor(102)));
 
-extern void __real_liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
+extern void __real___liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
                   int *p_fd, off_t *p_offset, const void *caller);
 
 void __wrap___liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot, int *p_flags,
                   int *p_fd, off_t *p_offset, const void *caller)
 {
 	/* Call the basic nudger first. */
-	__real_liballocs_nudge_mmap(p_addr, p_length, p_prot, p_flags,
+	__real___liballocs_nudge_mmap(p_addr, p_length, p_prot, p_flags,
                   p_fd, p_offset, caller);
 	
 	// do nothing more if we're not initialized
