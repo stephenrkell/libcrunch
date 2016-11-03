@@ -1664,8 +1664,22 @@ let makeShadowBoundsInitializerCalls helperFunctions enclosingFunc initializerLo
     in
     instrsToAppend
 
+let rec initializationExprMightPointToArray e = match (simplifyPtrExprs e) with
+    |BinOp(PlusPI, subE1, subE2, subT) -> initializationExprMightPointToArray subE1
+    |BinOp(MinusPI, subE1, subE2, subT) -> initializationExprMightPointToArray subE1
+    |BinOp(_, subE1, subE2, subT) -> false
+    |CastE(subT, subE) -> (* Hmm? *) false
+    |AddrOf(_, offs) -> (* Hmm? *) false
+    |StartOf(_, offs) -> true
+    |Lval(Var(vi), offs) ->
+          (* We really want to recurse on the initialization expr of that particular location.
+           * For now, be safe. *)
+          true
+    | _ -> false
+
 let prependShadowBoundsInitializer helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals =
-    if isStaticallyNullPtr initializationValExpr then () else
+    if isStaticallyNullPtr initializationValExpr then ()
+    else if not (initializationExprMightPointToArray initializationValExpr) then () else
     let instrsToPrepend = makeShadowBoundsInitializerCalls helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals
     in
     initFunc.sbody <- { battrs = []; bstmts = [{
