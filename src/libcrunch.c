@@ -2775,8 +2775,23 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	unsigned long size_stored_addr = (unsigned long) SIZE_STORED(dest);
 
-//	struct uniqtype *cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
-//	struct uniqtype *cached_target_alloc_ptr_type = NULL;
+	/* WHEE. The caller probably passed us the bounds of "dest" on the shadow stack.
+	 * Is this useful? We care about whether the target alloc was allocated as
+	 * holding void* or some other pointer type. If it's some other, we might want
+	 * to store bounds there. What bounds? The caller didn't pass us the bounds for
+	 * the pointer itself (it's void*). Oh, but we have "val_bounds" so maybe it did.
+	 * If it was allocated as void*, it's probably harmless to write them. 
+	 * So perhaps we should just always write them, if we're going to XOR-check
+	 * at shadow-load time?
+	 * 
+	 * + in our example code, we just loaded the void* value being written.
+	 * So we need some way to see the bounds for *it*.
+	 
+	 * "If loading a void*, always load bounds anyway"? HMM. Breaks stuff. 
+	 * I think rooting in the cache is best. Delete the noquery test case. */
+	__libcrunch_bounds_t dest_alloc_ptrwise_bounds = __peek_argument_bounds(
+		/* really */ 1, /* offset */ 0, /* val */ ptr);
+
 	struct uniqtype *cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
 	if (cached_target_alloc_type)
 	{
