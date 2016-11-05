@@ -1664,18 +1664,35 @@ let makeShadowBoundsInitializerCalls helperFunctions enclosingFunc initializerLo
     in
     instrsToAppend
 
-let rec initializationExprMightPointToArray e = match (simplifyPtrExprs e) with
+let rec initializationExprMightPointToArray e = 
+    let _ = debug_print 1 ("Might init expr " ^ (expToCilString e) ^ " point to or into an array? ") in
+    let res = 
+    match (simplifyPtrExprs e) with
     |BinOp(PlusPI, subE1, subE2, subT) -> initializationExprMightPointToArray subE1
     |BinOp(MinusPI, subE1, subE2, subT) -> initializationExprMightPointToArray subE1
     |BinOp(_, subE1, subE2, subT) -> false
     |CastE(subT, subE) -> (* Hmm? *) false
-    |AddrOf(_, offs) -> (* Hmm? *) false
-    |StartOf(_, offs) -> true
+    |AddrOf(lhost, offs) -> (* if we're taking the address of an array element, then yes *)
+        (* If we remove the last offset, *)
+        begin
+        let revOffList = List.rev (offsetToList offs) in 
+            match revOffList with
+                off :: more -> begin
+                    match Cil.typeSig (Cil.typeOf (Lval(lhost, offsetFromList (List.rev  more)))) with
+                        TSArray(_, _, _) -> true
+                      | _ -> false
+                    end
+              | [] -> false (* we don't have AddrOf on array hosts -- should be StartOf *)
+        end
+    |StartOf(_, offs) -> (* must be of array type *) true
     |Lval(Var(vi), offs) ->
           (* We really want to recurse on the initialization expr of that particular location.
            * For now, be safe. *)
           true
     | _ -> false
+    in
+    let _ = debug_print 1 (if res then "yes\n" else "no\n") in
+    res
 
 let prependShadowBoundsInitializer helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals =
     if isStaticallyNullPtr initializationValExpr then ()
