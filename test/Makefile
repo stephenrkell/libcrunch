@@ -130,6 +130,15 @@ noquery-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	if $(MAKE) cleanrun-noquery-$* 1>$$out 2>$$err && \
            ! grep '^queries handled.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
+# SoftBound should also never call liballocs
+checkrun-softbound-%: softbound-%/check-stamp
+	true # remembered pass of softbound-$*
+softbound-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+	@echo "case is softbound-$*" && \
+	$(MAKE) cleanrun-softbound-$* 1>$$out 2>$$err && \
+           ! grep '^queries handled.* [1-9]\+[0-9]*$$' $$err && \
+		   match "out-of-bounds pointers created" '0' >/dev/null; then touch "$@"; else false; fi
+
 # Bounds cases might not report passed type checks
 checkrun-bounds-%: bounds-%/check-stamp
 	true # remembered pass of bounds-$*
@@ -139,7 +148,6 @@ bounds-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-bounds-$* 1>$$out 2>$$err && \
 		. ./checks.sh && tail -n26 "$$err" | \
-		    match "out-of-bounds pointers created" '0' >/dev/null && \
 		    touch "$@" || \
 		(tail -n26 $$err; false)
 
