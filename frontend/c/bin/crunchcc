@@ -18,21 +18,6 @@ sys.path.append(liballocs_base + "/tools/lang/c/lib")
 from allocscc import AllocsCC
 
 class CrunchCC(AllocsCC):
- 
-    def fixupDotO(self, filename, errfile):
-        # also link the file with the uniqtypes it references
-        cmd = [self.getLibAllocsBaseDir() + "/tools/lang/c/bin/link-used-types", filename]
-        self.debugMsg("Calling " + " ".join(cmd) + "\n")
-        
-        errfilename = os.path.realpath(filename) + ".fixuplog"
-
-        with (self.makeErrFile(errfilename, "w+") if not errfile else errfile) as errfile:
-            ret = subprocess.call(cmd, stderr=errfile)
-            if ret != 0:
-                self.print_errors(errfile)
-                return ret  # give up now
-
-            return AllocsCC.fixupDotO(self, filename, errfile)
         
     def getCillyArgs(self, sourceFiles):
         # PROBLEM: we only want to -include if we're compiling a C file. 
