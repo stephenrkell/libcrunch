@@ -832,6 +832,7 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_ptr_trap_bits)(const void *maybe_trap/*, unsigned short tag*/)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
+#ifdef LIBCRUNCH_USING_TRAP_PTRS
 	/* FIXME: this is all very archdep */
 	unsigned long addr = (unsigned long) maybe_trap;
 	unsigned long bits = addr;
@@ -856,6 +857,11 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 //				trapi <= -(1ull << LIBCRUNCH_TRAP_TAG_SHIFT));
 //	/* i.e. trap values are the really-really-positive and really-really-negative addresses. */
 #else
+	/* Not using trap pointers */
+	return 0;
+#endif
+#else
+	/* Noop inlines */
 	return 0;
 #endif
 }
@@ -863,8 +869,12 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap_ptr)(const void *maybe_trap/*, unsigned short tag*/)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
+#ifdef LIBCRUNCH_USING_TRAP_PTRS
 	// return __libcrunch_ptr_trap_bits(maybe_trap) != 0;
 	return __libcrunch_detrap(maybe_trap) != (unsigned long) maybe_trap;
+#else
+	return 0;
+#endif
 #else
 	return 0;
 #endif
@@ -1089,6 +1099,19 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	//if (!(addr - base < size)) abort(); else return 1;
 #else
 	return 1;
+#endif
+}
+
+extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
+extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
+{
+#ifdef LIBCRUNCH_EMULATE_SOFTBOUND
+	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
+	unsigned long size = __libcrunch_get_size(ptr_bounds, ptr);
+	if ((unsigned long) ptr - base < size)
+	{
+		/* success */
+	} else abort();
 #endif
 }
 
