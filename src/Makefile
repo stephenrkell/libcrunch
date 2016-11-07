@@ -7,7 +7,7 @@ LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
 
 CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS
 
-CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap
+CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBDLBIND)/include
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
 
 #CFLAGS += -fkeep-inline-functions

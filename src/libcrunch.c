@@ -2790,7 +2790,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 	 * "If loading a void*, always load bounds anyway"? HMM. Breaks stuff. 
 	 * I think rooting in the cache is best. Delete the noquery test case. */
 	__libcrunch_bounds_t dest_alloc_ptrwise_bounds = __peek_argument_bounds(
-		/* really */ 1, /* offset */ 0, /* val */ ptr);
+		/* really */ 1, /* offset */ 0, /* val */ srcval);
 
 	struct uniqtype *cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
 	if (cached_target_alloc_type)

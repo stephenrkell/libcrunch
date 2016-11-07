@@ -39,7 +39,7 @@ class CrunchXCC(CrunchCC):
             # Add temporary HACK to strip line numbers after preprocess
             # "--commPrintLn", \
             includeArgs = [ \
-            "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
+            "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
             "-DLIBCRUNCH_USING_TRAP_PTRS", \
             "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
            "-include", \

@@ -35,7 +35,7 @@ class CrunchCC(AllocsCC):
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
             includeArgs = ["-I" + self.getLibAllocsBaseDir() + "/include", \
-                "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
+                "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
                  "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
                "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../dumpreftypes/dumpreftypes.cmxs"),  "--dodumpreftypes", \

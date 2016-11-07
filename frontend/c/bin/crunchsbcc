@@ -53,7 +53,7 @@ class CrunchSBCC(CrunchCC):
             # temporary HACK to strip line numbers after preprocess
             #"--commPrintLn",
             includeArgs = [ \
-            "-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h", \
+            "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
             "-DLIBCRUNCH_EMULATE_SOFTBOUND", \
             "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
             "-include", \
