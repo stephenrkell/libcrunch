@@ -1724,6 +1724,8 @@ let rec initializationExprMightPointToArray e =
           (* We really want to recurse on the initialization expr of that particular location.
            * For now, be safe. *)
           true
+    | Const(CStr(s)) -> true
+    | Const(CWStr(s)) -> true
     | _ -> false
     in
     let _ = debug_print 1 (if res then "yes\n" else "no\n") in
