@@ -143,7 +143,7 @@ void __libcrunch_scan_lazy_typenames(void *typelib_handle)
 	/* __liballocs_iterate_types is slow. use the hash table instead. */
 	/* __liballocs_iterate_types(typelib_handle, match_typename_cb, NULL); */
 	// HACK: while still hunting performance regressions, waste some time by doing nothing
-	__liballocs_iterate_types(typelib_handle, do_nothing_cb, NULL);
+	// __liballocs_iterate_types(typelib_handle, do_nothing_cb, NULL);
 	
 	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
 	{
@@ -151,7 +151,7 @@ void __libcrunch_scan_lazy_typenames(void *typelib_handle)
 		{
 			// was: look up using our hacky helper
 			// const void *u = typestr_to_uniqtype_from_lib(typelib_handle, lazy_heap_typenames[i]);
-					
+			
 			// build the uniqtype name and use the power of the symbol hash tables
 			char buf[4096];
 			char *pos = &buf[0];
@@ -2746,6 +2746,15 @@ __libcrunch_bounds_t
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
 	++__libcrunch_fetch_bounds_called; // TEMP
+	/* If we have one-past pointers, pretend we're asking for one before. */
+	if (__libcrunch_ptr_trap_bits(ptr) == LIBCRUNCH_TRAP_ONE_PAST)
+	{
+		ptr = (void*) __libcrunch_detrap((char*) ptr - t->pos_maxoff);
+	}
+	if (__libcrunch_ptr_trap_bits(derived_ptr) == LIBCRUNCH_TRAP_ONE_PAST)
+	{
+		derived_ptr = (void*) __libcrunch_detrap((char*) derived_ptr - t->pos_maxoff);
+	}
 	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(
 			ptr, derived_ptr, t, t->pos_maxoff
 	);

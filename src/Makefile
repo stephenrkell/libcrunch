@@ -5,7 +5,7 @@ TRAP_SYSCALLS ?= $(realpath $(SRCROOT)/../trap-syscalls)
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
 LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
 
-CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS
+CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS -DLIBCRUNCH_USING_TRAP_PTRS
 
 CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBDLBIND)/include
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
