@@ -927,11 +927,18 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 	/* The bounds are storing only the lower bits of the base.
 	 * If they're <= derivedfrom's lower 32, they are shared with the base.
 	 * Otherwise, the base is 4GB lower.
-	 * (base <= derivedfrom < limit)
+	 * (base <= derivedfrom < limit).
+	 * 
+	 * And beware: there's an interaction with trap pointers here!
+	 * We don't want to take the high-order trap bits of a trap pointer
+	 * and just pretend that our real pointer sits within "size" of that.
+	 * It's important that we get the "real" base so that the primary
+	 * check fails and we do the detrap stuff from __secondary_check.
 	 */
 	if (likely(bounds.base <= _CLEAR_UPPER_32(derivedfrom)))
 	{
-		return (void*) (_CLEAR_LOWER_32(derivedfrom) + bounds.base);
+		const void *ptr = (const void *) __libcrunch_detrap(derivedfrom);
+		return (void*) (_CLEAR_LOWER_32(ptr) + bounds.base);
 	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) - 0x100000000ul + bounds.base);
 #else
 	return (void*) bounds.base;
@@ -1085,7 +1092,7 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	unsigned long addr = (unsigned long) derived;
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* Use denorm base directly. HMM. Actually, is that really faster? FIXME: TEST. */
-	unsigned long base = ((unsigned long) derivedfrom & 0xffffffff00000000ul) | derivedfrom_bounds.base;
+	unsigned long base = ((unsigned long) __libcrunch_detrap(derivedfrom) & 0xffffffff00000000ul) | derivedfrom_bounds.base;
 #else
 	unsigned long base = (unsigned long) __libcrunch_get_base(derivedfrom_bounds, derivedfrom);
 #endif
@@ -1128,18 +1135,21 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	/* Primary might have failed because we have fake bounds and they need widening.
 	 *     HMM. Actually this doesn't happen, because *local* fake bounds are max-bounds.
 	 *     We only widen fake bounds if we lack local bounds, hit the cache, then find derived is OOB. */
-	unsigned long addr = (unsigned long) *p_derived;
-	unsigned long base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
-	unsigned long size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
-	if (!(addr - base >= size)) __builtin_unreachable();
-	
 	// new approach:
-	// unconditionally de-trap addr and, if wordsize, derivedfrom;
-	addr = __libcrunch_detrap((const void *) addr);
+	// unconditionally de-trap addr and, if wordsize, derivedfrom (we need it to get the base);
+	unsigned long pre_detrap_addr = *p_derived;
+	unsigned long addr = __libcrunch_detrap(*p_derived);
 	_Bool derivedfrom_trapped = __libcrunch_is_trap_ptr(derivedfrom);
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	derivedfrom = (const void*) __libcrunch_detrap(derivedfrom);
+	unsigned long naive_base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, *p_derived);
+#else
+#define naive_base base
 #endif
+	unsigned long base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
+	unsigned long size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
+	if (!(pre_detrap_addr - naive_base >= size)) __builtin_unreachable();
+	
 	// ensure valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom))
 	{
@@ -1163,14 +1173,37 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	 *                                  or if we fetched bounds (above). */
 	// do the primary check again
 	// -- write now-untrapped addr back, if derivedfrom was trapped
+	// warnx("Got to 1, deriving %p", *p_derived);
 	if (addr - base < size)
 	{
-		if (derivedfrom_trapped) *p_derived = (const void*) addr;
+		// warnx("Got to 2, deriving %p", *p_derived);
+		if (derivedfrom_trapped)
+		{
+#ifndef LIBCRUNCH_NO_WARN_BACK_IN
+			warnx("Went back in bounds  at %p: %p (base %p, size %lu)", 
+				__libcrunch_get_pc(), (void*) addr, (void*) base, (unsigned long) size);
+#endif
+			*p_derived = (const void*) addr;
+		}
+		else
+		{
+			// warnx("Got to 3, deriving %p", *p_derived);
+			/* Q. When is this true?
+			 * A. When deriving a one-past trapped pointer from an untrapped one.
+			 * (NOT just when we're doing full checks because of an earlier failed check,
+			 * but the arithmetic being checked right now is plain-old in-bounds stuff.
+			 * We still *did* a primary check.) */
+		}
 		return 1;
 	}
 	
+	// warnx("Got to 4, deriving %p", *p_derived);
 	if (addr - base == size)
 	{
+#ifndef LIBCRUNCH_NO_WARN_ONE_PAST
+		warnx("Created one-past pointer at %p: %p (base %p, size %lu)", 
+			__libcrunch_get_pc(), (void*) addr, (void*) base, (unsigned long) size);
+#endif
 		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
 		return 1;
 	}
@@ -1178,6 +1211,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	/* Note that we NEVER create trapped pointers from fake bounds. 
 	 * The reason is that in fake cases, the local bounds are always max_bounds. */
 
+	// warnx("Got to 5, deriving %p", *p_derived);
 	/* Handle the error. */
 	__libcrunch_bounds_error(*p_derived, derivedfrom, *p_derivedfrom_bounds);
 	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
@@ -1296,7 +1330,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 			// && existing_shadow_bounds_valid
 			))
 	{
-		val_bounds = __fetch_bounds_ool(val, val, val_pointee_type);
+		val_bounds = val ? __fetch_bounds_ool(val, val, val_pointee_type) : __make_bounds(0, 1);
 		if (__libcrunch_bounds_invalid(val_bounds, val)) __builtin_unreachable();
 	}
 
