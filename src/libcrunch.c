@@ -339,9 +339,6 @@ void __libcrunch_main_init(void) __attribute__((constructor(101)));
 void __libcrunch_main_init(void)
 {
 	assert(!done_init);
-	
-	/* We check that */
-	
 	done_init = 1;
 }
 
@@ -953,6 +950,7 @@ static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const
 	}
 #endif
 	/* Create the new entry and put it at the head. */
+	warnx("Creating fake bounds %p-%p", obj_base, obj_limit);
 	__libcrunch_fake_bounds_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
@@ -2764,6 +2762,12 @@ void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom,
 		__libcrunch_get_base(bounds, derivedfrom), 
 		__libcrunch_get_limit(bounds, derivedfrom));
 	++__libcrunch_created_invalid_pointer;
+	
+	if (!(derivedfrom - __libcrunch_get_base(bounds, derivedfrom)
+		 <= __libcrunch_get_size(bounds, derivedfrom)))
+	{
+		warnx("*** something fishy: derived-from pointer was not in bounds");
+	}
 }
 
 void __libcrunch_soft_deref_error_at(const void *ptr, __libcrunch_bounds_t bounds, const void *addr)
