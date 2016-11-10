@@ -68,7 +68,7 @@ $(CC_DEPS): .%.d : %.cc
 # We want to make sure that the libcrunch--liballocs interface is 
 # linked in the fastest possible way.
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
-libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size
+libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size -Wl,--wrap,__notify_copy
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDLIBS += -lsystrap -lz -Wl,--no-as-needed -ldl
 
 vpath dlmalloc.c $(TRAP_SYSCALLS)/src

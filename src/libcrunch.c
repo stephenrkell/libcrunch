@@ -2303,6 +2303,38 @@ can_hold_pointer_failed:
 	return 1; // fail, but program continues
 	
 }
+extern void *__real___notify_copy(void *dest, const void *src, size_t n);
+void **__libcrunch_ool_base_stored_addr(void *const *stored_ptr_addr);
+unsigned *__libcrunch_ool_size_stored_addr(void *const *stored_ptr_addr);
+void *__wrap___notify_copy(void *dest, const void *src, size_t n)
+{
+	/* Do nothing if the shadow space is not initialized. */
+	/* WEIRD. If I replace "goto out" with "return dest" here, 
+	 * gcc 4.9.2 miscompiles this by returning 0 (xor eax,eax).
+	 * HACK around this with an "out" label for now. */
+	if (!__libcrunch_bounds_bases_region_00) goto out;
+	
+	/* A realloc, memcpy, memmove or similar operation is moving some data. 
+	 * Make sure we
+	 * -- move its metadata;
+	 * -- FIXME: check the type-correctness of the copy.
+	 */
+	if (!orig_memmove)
+	{
+		/* NOTE: memmove is an IFUNC symbol on glibc.
+		 * So fake_dlsym is invoking the ifunc for us. */
+		orig_memmove = fake_dlsym(RTLD_NEXT, "memmove");
+	}
+	orig_memmove(__libcrunch_ool_base_stored_addr(dest), 
+		__libcrunch_ool_base_stored_addr(src),
+		n);
+	
+	orig_memmove(__libcrunch_ool_size_stored_addr(dest), 
+		__libcrunch_ool_size_stored_addr(src),
+		n * sizeof (unsigned) / sizeof (void*));
+out:
+	return __real___notify_copy(dest, src, n);
+}
 
 struct bounds_cb_arg
 {
@@ -2734,6 +2766,16 @@ void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom,
 	++__libcrunch_created_invalid_pointer;
 }
 
+void __libcrunch_soft_deref_error_at(const void *ptr, __libcrunch_bounds_t bounds, const void *addr)
+{
+	__libcrunch_check_init();
+	
+	warnx("code at %p dereferenced an out-of-bounds pointer %p (lb %p; ub %p)",
+		addr, ptr,
+		__libcrunch_get_base(bounds, ptr), 
+		__libcrunch_get_limit(bounds, ptr));
+}
+
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds)
 {
@@ -2850,4 +2892,165 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 			(void*)0);
 	}
 #endif
+}
+
+/* HACK since shadow.o is in libcrunch_stubs not libcrunch_preload.so, but we don't want
+ * to link the preload lib against the stubs lib (why not?). */
+__thread unsigned long *__bounds_sp __attribute__((weak));
+
+/* Provide out-of-line versions of all the (useful) inlines in libcrunch_cil_inlines.h. */
+
+void __libcrunch_ool_check_cache_sanity(struct __libcrunch_cache *cache)
+{
+	__libcrunch_check_cache_sanity(cache);
+}
+
+struct __libcrunch_cache_entry_s *__libcrunch_ool_cache_lookup(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
+{
+	return __libcrunch_cache_lookup(cache, obj, t, require_period);
+}
+
+struct __libcrunch_cache_entry_s *__libcrunch_ool_cache_lookup_notype(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period)
+{
+	return __libcrunch_cache_lookup_notype(cache, obj, require_period);
+}
+
+struct uniqtype * __libcrunch__ool_get_cached_object_type(const void *addr)
+{
+	return __libcrunch_get_cached_object_type(addr);
+}
+
+void *__libcrunch_ool_trap(const void *ptr, unsigned short tag)
+{
+	return __libcrunch_trap(ptr, tag);
+}
+
+unsigned long __libcrunch_ool_detrap(const void *any_ptr)
+{
+	return __libcrunch_detrap(any_ptr);
+}
+
+void *__libcrunch_ool_untrap(const void *trapptr, unsigned short tag __attribute__((unused)))
+{
+	return __libcrunch_untrap(trapptr, tag);
+}
+
+unsigned long __libcrunch_ool_ptr_trap_bits(const void *maybe_trap/*, unsigned short tag*/)
+{
+	return __libcrunch_ptr_trap_bits(maybe_trap);
+}
+
+int __libcrunch_ool_is_trap_ptr(const void *maybe_trap/*, unsigned short tag*/)
+{
+	return __libcrunch_is_trap_ptr(maybe_trap);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_make_bounds(unsigned long base, unsigned long limit)
+{
+	return __make_bounds(base, limit);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_max_bounds(const void *ptr)
+{
+	return __libcrunch_max_bounds(ptr);
+}
+
+void * __libcrunch_ool_get_base(__libcrunch_bounds_t bounds, const void *derivedfrom)
+{
+	return __libcrunch_get_base(bounds, derivedfrom);
+}
+
+unsigned long __libcrunch_ool_get_size(__libcrunch_bounds_t bounds, const void *derivedfrom)
+{
+	return __libcrunch_get_size(bounds, derivedfrom);
+}
+
+void *__libcrunch_ool_get_limit(__libcrunch_bounds_t bounds, const void *derivedfrom)
+{
+	return __libcrunch_get_limit(bounds, derivedfrom);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_make_invalid_bounds(const void *ptr)
+{
+	return __libcrunch_make_invalid_bounds(ptr);
+}
+
+_Bool __libcrunch_ool_bounds_invalid(__libcrunch_bounds_t bounds, const void *ptr)
+{
+	return __libcrunch_bounds_invalid(bounds, ptr);
+}
+
+_Bool __libcrunch_ool_valid_bounds_equal(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2)
+{
+	return __libcrunch_valid_bounds_equal(bounds1, bounds2);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_fetch_bounds_from_cache(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t, unsigned long t_sz)
+{
+	return __fetch_bounds_from_cache(ptr, derived_ptr_maybetrapped, t, t_sz);
+}
+
+_Bool __libcrunch_ool_primary_check_derive_ptr(const void *derived, const void *derivedfrom, __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz)
+{
+	return __primary_check_derive_ptr(derived, derivedfrom, derivedfrom_bounds, t_sz);
+}
+
+void __libcrunch_ool_check_deref(const void *ptr, __libcrunch_bounds_t ptr_bounds)
+{
+	__check_deref(ptr, ptr_bounds);
+}
+
+_Bool __libcrunch_ool_secondary_check_derive_ptr(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
+{
+	return __secondary_check_derive_ptr(p_derived, derivedfrom, p_derivedfrom_bounds, t, t_sz);
+}
+
+_Bool __libcrunch_ool_full_check_derive_ptr(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
+{
+	return __full_check_derive_ptr(p_derived, derivedfrom, derivedfrom_bounds, t, t_sz);
+}
+
+void __libcrunch_ool_shadow_store_bounds_for(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t)
+{
+	__shadow_store_bounds_for(stored_pointer_addr, val_bounds, t);
+}
+
+void __libcrunch_ool_store_pointer_nonlocal(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type)
+{
+	return __store_pointer_nonlocal(dest, val, val_bounds, val_pointee_type);
+}
+
+void **__libcrunch_ool_base_stored_addr(void *const *stored_ptr_addr)
+{
+	return BASE_STORED(stored_ptr_addr);
+}
+
+unsigned *__libcrunch_ool_size_stored_addr(void *const *stored_ptr_addr)
+{
+	return (unsigned *) SIZE_STORED(stored_ptr_addr);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_fetch_bounds_from_shadow_space(const void *ptr, void **loaded_from)
+{
+	return __fetch_bounds_from_shadow_space(ptr, loaded_from);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_fetch_bounds_inl(const void *ptr, void **loaded_from, struct uniqtype *t)
+{
+	return __fetch_bounds_inl(ptr, loaded_from, t);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_fetch_bounds_full(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
+{
+	return __fetch_bounds_full(ptr, derived, loaded_from, t);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_peek_argument_bounds(unsigned long offset, const void *ptr)
+{
+	return __peek_argument_bounds(1, offset, ptr);
+}
+
+__libcrunch_bounds_t __libcrunch_ool_peek_result_bounds(unsigned long offset, const void *ptr)
+{
+	return __peek_result_bounds(1, offset, ptr);
 }

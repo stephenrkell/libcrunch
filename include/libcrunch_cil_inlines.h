@@ -94,6 +94,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value) PURE;
 __libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived_ptr, struct uniqtype *u) PURE;
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds);
+void __libcrunch_soft_bounds_error_at(const void *ptr, __libcrunch_bounds_t bounds, const void *addr);
 void * __check_derive_ptr_internal(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t)/* PURE -- fixme */;
 
@@ -1115,10 +1116,10 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(con
 #ifdef LIBCRUNCH_EMULATE_SOFTBOUND
 	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
 	unsigned long size = __libcrunch_get_size(ptr_bounds, ptr);
-	if ((unsigned long) ptr - base < size)
+	if (likely((unsigned long) ptr - base < size))
 	{
 		/* success */
-	} else abort();
+	} else __libcrunch_soft_deref_error_at(ptr, ptr_bounds, __libcrunch_get_pc());
 #endif
 }
 
@@ -1137,7 +1138,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	 *     We only widen fake bounds if we lack local bounds, hit the cache, then find derived is OOB. */
 	// new approach:
 	// unconditionally de-trap addr and, if wordsize, derivedfrom (we need it to get the base);
-	unsigned long pre_detrap_addr = *p_derived;
+	unsigned long pre_detrap_addr = (unsigned long) *p_derived;
 	unsigned long addr = __libcrunch_detrap(*p_derived);
 	_Bool derivedfrom_trapped = __libcrunch_is_trap_ptr(derivedfrom);
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
@@ -1180,7 +1181,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 		if (derivedfrom_trapped)
 		{
 #ifndef LIBCRUNCH_NO_WARN_BACK_IN
-			warnx("Went back in bounds  at %p: %p (base %p, size %lu)", 
+			warnx("Went back in bounds at %p: %p (base %p, size %lu)", 
 				__libcrunch_get_pc(), (void*) addr, (void*) base, (unsigned long) size);
 #endif
 			*p_derived = (const void*) addr;
@@ -1189,10 +1190,12 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 		{
 			// warnx("Got to 3, deriving %p", *p_derived);
 			/* Q. When is this true?
-			 * A. When deriving a one-past trapped pointer from an untrapped one.
-			 * (NOT just when we're doing full checks because of an earlier failed check,
+			 * A. 
+			 * NOT when deriving a one-past trapped pointer from an untrapped one
+			 * (we're only handling the fully-in-bounds case here).
+			 * NOT just when we're doing full checks because of an earlier failed check,
 			 * but the arithmetic being checked right now is plain-old in-bounds stuff.
-			 * We still *did* a primary check.) */
+			 * We still *did* a primary check. */
 		}
 		return 1;
 	}
@@ -1376,6 +1379,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from)
 {
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
+	if (!ptr) return __make_bounds(0, 1);
 	if (loaded_from)
 	{
 		unsigned long loaded_from_addr __attribute__((unused)) = (unsigned long) loaded_from;
@@ -1402,7 +1406,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 			)
 #endif
 		};
-#ifdef LIBCRUNCH_DEBUG_SHADOW_SPACE
+#ifndef LIBCRUNCH_NO_DEBUG_SHADOW_SPACE
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
 		{
 			warnx("Fetched invalid bounds for %p (loaded from %p)", ptr, loaded_from);
@@ -1432,6 +1436,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
 {
+	if (!ptr) return __libcrunch_make_invalid_bounds(derived);
 	if (!t) return __libcrunch_make_invalid_bounds(derived);
 	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from, t);
 	if (unlikely(__libcrunch_bounds_invalid(bounds, ptr)))
@@ -1597,6 +1602,13 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 		 * but we have to account for the offset. */
 		__libcrunch_bounds_t b = *(__libcrunch_bounds_t *)(__bounds_sp + 1 
 			+ (offset * (sizeof (__libcrunch_bounds_t) / sizeof (*__bounds_sp))));
+#ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
+		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
+		{
+			warnx("Code at %p received invalid bounds at offset %d for ptr value %p",
+				__libcrunch_get_pc(), offset, ptr);
+		}
+#endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 		warnx("Peeked argument bounds at offset %lu: base (lower bits) %lx, size %lu", offset, (unsigned long) b.base, b.size);
@@ -1683,6 +1695,13 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	{
 		__libcrunch_bounds_t b = *(__libcrunch_bounds_t *)(__bounds_sp + 1 
 			+ (offset * (sizeof (__libcrunch_bounds_t) / sizeof (*__bounds_sp))));
+#ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
+		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
+		{
+			warnx("Code at %p was returned invalid bounds at offset %d for ptr value %p",
+				__libcrunch_get_pc(), offset, ptr);
+		}
+#endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 		warnx("Peeked result bounds at offset %lu: base (lower bits) %lx, size %lu", (unsigned long) b.base, b.size);
