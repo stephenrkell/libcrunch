@@ -1517,9 +1517,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argum
 	*b = bounds; /* i.e. base goes in low word, size goes in higher word. */
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	warnx("Pushed bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
 #else
-	warnx("Pushed bounds: base %p, size %lu", b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
 #endif
 #endif
 #else
@@ -1535,9 +1535,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bo
 	*b = __make_bounds(base, limit);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	warnx("Pushed bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
 #else
-	warnx("Pushed bounds: base %p, size %lu", b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
 #endif
 #endif
 #else
@@ -1553,9 +1553,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_a
 	*b = __fetch_bounds_inl(ptr, loaded_from, t);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	warnx("Pushed bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
 #else
-	warnx("Pushed bounds: base %p, size %lu", b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
 #endif
 #endif
 #else
@@ -1611,9 +1611,9 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Peeked argument bounds at offset %lu: base (lower bits) %lx, size %lu", offset, (unsigned long) b.base, b.size);
+		warnx("Peeked argument bounds (bsp=%p) at offset %lu: base (lower bits) %lx, size %lu", __bounds_sp, offset, (unsigned long) b.base, b.size);
 #else
-		warnx("Peeked argument bounds at offset %lu: base %p, size %lu", offset, b.base, b.size);
+		warnx("Peeked argument bounds (bsp=%p) at offset %lu: base %p, size %lu", __bounds_sp, offset, b.base, b.size);
 #endif
 #endif
 		return b;
@@ -1633,9 +1633,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_resul
 		*b = bounds;
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Pushed result bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
 #else
-		warnx("Pushed result bounds: base %p, size %lu", b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
 #endif
 #endif
 	}
@@ -1654,9 +1654,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_boun
 		*b = __make_bounds(base, limit);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Pushed result bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
 #else
-		warnx("Pushed result bounds: base %p, size %lu", b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
 #endif
 #endif
 	}
@@ -1675,9 +1675,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_r
 		*b = __fetch_bounds_inl(ptr, loaded_from, t);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Pushed result bounds: base (lower bits) %lx, size %lu", (unsigned long) b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
 #else
-		warnx("Pushed result bounds: base %p, size %lu", b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
 #endif
 #endif
 	}
@@ -1693,7 +1693,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	/* If the cookie hasn't been tweaked, do nothing. */
 	if (really)
 	{
-		__libcrunch_bounds_t b = *(__libcrunch_bounds_t *)(__bounds_sp + 1 
+		__libcrunch_bounds_t b = *(__libcrunch_bounds_t *)(__bounds_sp 
 			+ (offset * (sizeof (__libcrunch_bounds_t) / sizeof (*__bounds_sp))));
 #ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
@@ -1704,9 +1704,9 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Peeked result bounds at offset %lu: base (lower bits) %lx, size %lu", (unsigned long) b.base, b.size);
+		warnx("Peeked result bounds (bsp=%p) at offset %lu: base (lower bits) %lx, size %lu", __bounds_sp, offset, (unsigned long) b.base, b.size);
 #else
-		warnx("Peeked result bounds at offset %lu: base %p, size %lu", offset, b.base, b.size);
+		warnx("Peeked result bounds (bsp=%p) at offset %lu: base %p, size %lu", __bounds_sp, offset, b.base, b.size);
 #endif
 #endif
 		return b;
