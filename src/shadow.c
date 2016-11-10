@@ -20,6 +20,7 @@
 #include "pageindex.h"
 #include "libcrunch.h"
 #include "libcrunch_private.h"
+#include "libcrunch_cil_inlines.h"
 
 void **__libcrunch_bounds_bases_region_00;
 void **__libcrunch_bounds_bases_region_2a;
@@ -145,6 +146,9 @@ void __wrap___liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot,
 }
 
 __thread unsigned long *__bounds_sp;
+/* HACK -- but actually not useful in this object. */
+// _Bool __lookup_static_allocation_by_name(struct link_map *l, const char *name,
+// 	void **out_addr, size_t *out_len) __attribute__((weak));
 
 static void init_shadow_space(void) // constructor (declared above)
 {
@@ -233,4 +237,68 @@ static void init_shadow_space(void) // constructor (declared above)
 	 * ACTUALLY it wouldn't because the l0index hasn't been init'd yet.
 	 * We need to walk /proc ourselves.
 	 */
+	
+	/* Now walk the auxv to write bounds for the argv and envp vectors. This is
+	 * a bit of a HACK since we duplicate code from liballocs (which need not be 
+	 * linked in right here). We can't easily do it in libcrunch.c because we need to
+	 * know that the shadow space has been init'd. */
+	Elf64_auxv_t *auxv_array_start = get_auxv((const char **) environ, environ[0]);
+	if (!auxv_array_start) return;
+	
+	Elf64_auxv_t *auxv_array_terminator = auxv_array_start; 
+	while (auxv_array_terminator->a_type != AT_NULL) ++auxv_array_terminator;
+	
+	/* auxv_array_start[0] is the first word higher than envp's null terminator. */
+	const char **env_vector_terminator = ((const char**) auxv_array_start) - 1;
+	assert(!*env_vector_terminator);
+	const char **env_vector_start = env_vector_terminator;
+	while (*((char**) env_vector_start - 1)) --env_vector_start;
+	
+	/* argv_vector_terminator is the next word lower than envp's first entry. */
+	const char **argv_vector_terminator = ((const char**) env_vector_start) - 1;
+	assert(!*argv_vector_terminator);
+	const char **argv_vector_start = argv_vector_terminator;
+	unsigned nargs = 0;
+	/* To search for the start of the array, we look for an integer that is
+	 * a plausible argument count... which won't look like any pointer we're seeing. */
+	#define MAX_POSSIBLE_ARGS 4194304
+	while (*((uintptr_t*) argv_vector_start - 1) > MAX_POSSIBLE_ARGS)
+	{
+		--argv_vector_start;
+		++nargs;
+	}
+	assert(*((uintptr_t*) argv_vector_start - 1) == nargs);
+	intptr_t *p_argcount = (intptr_t*) argv_vector_start - 1;
+	
+	/* Now for the asciiz. We lump it all in one chunk. */
+	char *asciiz_start = (char*) (auxv_array_terminator + 1);
+	char *asciiz_end = asciiz_start;
+	while (*(intptr_t *) asciiz_end != 0) asciiz_end += sizeof (void*);
+	
+	void *program_entry_point = NULL;
+	ElfW(auxv_t) *found_at_entry = auxv_lookup(auxv_array_start, AT_ENTRY);
+	if (found_at_entry) program_entry_point = (void*) found_at_entry->a_un.a_val;
+
+	for (const char **argvi = argv_vector_start; argvi != argv_vector_terminator; ++argvi)
+	{
+		/* We're pointing at a stored pointer. */
+		*BASE_STORED(argvi) = (void*) *argvi;
+		*SIZE_STORED(argvi) = strlen(*argvi) + 1;
+	}
+	for (const char **envi = env_vector_start; envi != env_vector_terminator; ++envi)
+	{
+		/* We're pointing at a stored pointer. */
+		*BASE_STORED(envi) = (void*) *envi;
+		*SIZE_STORED(envi) = strlen(*envi) + 1;
+	}
+	__push_argument_bounds_base_limit(argv_vector_start, 
+			(unsigned long) argv_vector_start, (unsigned long) (argv_vector_terminator + 1));
+	
+	struct link_map *exe_handle = get_exe_handle();
+	void *main_addr = fake_dlsym(exe_handle, "main");
+	if (!main_addr) warnx("Could not get address of main; expect invalid bounds for argv");
+	
+	__push_argument_bounds_cookie(main_addr);
+out:
+	return;
 }
