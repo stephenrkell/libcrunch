@@ -1587,8 +1587,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __tweak_argument_
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* Were we passed anything? 
@@ -1605,8 +1605,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
 		{
-			warnx("Code at %p received invalid bounds at offset %d for ptr value %p",
-				__libcrunch_get_pc(), offset, ptr);
+			warnx("Code at %p received invalid bounds at offset %d for ptr value %p (expr %s)",
+				__libcrunch_get_pc(), offset, ptr, debugstr);
 		}
 #endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
@@ -1617,7 +1617,15 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 #endif
 		return b;
-	} else return __libcrunch_make_invalid_bounds(ptr);
+	}
+	else
+	{
+#ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
+		warnx("Code at %p received no bounds for ptr value %p (expr %s) (uninstrumented caller)",
+			__libcrunch_get_pc(), ptr, debugstr);
+#endif
+		return __libcrunch_make_invalid_bounds(ptr);
+	}
 #else
 	return __libcrunch_make_invalid_bounds(ptr);
 #endif
@@ -1686,8 +1694,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_r
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* If the cookie hasn't been tweaked, do nothing. */
@@ -1698,8 +1706,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
 		{
-			warnx("Code at %p was returned invalid bounds at offset %d for ptr value %p",
-				__libcrunch_get_pc(), offset, ptr);
+			warnx("Code at %p was returned invalid bounds (by %s) at offset %d for ptr value %p",
+				__libcrunch_get_pc(), calleestr, offset, ptr);
 		}
 #endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
@@ -1710,7 +1718,15 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 #endif
 		return b;
-	} else return __libcrunch_make_invalid_bounds(ptr);
+	}
+	else
+	{
+#ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
+		warnx("Code at %p was returned no bounds (by %s) for ptr value %p (uninstrumented callee)",
+			__libcrunch_get_pc(), calleestr, ptr);
+#endif
+		return __libcrunch_make_invalid_bounds(ptr);
+	}
 #else
 	return __libcrunch_make_invalid_bounds(ptr);
 #endif

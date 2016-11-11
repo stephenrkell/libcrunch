@@ -1331,7 +1331,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
     helperFunctions.pushLocalArgumentBounds <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__push_local_argument_bounds" (TFun(voidType, 
                             Some [ 
-                                   ("bounds", boundsType, []);
+                                   ("bounds", boundsType, [])
                                  ], 
                             false, []))
     ;
@@ -1341,8 +1341,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
                                    ("base", ulongType, []);
-                                   ("limit", ulongType, []);
-                                 ], 
+                                   ("limit", ulongType, [])
+                                ], 
                             false, []))
     ;
 
@@ -1377,8 +1377,9 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             Some [ 
                                    ("really", boolType, []);
                                    ("offset", ulongType, []);
-                                   ("ptr", voidConstPtrType, [])
-                                 ], 
+                                   ("ptr", voidConstPtrType, []);
+                                   ("debugstr", charConstPtrType, [])
+                                ], 
                             false, []))
     ;
     
@@ -1387,7 +1388,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             Some [
                                    ("really", boolType, []);
                                    ("bounds", boundsType, []);
-                                   ("ptr", voidConstPtrType, [])
+                                   ("ptr", voidConstPtrType, []);
                                  ], 
                             false, []))
     ;
@@ -1398,7 +1399,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                    ("really", boolType, []);
                                    ("ptr", voidConstPtrType, []);
                                    ("base", ulongType, []);
-                                   ("limit", ulongType, [])
+                                   ("limit", ulongType, []);
                                  ],
                             false, []))
     ;
@@ -1408,7 +1409,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             Some [ 
                                    ("really", boolType, []);
                                    ("ptr", voidConstPtrType, []);
-                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), [])
+                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), []);
                                  ], 
                             false, []))
     ;
@@ -1417,7 +1418,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             enclosingFile "__peek_result_bounds" (TFun(voidType, 
                             Some [ 
                                    ("p_bounds", boundsPtrType, []);
-                                   ("n", ulongType, [])
+                                   ("n", ulongType, []);
+                                   ("debugstr", charConstPtrType, [])
                                  ], 
                             false, []))
     ;
@@ -1847,7 +1849,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                             (Lval(Var(helperFunctions.pushLocalResultBounds.svar),NoOffset)),
                             [
                                 Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
-                                Lval(blv)
+                                Lval(blv);
+
                             ],
                             loc
                             )
@@ -2159,7 +2162,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                               cookie -- the inline function has to do it, because
                               bounds are not necessarily single words in size. *);
                             (*  const void *ptr, the pointer value (for makeInvalidBounds) *)
-                            ptrExp
+                            ptrExp;
+                            Const(CStr((expToString ptrExp) ^ ", offset " ^ (expToCilString offsetExp)))
                         ],
                         bvar.vdecl (* loc *)
                     )
@@ -2520,7 +2524,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                                                     | None -> failwith "no bounds type when one expected"
                                                 *)
                                                 (*  const void *ptr *)
-                                                ptrExpr (* Lval(lhost, loff) *)
+                                                ptrExpr (* Lval(lhost, loff) *);
+                                                Const(CStr("call to " ^ (expToString calledE)))
                                             ],
                                             instrLoc !currentInst
                                         )
