@@ -469,7 +469,6 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 #else
 	for (unsigned char i = cache->head_mru; i != 0; i = cache->entries[i].next_mru)
 #endif
-	for (i = 1; i < cache->size_plus_one; ++i)
 	{
 		if (cache->validity & (1<<(i-1)))
 		{
