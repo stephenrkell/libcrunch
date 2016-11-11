@@ -81,6 +81,11 @@ int __libcrunch_global_init (void);
 #define PURE
 #endif
 
+#define _CLEAR_UPPER_32(i) \
+(((unsigned long) (i)) & ((1ul<<32)-1ul))
+#define _CLEAR_LOWER_32(i) \
+(((unsigned long) (i)) & ~((1ul<<32)-1ul))
+
 /* Type checking */
 int __is_a_internal(const void *obj, const void *u) PURE;
 int __like_a_internal(const void *obj, const void *u) PURE;
@@ -887,10 +892,6 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_
 	return in->base == (void*) -1;
 }
 */
-#define _CLEAR_UPPER_32(i) \
-(((unsigned long) (i)) & ((1ul<<32)-1ul))
-#define _CLEAR_LOWER_32(i) \
-(((unsigned long) (i)) & ~((1ul<<32)-1ul))
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit)
@@ -912,10 +913,13 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	/* Max bounds are when the two values are equal, 
 	 * because this always represents a 4GB region.
 	 * WHERE should we centre the bounds?
-	 * Let's play it safe and make them obj += 2GB.
+	 * The biggest bounds we can give are 
+	 * with a base at the next-lower 4GB boundary, and 
+	 * a 4GB -1 size.
 	 * Note that in extreme cases, this will actually not permit
 	 * some accesses which the intention of "max bounds" is to include. */
-	return __make_bounds(((unsigned long) ptr) - 1ul<<31, ((unsigned long) ptr) - 1 + 1ul<<31);
+	return __make_bounds(_CLEAR_LOWER_32((unsigned long) ptr),
+			_CLEAR_LOWER_32((unsigned long) ptr) + ((unsigned) -1));
 #else
 	return __make_bounds((unsigned long) 0, (unsigned long) -1);
 #endif
@@ -999,8 +1003,6 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid
 	return bounds1.base == bounds2.base && bounds1.size == bounds2.size;
 #endif
 }
-#undef _CLEAR_LOWER_32
-#undef _CLEAR_UPPER_32
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz)
@@ -1093,7 +1095,7 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	unsigned long addr = (unsigned long) derived;
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* Use denorm base directly. HMM. Actually, is that really faster? FIXME: TEST. */
-	unsigned long base = ((unsigned long) __libcrunch_detrap(derivedfrom) & 0xffffffff00000000ul) | derivedfrom_bounds.base;
+	unsigned long base = _CLEAR_LOWER_32((unsigned long) __libcrunch_detrap(derivedfrom)) | derivedfrom_bounds.base;
 #else
 	unsigned long base = (unsigned long) __libcrunch_get_base(derivedfrom_bounds, derivedfrom);
 #endif
@@ -1722,8 +1724,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	else
 	{
 #ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
-		warnx("Code at %p was returned no bounds (by %s) for ptr value %p (uninstrumented callee)",
-			__libcrunch_get_pc(), calleestr, ptr);
+		warnx("Code at %p was returned no bounds for ptr value %p (uninstrumented callee %s)",
+			__libcrunch_get_pc(), ptr, calleestr);
 #endif
 		return __libcrunch_make_invalid_bounds(ptr);
 	}
@@ -1757,5 +1759,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __primary_secondar
 #ifdef __libcrunch_defined_assert
 #undef assert
 #endif
+
+#undef _CLEAR_LOWER_32
+#undef _CLEAR_UPPER_32
 
 #endif
