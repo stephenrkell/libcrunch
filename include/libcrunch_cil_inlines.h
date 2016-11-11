@@ -1722,7 +1722,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 	}
 	else
 	{
-#ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
+#ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS_RETURN
 		warnx("Code at %p was returned no bounds for ptr value %p (uninstrumented callee %s)",
 			__libcrunch_get_pc(), ptr, calleestr);
 #endif
