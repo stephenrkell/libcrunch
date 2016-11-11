@@ -2555,7 +2555,8 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 					alloc_start + alloc_size_bytes
 					: alloc_instance_start_pos + arg.innermost_containing_array_type_span_start_offset
 						+ (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) * t->pos_maxoff);
-			if (is_cacheable) cache_bounds(lower, upper, t, 1, alloc_uniqtype->pos_maxoff, alloc_start);
+			unsigned period = UNIQTYPE_ARRAY_ELEMENT_TYPE(arg.innermost_containing_array_t)->pos_maxoff;
+			if (is_cacheable) cache_bounds(lower, upper, t, 1, period, alloc_start);
 			return __make_bounds(
 				(unsigned long) lower,
 				(unsigned long) upper
