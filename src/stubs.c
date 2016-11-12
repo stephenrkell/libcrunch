@@ -94,6 +94,9 @@ void __libcrunch_bounds_error(const void *derived, const void *derivedfrom,
 		__libcrunch_bounds_t bounds)
 {
 }
+void __libcrunch_soft_deref_error_at(const void *codeptr, __libcrunch_bounds_t bounds, const void *addr)
+{
+}
 
 struct uniqtype;
 struct __libcrunch_bounds_s;

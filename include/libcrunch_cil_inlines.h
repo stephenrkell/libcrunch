@@ -1182,7 +1182,13 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(con
 	if (likely((unsigned long) ptr - base < size))
 	{
 		/* success */
-	} else __libcrunch_soft_deref_error_at(ptr, ptr_bounds, __libcrunch_get_pc());
+	} else
+	{
+		__libcrunch_soft_deref_error_at(ptr, ptr_bounds, __libcrunch_get_pc());
+#ifdef LIBCRUNCH_ABORT_ON_OOB
+		abort();
+#endif
+	}
 #endif
 }
 
