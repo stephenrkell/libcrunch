@@ -654,6 +654,14 @@ static void saw_operand_cb(int type, unsigned int bytes, uint32_t *val,
 	if (p_fromreg2 && *p_fromreg2 != -1) try_register_fixup(*p_fromreg2, p_mcontext);
 }
 
+static void handle_sigbus(int signum, siginfo_t *info, void *ucontext_as_void)
+{
+	int dummy_ret;
+	MSGLIT("*** libcrunch caught SIGBUS; sleeping for 10 seconds");
+	sleep(10);
+	raw_exit(128 + SIGBUS);
+}
+
 static void handle_sigsegv(int signum, siginfo_t *info, void *ucontext_as_void)
 {
 	//unsigned long *frame_base = __builtin_frame_address(0);
@@ -3060,4 +3068,42 @@ __libcrunch_bounds_t __libcrunch_ool_peek_argument_bounds(unsigned long offset, 
 __libcrunch_bounds_t __libcrunch_ool_peek_result_bounds(unsigned long offset, const void *ptr)
 {
 	return __peek_result_bounds(1, offset, ptr, "ool peek in " __FILE__);
+}
+
+/* HACK for running hmmer under crunchb -- 20161112, please remove */
+#undef strchr
+char *strchr(const char *s, int c)
+{
+	_Bool caller_is_inst = __bounds_sp && __tweak_argument_bounds_cookie(strchr);
+	__libcrunch_bounds_t s_bounds = __peek_argument_bounds(caller_is_inst, 0, s, "s");
+	static char*(*orig_strchr)(const char*, int);
+	if (!orig_strchr)
+	{
+		orig_strchr = dlsym(RTLD_NEXT, "strchr");
+		if (!orig_strchr) abort();
+	}
+	char *ret = orig_strchr(s, c);
+	__push_result_bounds_base_limit(caller_is_inst,
+		ret,
+		ret ? (unsigned long) __libcrunch_get_base(s_bounds, s) : 0,
+		ret ? (unsigned long) __libcrunch_get_limit(s_bounds, s) : 1);
+	return ret;
+}
+
+/* HACK for running hmmer under crunchb -- 20161112, please remove */
+int **__ctype_toupper_loc(void)
+{
+	_Bool caller_is_inst = __bounds_sp && __tweak_argument_bounds_cookie(__ctype_toupper_loc);
+	static int**(*orig___ctype_toupper_loc)(void);
+	if (!orig___ctype_toupper_loc)
+	{
+		orig___ctype_toupper_loc = dlsym(RTLD_NEXT, "__ctype_toupper_loc");
+		if (!orig___ctype_toupper_loc) abort();
+	}
+	int **ret = orig___ctype_toupper_loc();
+	__push_result_bounds_base_limit(caller_is_inst,
+		ret,
+		ret ? (unsigned long) ret : 0,
+		ret ? (unsigned long) (ret + 1) : 1);
+	return ret;
 }
