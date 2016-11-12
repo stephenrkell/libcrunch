@@ -28,8 +28,8 @@ struct __libcrunch_bounds_s
 	 *    base <= ptr < base + size
 	 * ... see __libcrunch_get_base and __libcrunch_get_limit.
 	 */
-	unsigned long base:32;
 	unsigned long size:32;
+	unsigned long base:32;
 #else
 	/* A <base, size> representation has certain advantages over <base, limit>. 
 	 * In particular, our fast-path test uses the size, not the limit. */
