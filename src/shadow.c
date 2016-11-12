@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <link.h>
+#include <ctype.h>
 
 #include "maps.h"
 #include "relf.h"
@@ -150,6 +151,7 @@ __thread unsigned long *__bounds_sp;
 // _Bool __lookup_static_allocation_by_name(struct link_map *l, const char *name,
 // 	void **out_addr, size_t *out_len) __attribute__((weak));
 
+extern char **environ;
 static void init_shadow_space(void) // constructor (declared above)
 {
 	#define BOUNDS_STACK_SIZE 8192
@@ -279,6 +281,8 @@ static void init_shadow_space(void) // constructor (declared above)
 	ElfW(auxv_t) *found_at_entry = auxv_lookup(auxv_array_start, AT_ENTRY);
 	if (found_at_entry) program_entry_point = (void*) found_at_entry->a_un.a_val;
 
+	/* DON'T use __shadow_store_bounds_for here because it requires a type argument. 
+	 * And we are running so early that we might not have our metadata. */
 	for (const char **argvi = argv_vector_start; argvi != argv_vector_terminator; ++argvi)
 	{
 		/* We're pointing at a stored pointer. */
@@ -291,6 +295,14 @@ static void init_shadow_space(void) // constructor (declared above)
 		*BASE_STORED(envi) = (void*) *envi;
 		*SIZE_STORED(envi) = strlen(*envi) + 1;
 	}
+	
+	/* Also store for environ. And HACK, for some glibc stuff, for now. */
+	__shadow_store_bounds_for((void**) environ, __make_bounds((unsigned long) env_vector_start, 
+			(unsigned long) (env_vector_terminator + 1)), /* ignored */ NULL);
+	unsigned **toupper_loc = (unsigned **) __ctype_toupper_loc();
+	*BASE_STORED(toupper_loc) = (void*) *toupper_loc;
+	*SIZE_STORED(toupper_loc) = 384 * sizeof (int);
+	
 	__push_argument_bounds_base_limit(argv_vector_start, 
 			(unsigned long) argv_vector_start, (unsigned long) (argv_vector_terminator + 1));
 	
