@@ -39,10 +39,11 @@ class CrunchXCC(CrunchCC):
             # if we're compiling only C files.
             # temporary HACK to strip line numbers after preprocess
             #"--commPrintLn",
+#            "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
             "-DLIBCRUNCH_USING_TRAP_PTRS", \
-            "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
+            "-DLIBCRUNCH_NO_DENORM_BOUNDS", \
             "-DLIBCRUNCH_NO_WARN_INVALID_BOUNDS_RETURN", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \

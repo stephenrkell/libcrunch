@@ -28,13 +28,17 @@ struct __libcrunch_bounds_s
 	 *    base <= ptr < base + size
 	 * ... see __libcrunch_get_base and __libcrunch_get_limit.
 	 */
-	unsigned long size:32;
-	unsigned long base:32;
+	unsigned size/*:32*/;
+	unsigned base/*:32*/;
 #else
 	/* A <base, size> representation has certain advantages over <base, limit>. 
 	 * In particular, our fast-path test uses the size, not the limit. */
 	unsigned long base;
+#ifdef LIBCRUNCH_LONG_SIZE
 	unsigned long size;
+#else
+	unsigned size;
+#endif
 #endif
 };
 typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
@@ -172,6 +176,8 @@ extern struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache;
 #define LIBCRUNCH_TRAP_INVALID 3
 #define LIBCRUNCH_TRAP_TAG_WIDTH 2
 #define LIBCRUNCH_TRAP_TAG_MASK (((unsigned long)((1ul<<LIBCRUNCH_TRAP_TAG_WIDTH) - 1ul)) << LIBCRUNCH_TRAP_TAG_SHIFT)
+/* NOTE: kernel-pointer support is BROKEN with this definition. */
+#define LIBCRUNCH_TRAP_BOTTOM_MASK ((unsigned long)((1ul<<LIBCRUNCH_TRAP_TAG_SHIFT) - 1ul))
 
 extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
 
@@ -785,6 +791,23 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)
 	return ptr;
 #endif
 }
+extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_like_trapped)(const void *maybe_trapped, const void *ptr);
+extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_like_trapped)(const void *maybe_trapped, const void *ptr)
+{
+#ifndef LIBCRUNCH_NOOP_INLINES
+	return (void *)(
+//		/* Top-with-trap bits of like_trapped */
+//		((((unsigned long long) maybe_trapped) >> LIBCRUNCH_TRAP_TAG_SHIFT) << LIBCRUNCH_TRAP_TAG_SHIFT)
+//	|   /* Bottom bits of ptr */
+//		((((unsigned long long) ptr) << (8*sizeof(long long)-LIBCRUNCH_TRAP_TAG_SHIFT)
+//			>> (8*sizeof(long long) - LIBCRUNCH_TRAP_TAG_SHIFT)))
+		((unsigned long long) maybe_trapped) & ~LIBCRUNCH_TRAP_BOTTOM_MASK
+			| ((unsigned long long) ptr) & LIBCRUNCH_TRAP_BOTTOM_MASK
+	);
+#else
+	return ptr;
+#endif
+}
 /* We use this one in pointer differencing and cast-to-integer. 
  * We return an unsigned long to avoid creating a pointless cast *back* to pointer. 
  * Instead, when doing pointer differencing, crunchbound takes on the task 
@@ -844,8 +867,8 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 	bits >>= LIBCRUNCH_TRAP_TAG_SHIFT;
 	/* If we have a kernel-mode pointer, our bits will be inverted.
 	 * Signed-right-shift the addr, giving us all 0s or all 1s, then XOR.
-	 * FIXME: are these two instructions really worth it? Skip kernel-mode support? */
-#ifndef LIBCRUNCH_NO_KERNEL_POINTERS
+	 * Are these two instructions really worth it? Skip kernel-mode support unless #defined. */
+#ifdef LIBCRUNCH_KERNEL_POINTERS
 	/* Shift the top bit all the way down, with sign extension; we get all 1s or all 0s.
 	 * XOR that with the bits we have. */
 	bits ^= (unsigned long)(((signed long) addr) >> (sizeof (long) * 8 - 1));
@@ -939,11 +962,15 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 	 * It's important that we get the "real" base so that the primary
 	 * check fails and we do the detrap stuff from __secondary_check.
 	 */
+#ifndef LIBCRUNCH_NO_DENORM_BOUNDS
 	if (likely(bounds.base <= _CLEAR_UPPER_32(derivedfrom)))
 	{
+#endif
 		const void *ptr = (const void *) __libcrunch_detrap(derivedfrom);
 		return (void*) (_CLEAR_LOWER_32(ptr) + bounds.base);
+#ifndef LIBCRUNCH_NO_DENORM_BOUNDS
 	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) - 0x100000000ul + bounds.base);
+#endif
 #else
 	return (void*) bounds.base;
 #endif
@@ -1092,14 +1119,49 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	//if (unlikely(addr > limit)) { goto out_fail; }
 
 	unsigned long addr = (unsigned long) derived;
+	/* The check logic is interesting:
+	 *    neither trapped, Austin check passes (<): normal    (can detrap -- is noop)
+	 *    both trapped,  Austin check passes (<): went back in bounds, so detrap. 
+	 *    neither trapped, Austin ==:    need to trap     i.e. unconditionally set the trap
+	 *    both trapped,    Austin ==:    *leave* trapped  ... in both cases (assumes one-past trap)
+	 *    neither trapped, Austin >:     fail  (MUST abort -- need compiler opts)
+	 *    both trapped,    Austin >:     fail  (MUST abort -- need compiler opts)
+	 */
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	/* Use denorm base directly. HMM. Actually, is that really faster? FIXME: TEST. */
-	unsigned long base = _CLEAR_LOWER_32((unsigned long) __libcrunch_detrap(derivedfrom)) | derivedfrom_bounds.base;
+	/* If we have denorms, we will use the denorm base directly and fail over to secondary
+	 * checks. HMM. Actually, is that really faster? FIXME: TEST. */
+	unsigned long like_trapped_base = _CLEAR_LOWER_32((unsigned long) derivedfrom) | derivedfrom_bounds.base;
+	unsigned long base = (unsigned long) __libcrunch_detrap(like_trapped_base);
 #else
+	/* Here 'base' is never trapped. */
 	unsigned long base = (unsigned long) __libcrunch_get_base(derivedfrom_bounds, derivedfrom);
+	unsigned long like_trapped_base = (unsigned long) __libcrunch_like_trapped(derivedfrom, (void*) base);
 #endif
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
-	_Bool success = addr - base < size;
+	_Bool success;
+#if defined(LIBCRUNCH_NO_SECONDARY_CHECKS) && defined(LIBCRUNCH_USING_TRAP_PTRS)
+	/* No secondary path, so have to handle traps here too. One "simple" way is like so. */
+	if (likely(addr - base <= size))
+	{
+		if (unlikely(addr - base == size))
+		{
+			*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
+		}
+		success = 1;
+	} else success = 0;
+	/* We seem to be out-of-bounds. What we do now is subtle.
+	 * 1. Put the bad pointer in a register and do a one-byte read from it.
+	 * 2. If the register has changed, it means we took a trap, decided it was
+	 *    a trap pointer that had moved back in bounds, and detrapped it. Success.
+	 * 3. Else abort. It might be a trap pointer that we had moved, but *not*
+	 *    back into bounds and not by zero.
+	 * Can the trap handler decide these things by itself? It can get the bounds
+	 * for the *new* pointer by fetching them, but how does it know that's a valid
+	 * adjustment of the old pointer? It depends how much we're adjusting it by.
+	 * FIXME: fill this in. */
+#else
+	success = addr - base < size;
+#endif
 #ifdef LIBCRUNCH_TRACE_PRIMARY_CHECKS
 	if (!success) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
@@ -1128,7 +1190,9 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-	// abort();     // <-- this makes things go much faster!
+#ifdef LIBCRUNCH_NO_SECONDARY_CHECKS
+	abort();     // <-- this makes things go much faster!
+#endif
 	/* We're a secondary check. We assume the primary check has already happened, and failed. */
 	/* We are *not* pure, although our out-of-line call *is*. */
 	/* Primary might have failed because our local bounds are invalid. */
@@ -1202,7 +1266,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	}
 	
 	// warnx("Got to 4, deriving %p", *p_derived);
-	if (addr - base == size)
+	if (unlikely(addr - base == size))
 	{
 #ifndef LIBCRUNCH_NO_WARN_ONE_PAST
 		warnx("Created one-past pointer at %p: %p (base %p, size %lu)", 
@@ -1398,6 +1462,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 			 * "0x ffff ffff ffff ffff" from "0x ffff ffff"
 			 * but leaves everything else unchanged. Below is the answer.
 			 */
+#ifdef LIBCRUNCH_LONG_SIZE
 			.size = (
 				(unsigned long) (
 					*((unsigned *) size_stored_addr)
@@ -1405,6 +1470,9 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 				)
 				- 1ul
 			)
+#else
+			.size = *((unsigned *) size_stored_addr)
+#endif
 #endif
 		};
 #ifndef LIBCRUNCH_NO_DEBUG_SHADOW_SPACE
@@ -1612,9 +1680,9 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Peeked argument bounds (bsp=%p) at offset %lu: base (lower bits) %lx, size %lu", __bounds_sp, offset, (unsigned long) b.base, b.size);
+		warnx("Peeked argument bounds (bsp=%p) at offset %lu: base (lower bits) %lx, size %lu", __bounds_sp, offset, (unsigned long) b.base, (unsigned long) b.size);
 #else
-		warnx("Peeked argument bounds (bsp=%p) at offset %lu: base %p, size %lu", __bounds_sp, offset, b.base, b.size);
+		warnx("Peeked argument bounds (bsp=%p) at offset %lu: base %p, size %lu", __bounds_sp, offset, (void*) b.base, (unsigned long) b.size);
 #endif
 #endif
 		return b;
@@ -1713,9 +1781,9 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Peeked result bounds (bsp=%p) at offset %lu: base (lower bits) %lx, size %lu", __bounds_sp, offset, (unsigned long) b.base, b.size);
+		warnx("Peeked result bounds (bsp=%p) at offset %lu: base (lower bits) %lx, size %lu", __bounds_sp, offset, (unsigned long) b.base, (unsigned long) b.size);
 #else
-		warnx("Peeked result bounds (bsp=%p) at offset %lu: base %p, size %lu", __bounds_sp, offset, b.base, b.size);
+		warnx("Peeked result bounds (bsp=%p) at offset %lu: base %p, size %lu", __bounds_sp, offset, (void*) b.base, (unsigned long) b.size);
 #endif
 #endif
 		return b;
@@ -1746,7 +1814,11 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_s
 extern inline void (__attribute__((always_inline,gnu_inline)) __primary_secondary_transition)(void);
 extern inline void (__attribute__((always_inline,gnu_inline)) __primary_secondary_transition)(void)
 {
+#ifdef LIBCRUNCH_NO_SECONDARY_CHECKS
+	abort();
+#else
 	++__libcrunch_primary_secondary_transitions;
+#endif
 }
 
 #ifdef __libcrunch_defined_unlikely
