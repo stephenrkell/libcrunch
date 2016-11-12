@@ -90,3 +90,17 @@ test/trap-bounds-toint/trap-bounds-toint
 *.i.deftypes
 *.i.reftypes
 test/*/check-stamp
+*.pyc
+gdb.log
+*o.cmd
+*.mod
+*.ko
+*.mod.c
+kernel/dev-ones/linux/Module.symvers
+kernel/dev-ones/linux/modules.order
+*/libcrunch_stubs.so
+src/dlmalloc.a
+stashed-*.patch
+tmp-*.patch
+*.memacc
+src/-ldlbind.res
