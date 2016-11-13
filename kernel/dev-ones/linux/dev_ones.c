@@ -42,26 +42,49 @@
 # include <linux/efi.h>
 #endif
 
-static int mmap_ones(struct file *file, struct vm_area_struct *vma)
+static struct page *ones_page;
+static void *ones_data;
+
+static void ones_vma_open(struct vm_area_struct *vma)
+{ /*MOD_INC_USE_COUNT;*/ }
+
+static void ones_vma_close(struct vm_area_struct *vma)
+{ /*MOD_DEC_USE_COUNT;*/ }
+
+static int ones_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	get_page(ones_page);
+	vmf->page = ones_page;
+	return 0;
+}
+
+static struct vm_operations_struct ones_vm_ops = {
+	.open = ones_vma_open,
+	.close = ones_vma_close,
+	.fault = ones_vma_fault,
+};
+
+static int ones_mmap(struct file *file, struct vm_area_struct *vma)
 {
 #ifndef CONFIG_MMU
 	return -ENOSYS;
 #endif
-	if (vma->vm_flags & VM_SHARED) {
-// 		struct file *file;
-// 		loff_t size = vma->vm_end - vma->vm_start;
-// 
-// 		file = shmem_file_setup("dev/ones", size, vma->vm_flags);
-// 		if (IS_ERR(file))
-// 			return PTR_ERR(file);
-// 
-// 		if (vma->vm_file)
-// 			fput(vma->vm_file);
-// 		vma->vm_file = file;
-// 		vma->vm_ops = &shmem_vm_ops;
-// 		return 0;
-		return -ENOSYS;
-	}
+	if (vma->vm_flags & VM_SHARED) return -ENOSYS;
+	
+	//unsigned long offset = VMA_OFFSET(vma);
+
+	//if (offset >= __pa(high_memory) || (filp->f_flags & O_SYNC))
+	//	vma->vm_flags |= VM_IO;
+	//vma->vm_flags |= VM_RESERVED;
+
+	/* Don't map a page range; use nopage method. */
+	//if (remap_page_range(vma->vm_start, offset, vma->vm_end - vma->vm_start,
+	//			vma->vm_page_prot))
+	//	return -EAGAIN;
+
+	vma->vm_ops = &ones_vm_ops;
+	ones_vma_open(vma);
+	
 	return 0;
 }
 
@@ -112,13 +135,13 @@ static loff_t ones_lseek(struct file *file, loff_t offset, int orig)
 	return file->f_pos = 0;
 }
 
-static ssize_t write_ones(struct file *file, const char __user *buf,
+static ssize_t ones_write(struct file *file, const char __user *buf,
 			  size_t count, loff_t *ppos)
 {
 	return count;
 }
 
-static ssize_t read_ones(struct file *file, char __user *buf,
+static ssize_t ones_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *ppos)
 {
 	size_t written;
@@ -152,11 +175,11 @@ static ssize_t read_ones(struct file *file, char __user *buf,
 
 static const struct file_operations ones_fops = {
 	.llseek		= ones_lseek,
-	.read		= read_ones,
-	.write		= write_ones,
+	.read		= ones_read,
+	.write		= ones_write,
 	//.read_iter	= read_iter_ones,
 	//.aio_write	= aio_write_ones,
-	.mmap		= mmap_ones,
+	.mmap		= ones_mmap,
 };
 /*
  * capabilities for /dev/ones
@@ -164,10 +187,10 @@ static const struct file_operations ones_fops = {
  * - no writeback happens
  */
 // FIXME: this is unused
-static struct backing_dev_info ones_bdi = {
-	.name		= "char/mem",
-	.capabilities	= BDI_CAP_MAP_COPY | BDI_CAP_NO_ACCT_AND_WRITEBACK,
-};
+//static struct backing_dev_info ones_bdi = {
+//	.name		= "char/mem",
+//	.capabilities	= BDI_CAP_MAP_COPY | BDI_CAP_NO_ACCT_AND_WRITEBACK,
+//};
 
 static struct miscdevice ones_dev = {
 	/*
@@ -178,7 +201,7 @@ static struct miscdevice ones_dev = {
 	/*
 	 * Name ourselves /dev/ones.
 	 */
-	.name = "ones",
+	.name = "ones2",
 	.mode = 0666,
 	/*
 	 * What functions to call when a program performs file
@@ -187,16 +210,18 @@ static struct miscdevice ones_dev = {
 	.fops = &ones_fops
 };
 
-static struct class *memmod_class;
+// static struct class *memmod_class;
 
 static int __init ones_init(void)
 {
-	int minor;
+	// int minor;
 	int err;
+	void *end;
+	unsigned long *l;
 
-	err = bdi_init(&ones_bdi);
-	if (err)
-		return err;
+	//err = bdi_init(&ones_bdi);
+	//if (err)
+	//	return err;
 
 	//if (register_chrdev(MEMMOD_MAJOR, "mem", &memory_fops))
 	//	printk("unable to get major %d for memory devs\n", MEMMOD_MAJOR);
@@ -210,15 +235,18 @@ static int __init ones_init(void)
 // 	device_create(memmod_class, NULL, MKDEV(MEMMOD_MAJOR, minor),
 // 			      NULL, "ones");
 
-	/*
-	 * Create the "ones" device in the /sys/class/mem directory.
+	/* Get a fresh page to be our "ones" page, and initialize it to all-ones. */
+	ones_data = (char*) __get_free_page(GFP_KERNEL);
+	ones_page = virt_to_page(ones_data);
+	end = (char*) ones_data + PAGE_SIZE;
+	for (l = ones_data; l != end; ++l) *l = (unsigned long) -1;
+
+	/* Create the "ones" device in the /sys/class/mem directory.
 	 * Udev will automatically create the /dev/ones device using
 	 * the default rules.
 	 */
 	err = misc_register(&ones_dev);
-	if (err)
-		printk(KERN_ERR
-		       "Unable to register /dev/ones mem device\n");
+	if (err) printk(KERN_ERR "Unable to register /dev/ones mem device\n");
 
 	return err;
 	// return tty_init();
@@ -230,6 +258,7 @@ static void __exit
 ones_exit(void)
 {
 	misc_deregister(&ones_dev);
+	free_page((unsigned long) ones_data);
 }
 
 module_exit(ones_exit);
