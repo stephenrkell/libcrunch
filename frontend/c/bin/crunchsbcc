@@ -23,8 +23,8 @@ class CrunchSBCC(CrunchCC):
         return 0
     
     def getDefines(self):
+        #    "-DLIBCRUNCH_TRACE_BOUNDS_STACK", \
         return ["-DLIBCRUNCH_EMULATE_SOFTBOUND", \
-            "-DLIBCRUNCH_TRACE_BOUNDS_STACK", \
             "-DLIBCRUNCH_LONG_SIZE", \
             "-DLIBCRUNCH_NO_SECONDARY_CHECKS", \
             "-DLIBCRUNCH_NO_DENORM_BOUNDS"]
