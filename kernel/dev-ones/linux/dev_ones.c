@@ -201,7 +201,7 @@ static struct miscdevice ones_dev = {
 	/*
 	 * Name ourselves /dev/ones.
 	 */
-	.name = "ones2",
+	.name = "ones",
 	.mode = 0666,
 	/*
 	 * What functions to call when a program performs file
