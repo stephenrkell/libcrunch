@@ -1523,7 +1523,7 @@ let containedPointerExprsForExpr e =
       | TFloat(fk, attrs) -> []
       | TPtr(pt, attrs) -> 
         (match (Cil.typeSig pt) with 
-            TSBase(TVoid(_)) -> [] 
+            TSBase(TVoid(_)) -> if !emulateSoftBound then [NoOffset] else []
             | _ -> [NoOffset]
         )
       | TArray(at, None, attrs) -> failwith "asked to enumerate ptroffs for unbounded array type"
@@ -1584,7 +1584,9 @@ let containedPointerExprsForExpr e =
      |  _ when isCompOrArray (Cil.typeOf e) -> 
             failwith ("internal error: did not expect array or struct type: " ^ 
                 (typToString (Cil.typeOf e)))
-     |  _ when isNonVoidPointerType (Cil.typeOf e) -> [e]
+     |  _ when (
+            ((not !emulateSoftBound) && isNonVoidPointerType (Cil.typeOf e))
+        || (!emulateSoftBound && isPointerType (Cil.typeOf e))) -> [e]
      |  _ -> []
 
 let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 'a) (outerE : Cil.exp) currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs (* : 'a list *) wholeFile = 
@@ -2251,7 +2253,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                          *          -- if it's selecting a subobject via a pointer we have bounds for.
                          *)
                         (* FIXME: handle struct assignments *)
-                        if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
+                        if typeNeedsBounds (Cil.typeOf (Lval(lhost, loff))) enclosingFile
                             && hostIsLocal lhost !currentFuncAddressTakenLocalNames
                         then (
                             debug_print 1 ("Saw write to a local non-void pointer lval: " ^ (
@@ -2260,7 +2262,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             ;
                             [makeBoundsWriteInstruction ~doFetchOol:false enclosingFile f !currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) localLvalToBoundsFun !currentInst !tempLoadExprs]
                         )
-                        else if isNonVoidPointerType (Cil.typeOf (Lval(lhost, loff)))
+                        else if typeNeedsBounds (Cil.typeOf (Lval(lhost, loff))) enclosingFile
                             && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames)
                         then (
                             debug_print 1 ("Saw write to a non-local pointer lval: " ^ (

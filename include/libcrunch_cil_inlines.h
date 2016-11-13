@@ -1086,6 +1086,9 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
+#ifdef LIBCRUNCH_EMULATE_SOFTBOUND
+	return 1;
+#else
 	/* To make things go fast, we need to keep this to the minimum. We use the Austin et al's
 	 * "unsigned subtraction" hack here (p292, Fig. 3). They write it as:
 	 
@@ -1168,6 +1171,7 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 #endif
 	return success;
 	//if (!(addr - base < size)) abort(); else return 1;
+#endif
 #else
 	return 1;
 #endif
@@ -1185,7 +1189,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(con
 	} else
 	{
 		__libcrunch_soft_deref_error_at(ptr, ptr_bounds, __libcrunch_get_pc());
-#ifdef LIBCRUNCH_ABORT_ON_OOB
+#if defined(LIBCRUNCH_ABORT_ON_OOB) || defined(LIBCRUNCH_EMULATE_SOFTBOUND)
 		abort();
 #endif
 	}
@@ -1221,7 +1225,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	unsigned long base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
 	unsigned long size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
 	if (!(pre_detrap_addr - naive_base >= size)) __builtin_unreachable();
-	
+#ifndef LIBCRUNCH_EMULATE_SOFTBOUND
 	// ensure valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom))
 	{
@@ -1237,6 +1241,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	}
 	// tell the compiler that we always get back valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
+#endif
 	// recompute base and size, from the new bounds
 	base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
 	size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
@@ -1514,15 +1519,17 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	if (!ptr) return __libcrunch_make_invalid_bounds(derived);
 	if (!t) return __libcrunch_make_invalid_bounds(derived);
 	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from, t);
+#ifndef LIBCRUNCH_EMULATE_SOFTBOUND
 	if (unlikely(__libcrunch_bounds_invalid(bounds, ptr)))
 	{
 		bounds = __fetch_bounds_ool(ptr, derived, t);
 		if (__libcrunch_bounds_invalid(bounds, ptr)) __builtin_unreachable();
 	}
+#endif
 	return bounds;
 }
 
-extern __thread unsigned long *__bounds_sp;
+extern __thread unsigned long *volatile __bounds_sp;
 extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bounds_stack_space)(unsigned long n);
 extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bounds_stack_space)(unsigned long n)
 {
@@ -1592,9 +1599,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argum
 	*b = bounds; /* i.e. base goes in low word, size goes in higher word. */
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, (unsigned long) b->size);
 #else
-	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, (void*) b->base, (unsigned long) b->size);
 #endif
 #endif
 #else
@@ -1612,7 +1619,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bo
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
 #else
-	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, (void*) b->base, (unsigned long) b->size);
 #endif
 #endif
 #else
@@ -1628,9 +1635,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_a
 	*b = __fetch_bounds_inl(ptr, loaded_from, t);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, (unsigned long) b->size);
 #else
-	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
+	warnx("Pushed bounds (bsp=%p): base %p, size %lu", __bounds_sp, (void*) b->base, (unsigned long) b->size);
 #endif
 #endif
 #else
@@ -1716,9 +1723,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_resul
 		*b = bounds;
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, (unsigned long) b->size);
 #else
-		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, (void*) b->base, (unsigned long) b->size);
 #endif
 #endif
 	}
@@ -1737,9 +1744,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_boun
 		*b = __make_bounds(base, limit);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, (unsigned long) b->size);
 #else
-		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, (void*) b->base, (unsigned long *) b->size);
 #endif
 #endif
 	}
@@ -1758,9 +1765,9 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_r
 		*b = __fetch_bounds_inl(ptr, loaded_from, t);
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base (lower bits) %lx, size %lu", __bounds_sp, (unsigned long) b->base, (unsigned long) b->size);
 #else
-		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, b->base, b->size);
+		warnx("Pushed result bounds (bsp=%p): base %p, size %lu", __bounds_sp, (void*) b->base, (unsigned long) b->size);
 #endif
 #endif
 	}
@@ -1811,7 +1818,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_s
 extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void *saved_ptr)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
-	__bounds_sp = saved_ptr;
+	__bounds_sp = (unsigned long *) saved_ptr;
 #else
 	
 #endif

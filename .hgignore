@@ -104,3 +104,5 @@ stashed-*.patch
 tmp-*.patch
 *.memacc
 src/-ldlbind.res
+test/softbound-actuals/softbound-actuals
+test/softbound-heap/softbound-heap
