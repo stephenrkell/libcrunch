@@ -2911,7 +2911,8 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 
 /* HACK since shadow.o is in libcrunch_stubs not libcrunch_preload.so, but we don't want
  * to link the preload lib against the stubs lib (why not?). */
-__thread unsigned long *__bounds_sp __attribute__((weak));
+/* HACK about volatile: see libcrunch_cil_inlines.h (and softbound-heap test case). */
+__thread unsigned long *volatile __bounds_sp __attribute__((weak));
 
 /* Provide out-of-line versions of all the (useful) inlines in libcrunch_cil_inlines.h. */
 
