@@ -37,7 +37,8 @@ ifeq ($(notdir $(CC)),crunchcc)
 export CC := cc
 endif
 
-default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o
+default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o \
+    libcrunch_wrappers.o
 
 ifeq ($(USE_REAL_LIBUNWIND),)
 CFLAGS += -fno-omit-frame-pointer
@@ -131,6 +132,9 @@ libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(L
 
 libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(LD) -r -o "$@" $+ --wrap __liballocs_nudge_mmap
+
+libcrunch_wrappers.o: softbound-libc-wrappers.c
+	$(CC) -o "$@" $(CFLAGS) -c "$<"
 
 # have to preload the hooks yourself if you want them to hook!
 

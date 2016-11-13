@@ -10,9 +10,7 @@ frontend: lib
 
 .PHONY: lib
 lib: src
-	mkdir -p lib && cd lib && \
-    ln -sf ../src/libcrunch.so ../src/libcrunch_stubs.so ../src/libcrunch_preload.so ../src/libcrunch_preload.a . && \
-    ln -sf ../src/libcrunch_stubs.o libcrunch_stubs.o
+	$(MAKE) -C lib
 
 .PHONY: kernel
 kernel:
@@ -25,3 +23,4 @@ clean:
 	$(MAKE) -C frontend clean
 	$(MAKE) -C test clean
 	$(MAKE) -C kernel clean
+	$(MAKE) -C lib clean
