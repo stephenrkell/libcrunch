@@ -116,6 +116,11 @@ __libcrunch_bounds_t __fetch_bounds_ool(const void *ptr, const void *derived_ptr
 	return __libcrunch_max_bounds(ptr);
 }
 
+__libcrunch_bounds_t __fetch_bounds_ool_via_dladdr(const void *ptr, const void *derived_ptr, struct uniqtype *t)
+{
+	return __libcrunch_max_bounds(ptr);
+}
+
 void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type)
 {
 	/* do nothing */

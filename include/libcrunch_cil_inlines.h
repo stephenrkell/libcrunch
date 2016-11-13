@@ -1080,7 +1080,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 }
 
 extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
-/* In libcrunch.c. */
+extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
+/* Both in libcrunch.c. */
 
 extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
 extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
@@ -1409,8 +1410,12 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 			// && existing_shadow_bounds_valid
 			))
 	{
+#ifndef LIBCRUNCH_EMULATE_SOFTBOUND
 		val_bounds = val ? __fetch_bounds_ool(val, val, val_pointee_type) : __make_bounds(0, 1);
 		if (__libcrunch_bounds_invalid(val_bounds, val)) __builtin_unreachable();
+#else
+		/* Do nothing -- can't do any better in SoftBound mode */
+#endif
 	}
 
 	/* If the shadow space holds bounds, we might be invaliding them, so we must write them.

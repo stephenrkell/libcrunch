@@ -2,7 +2,8 @@
 #include <stdlib.h>
 
 int vs[] = { 1, 2, 3 };
-extern int other_vs[]; /* defined as an alias of vs, in mk.inc */
+extern int other_vs[] __attribute__((alias("vs")));
+__asm__(".size other_vs, 12"); /* HACK: we depend on the size of the alias */
 
 /* See noquery-bounds-static-init-ptr. 
  * The difference here is that some bounds initializers *will* require a query.

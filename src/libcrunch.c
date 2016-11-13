@@ -2822,6 +2822,30 @@ __libcrunch_bounds_t
 	return __fetch_bounds_internal(ptr, derived_ptr, t);
 }
 
+/* Use this naive libdl-based version */
+__libcrunch_bounds_t 
+(__attribute__((pure)) __fetch_bounds_ool_via_dladdr)
+(const void *ptr, const void *derived_ptr, struct uniqtype *t)
+{
+	Dl_info i = dladdr_with_cache(ptr);
+	if (i.dli_fname && i.dli_sname)
+	{
+		void *obj_handle = get_link_map(i.dli_saddr);
+		if (obj_handle)
+		{
+			Elf64_Sym *found = symbol_lookup_in_object(obj_handle, i.dli_sname);
+			if (found)
+			{
+				void *base = sym_to_addr_in_object(obj_handle, found);
+				void *limit = (char*) base + found->st_size;
+				return __make_bounds((unsigned long) base, (unsigned long) limit);
+			}
+		}
+	}
+	warnx("Failed to dladdr-fetch bounds for %p", ptr);
+	return __libcrunch_make_invalid_bounds(ptr);
+}
+
 void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type);
 void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type)
 {

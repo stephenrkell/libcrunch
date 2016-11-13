@@ -1250,7 +1250,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
   (* Will fill these in during initializer *) 
   val mutable helperFunctions = {
      fetchBoundsInl = emptyFunction "__fetch_bounds_inl";
-     fetchBoundsOol = emptyFunction "__fetch_bounds_ool";
+     fetchBoundsOol = emptyFunction (if !emulateSoftBound then "__fetch_bounds_ool_via_dladdr" else "__fetch_bounds_ool");
      fetchBoundsFull = emptyFunction "__fetch_bounds_full";
      makeBounds = emptyFunction "__make_bounds";
      pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
@@ -1298,7 +1298,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
     ;
     helperFunctions.fetchBoundsOol <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__fetch_bounds_ool" (TFun(boundsType, 
+                            enclosingFile (if !emulateSoftBound then "__fetch_bounds_ool_via_dladdr" 
+                                else "__fetch_bounds_ool") (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
                                    ("derived_ptr", voidConstPtrType, []);
