@@ -3148,7 +3148,7 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                       skind = Instr([match (List.hd is) with
                             Call(out, _, [arg1; arg2; arg3; arg4; arg5], loc) ->
                                 Call(out, Lval(Var(primaryCheckFun), NoOffset), 
-                                    [Lval(mkMem arg1 NoOffset); arg2; Lval(mkMem arg3 NoOffset); arg5], loc)
+                                    [arg1; arg2; Lval(mkMem arg3 NoOffset); arg5], loc)
                           | _ -> failwith ("impossible: check is not a check (" ^ instToString (List.hd is) ^ ")")
                       ]);
                       sid = outerS.sid;

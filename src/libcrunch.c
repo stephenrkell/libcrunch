@@ -3030,9 +3030,9 @@ __libcrunch_bounds_t __libcrunch_ool_fetch_bounds_from_cache(const void *ptr, co
 	return __fetch_bounds_from_cache(ptr, derived_ptr_maybetrapped, t, t_sz);
 }
 
-_Bool __libcrunch_ool_primary_check_derive_ptr(const void *derived, const void *derivedfrom, __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz)
+_Bool __libcrunch_ool_primary_check_derive_ptr(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz)
 {
-	return __primary_check_derive_ptr(derived, derivedfrom, derivedfrom_bounds, t_sz);
+	return __primary_check_derive_ptr(p_derived, derivedfrom, derivedfrom_bounds, t_sz);
 }
 
 void __libcrunch_ool_check_deref(const void *ptr, __libcrunch_bounds_t ptr_bounds)

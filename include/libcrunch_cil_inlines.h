@@ -1083,8 +1083,8 @@ extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const voi
 extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
 /* Both in libcrunch.c. */
 
-extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
-extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_check_derive_ptr)(const void *derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
+extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 #ifdef LIBCRUNCH_EMULATE_SOFTBOUND
@@ -1095,42 +1095,16 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	 
         if ((unsigned)(addr-base) > size - sizeof (<type>)) FlagSpatialError();
 	
-	 * but for us it's more complicated because of trap values and invalid bounds.
-	 * We need to make sure that invalid bounds and trap pointers *always* hit
-	 * the slow path, i.e. that
+	 * but for us it's more complicated because of trap values, invalid bounds,
+	 * and denorm bounds (if we care about those). Generally though, it's easy
+	 * to make all of these fail the basic Austin check:
 	 * 
-	 *       addr - base_invalid  > size_invalid - t_sz
-	 * and
-	 *       addr_trap - base     > size        - t_sz
+	 *      addr - base < size
 	 * 
-	 * ... which, it turns out, is mostly quite easy. For trap pointers
-	 * it's trivial: the trap addr is *much* higher than the (non-trapped) base,
-	 * so for any sensible object size (less than 2^56 bytes) we hit the ">" case.
-	 * (or, in the case of kernel pointers, is *lower*, so hits the underflow case).
-	 * 
-	 * For invalid bounds, we must ensure that either
-	 * - base is higher than addr, or
-	 * - addr - base > size.      (i.e. base is *far* below addr).
-	 * Doing this fast for the 64-bit bounds is not easy.
-	 * Ideally we want it to hold for the *unadjusted* (raw) base/limit values.
-	 * And it does! because denorm bases are by definition *higher* (in 32bit-space)
-	 * than the actual base.
+	 * ... but we try to handle trap pointers here.
 	 */
-	// too low?
-	//if (unlikely(addr < base)) { goto out_fail; }
-	// NOTE: support for one-prev pointers as trap values goes here
-	// too high?
-	//if (unlikely(addr > limit)) { goto out_fail; }
 
-	unsigned long addr = (unsigned long) derived;
-	/* The check logic is interesting:
-	 *    neither trapped, Austin check passes (<): normal    (can detrap -- is noop)
-	 *    both trapped,  Austin check passes (<): went back in bounds, so detrap. 
-	 *    neither trapped, Austin ==:    need to trap     i.e. unconditionally set the trap
-	 *    both trapped,    Austin ==:    *leave* trapped  ... in both cases (assumes one-past trap)
-	 *    neither trapped, Austin >:     fail  (MUST abort -- need compiler opts)
-	 *    both trapped,    Austin >:     fail  (MUST abort -- need compiler opts)
-	 */
+	unsigned long addr = (unsigned long) *p_derived;
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* If we have denorms, we will use the denorm base directly and fail over to secondary
 	 * checks. HMM. Actually, is that really faster? FIXME: TEST. */
@@ -1144,12 +1118,30 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
 	_Bool success;
 #if defined(LIBCRUNCH_NO_SECONDARY_CHECKS) && defined(LIBCRUNCH_USING_TRAP_PTRS)
-	/* No secondary path, so have to handle traps here too. One "simple" way is like so. */
-	if (likely(addr - base <= size))
+	/* No secondary path, so have to handle traps here too -- both "one past" (trap)
+	 * and "back in" (detrap) cases.
+	 *
+	 * The case split is interesting:
+	 *    neither trapped, Austin check passes (<): normal    (can detrap -- is noop)
+	 *    both trapped,  Austin check passes (<): went back in bounds, so detrap. 
+	 *    neither trapped, Austin ==:    need to trap     i.e. unconditionally set the trap
+	 *    both trapped,    Austin ==:    *leave* trapped  ... in both cases (assumes one-past trap)
+	 *    neither trapped, Austin >:     fail  (MUST abort -- need compiler opts)
+	 *    both trapped,    Austin >:     fail  (MUST abort -- need compiler opts)
+	 *
+	 * -- do this!
+	 */
+	if (likely(addr - like_trapped_base <= size))
 	{
 		if (unlikely(addr - base == size))
 		{
-			*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
+			// no-op if derived was already trapped
+			*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST); // TODO: try with conditional trap
+		}
+		else
+		{
+			// no-op if derived was already untrapped
+			*p_derived = __libcrunch_detrap(*p_derived); // TODO: try with conditional untrap
 		}
 		success = 1;
 	} else success = 0;
@@ -1166,9 +1158,16 @@ extern inline _Bool (__attribute__((pure,always_inline,gnu_inline)) __primary_ch
 #else
 	success = addr - base < size;
 #endif
-#ifdef LIBCRUNCH_TRACE_PRIMARY_CHECKS
+#if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_CHECKS)
 	if (!success) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
+#endif
+#ifdef LIBCRUNCH_NO_SECONDARY_CHECKS
+	if (!success)
+	{
+		__libcrunch_bounds_error(*p_derived, derivedfrom, derivedfrom_bounds);
+		abort();
+	}
 #endif
 	return success;
 	//if (!(addr - base < size)) abort(); else return 1;
@@ -1314,7 +1313,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 	   ... AFTER it is converted back from a trap value
 	 */
 
-	_Bool ok = __primary_check_derive_ptr(*p_derived, derivedfrom, *derivedfrom_bounds, t_sz);
+	_Bool ok = __primary_check_derive_ptr(p_derived, derivedfrom, *derivedfrom_bounds, t_sz);
 	if (likely(ok))
 	{
 		// tell the compiler this means our bounds are definitely valid
