@@ -151,6 +151,7 @@ __thread unsigned long *volatile __bounds_sp;
 /* HACK -- but actually not useful in this object. */
 // _Bool __lookup_static_allocation_by_name(struct link_map *l, const char *name,
 // 	void **out_addr, size_t *out_len) __attribute__((weak));
+extern int __libcrunch_really_loaded __attribute__((weak));
 
 extern char **environ;
 static void init_shadow_space(void) // constructor (declared above)
@@ -222,7 +223,7 @@ static void init_shadow_space(void) // constructor (declared above)
 	 *   we try to open /dev/ones. This will give us a "size" of 0xffffffff.
 	 *   This should mean that primary checks pass rather than fail.
 	 */
-	_Bool libcrunch_is_loaded = (&pageindex);
+	_Bool libcrunch_is_loaded = (&__libcrunch_really_loaded);
 	int flags;
 	if (libcrunch_is_loaded)
 	{
@@ -232,12 +233,14 @@ static void init_shadow_space(void) // constructor (declared above)
 	else
 	{
 		fd = open("/dev/ones", O_RDONLY);
-		flags = (fd == -1) ? 0 : MAP_ANONYMOUS;
+		flags = (fd == -1) ? MAP_ANONYMOUS : 0;
 	}
 	__libcrunch_bounds_sizes_region_00 = mmap(/* base */ (void*) 0x080000000000ul, 
 		/* size */ 0x0aaaaaaab000ul - 0x080000000000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
 	if (__libcrunch_bounds_sizes_region_00 != (void*) 0x080000000000ul) abort();
+	if (!libcrunch_is_loaded && 
+		*(unsigned *) __libcrunch_bounds_sizes_region_00 != 0xffffffffu) abort();
 	__libcrunch_bounds_sizes_region_2a = mmap(/* base */ (void*) 0x1d5555556000ul, 
 		/* size */ 0x22aaaaaab000ul - 0x1d5555556000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);

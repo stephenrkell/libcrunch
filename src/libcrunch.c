@@ -77,6 +77,7 @@ enum dwarf_regs_x86_64
 
 int __libcrunch_debug_level;
 _Bool __libcrunch_is_initialized;
+int __libcrunch_really_loaded; /* see shadow.c */
 
 FILE *crunch_stream_err;// __attribute__((visibility("hidden")));
 
