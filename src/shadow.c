@@ -217,18 +217,40 @@ static void init_shadow_space(void) // constructor (declared above)
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
 	if (__libcrunch_bounds_bases_region_7a != (void*) 0x0aaaaaaab000ul) abort();
 	
+	/* Nasty but pleasing trick:
+	 * - if the full libcrunch is not loaded, 
+	 *   we try to open /dev/ones. This will give us a "size" of 0xffffffff.
+	 *   This should mean that primary checks pass rather than fail.
+	 */
+	_Bool libcrunch_is_loaded = (&pageindex);
+	int flags;
+	if (libcrunch_is_loaded)
+	{
+		fd = -1;
+		flags = MAP_ANONYMOUS;
+	}
+	else
+	{
+		fd = open("/dev/ones", O_RDONLY);
+		flags = (fd == -1) ? 0 : MAP_ANONYMOUS;
+	}
 	__libcrunch_bounds_sizes_region_00 = mmap(/* base */ (void*) 0x080000000000ul, 
 		/* size */ 0x0aaaaaaab000ul - 0x080000000000ul, PROT_READ|PROT_WRITE, 
-		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
+		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
 	if (__libcrunch_bounds_sizes_region_00 != (void*) 0x080000000000ul) abort();
 	__libcrunch_bounds_sizes_region_2a = mmap(/* base */ (void*) 0x1d5555556000ul, 
 		/* size */ 0x22aaaaaab000ul - 0x1d5555556000ul, PROT_READ|PROT_WRITE, 
-		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
+		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
 	if (__libcrunch_bounds_sizes_region_2a != (void*) 0x1d5555556000ul) abort();
 	__libcrunch_bounds_sizes_region_7a = mmap(/* base */ (void*) 0x455555556000ul, 
 		/* size */ 0x480000000000ul - 0x455555556000ul, PROT_READ|PROT_WRITE, 
-		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
+		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
 	if (__libcrunch_bounds_sizes_region_7a != (void*) 0x455555556000ul) abort();
+
+	if (!libcrunch_is_loaded && fd != -1)
+	{
+		close(fd);
+	}
 
 	/* FIXME: also check we didn't/don't overlap any existing mappings. 
 	 * This is difficult. A bitmap for the l0index would do it. 
