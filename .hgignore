@@ -108,3 +108,5 @@ test/softbound-actuals/softbound-actuals
 test/softbound-heap/softbound-heap
 test/softbound-simple/softbound-simple
 test/softbound-static-init-ptr/softbound-static-init-ptr
+lib/wrap.ldopts
+*/-l*.res
