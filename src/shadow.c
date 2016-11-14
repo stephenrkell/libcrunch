@@ -239,7 +239,7 @@ static void init_shadow_space(void) // constructor (declared above)
 		/* size */ 0x0aaaaaaab000ul - 0x080000000000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
 	if (__libcrunch_bounds_sizes_region_00 != (void*) 0x080000000000ul) abort();
-	if (!libcrunch_is_loaded && 
+	if (!libcrunch_is_loaded && fd != -1 &&
 		*(unsigned *) __libcrunch_bounds_sizes_region_00 != 0xffffffffu) abort();
 	__libcrunch_bounds_sizes_region_2a = mmap(/* base */ (void*) 0x1d5555556000ul, 
 		/* size */ 0x22aaaaaab000ul - 0x1d5555556000ul, PROT_READ|PROT_WRITE, 
