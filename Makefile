@@ -19,7 +19,6 @@ kernel:
 .PHONY: clean
 clean:
 	$(MAKE) -C src clean
-	rm -f lib/*.so lib/*.o lib/.??*
 	$(MAKE) -C frontend clean
 	$(MAKE) -C test clean
 	$(MAKE) -C kernel clean
