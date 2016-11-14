@@ -22,10 +22,10 @@
 	ret MANGLE(name)(__VA_ARGS__)
 #define BEGIN(name) _Bool caller_is_inst = __tweak_argument_bounds_cookie(MANGLE( name ))
 #define RETURN_PTR(p, base, limit) __push_result_bounds_base_limit(caller_is_inst, (p), \
-		(uintptr_t) (base), (uintptr_t) (limit)); return ret_ptr
+		(uintptr_t) (base), (uintptr_t) (limit)); return (p)
 #define RETURN_PTR_ARGBOUNDS(p, off, argname) __push_local_result_bounds(caller_is_inst, \
 		__peek_argument_bounds(caller_is_inst, (off), argname, "argument " #argname )); \
-		return ret_ptr
+		return (p)
 #define RETURN_NULL __push_result_bounds_base_limit(caller_is_inst, NULL, 0, 1); return NULL
 
 /* Some common wrapper pattens:
