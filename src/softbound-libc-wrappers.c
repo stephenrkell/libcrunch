@@ -62,16 +62,16 @@ DECLARE(char*, strchr, const char *s, int c)
 	}
 }
 
-// #if defined(__linux__)
-// __WEAK_INLINE int* softboundcets___errno_location() {
-//   void* ret_ptr = (int *)__errno_location();
-//   //  printf("ERRNO: ptr is %lx", ptrs->ptr);
-//   __softboundcets_store_return_metadata(ret_ptr, 
-//                                         (void*)((char*)ret_ptr + sizeof(int*)),
-//                                         1, __softboundcets_global_lock);
-//   
-//   return ret_ptr;
-// }
+#if defined(__linux__)
+
+DECLARE(int*, __errno_location, void)
+{
+	BEGIN(__errno_location);
+	int *ret = REAL(__errno_location)();
+	RETURN_PTR(ret, ret, (int*) ret + 1);
+}
+
+#endif
 
 DECLARE(short const **, __ctype_b_loc, void)
 {
