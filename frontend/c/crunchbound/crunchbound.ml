@@ -2183,28 +2183,10 @@ class crunchBoundVisitor = fun enclosingFile ->
             let formalBoundsInitList = List.mapi (fun i -> fun f -> f i) 
                 (List.rev formalBoundsInitFunReverseList)
             in
-            let entryPointVar = makeTempVar f voidPtrType in
             let writeCallerInstFlag
-             = [Asm([(* attrs *)], 
-                           [(* template strings *)
-                                "    movq $(.-" ^ f.svar.vname ^ "+12),%%rax \n\
-                                     .byte 0xe8 \n\
-                                     .byte 0 \n\
-                                     .byte 0 \n\
-                                     .byte 0 \n\
-                                     .byte 0 \n\
-                                     popq %0 \n\
-                                     subq %%rax,%0 \n"
-                           ], 
-                           [(* outputs: (string option * string * lval) *)
-                                (None, "=r", (Var(entryPointVar), NoOffset))
-                           ], 
-                           [(* inputs *) ], 
-                           [(* clobbers *) "%rax"],
-                           (* location *) instrLoc !currentInst);
-                Call(Some(Var(currentFuncCallerIsInstFlagVar), NoOffset), 
-                Lval(Var(helperFunctions.tweakArgumentBoundsCookie.svar), NoOffset),
-                [CastE(voidConstPtrType, Lval(Var(entryPointVar), NoOffset))], instrLoc !currentInst)]
+             = [Call(Some(Var(currentFuncCallerIsInstFlagVar), NoOffset), 
+                Lval(Var(helperFunctions.tweakArgumentBoundsCookie.svar), NoOffset), 
+                [CastE(voidConstPtrType, mkAddrOf (Var(f.svar), NoOffset))], instrLoc !currentInst)]
             in
             f.sbody <- { 
                 battrs = f.sbody.battrs; 

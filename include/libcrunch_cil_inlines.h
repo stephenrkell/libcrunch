@@ -320,16 +320,6 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 	                   pop %0" : "=r"(addr)); /* FIXME: CIL frontc parse bug: */ // : /* no inputs */ : /* no clobbers */);
 	return addr;
 }
-
-/* GAH. Our cookie handling requires being able to get our own address. And 
- * that interacts with allocscompilerwrapper's symbol unbinding: we unbind a
- * bit too thoroughly and end up thinking our own address is that of our 
- * wrapper, meaning we think we were called uninstrumented. So to hack around
- * that, let's add an asm helper that really gets us our honest address. It
- * has to be a macro so that we can feed the function name. Oh, but CIL can't
- * expand macros, so we need to put it in the CIL instrumentation. Bah.
- * So it's in crunchbound. */
-
 void warnx(const char *fmt, ...);
 
 extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val __attribute__((unused)), unsigned long from_size __attribute__((unused)));
