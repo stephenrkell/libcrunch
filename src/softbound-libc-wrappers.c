@@ -101,6 +101,28 @@ DECLARE(FILE*, fopen, const char *fname, const char *mode)
 	RETURN_PTR(ret_ptr, ret_ptr, (char*) ret_ptr + /* HACK */ 1024 * 1024);
 }
 
+DECLARE(char*, strtok, char *str, const char *delim)
+{
+	BEGIN(strtok);
+	char *ret_ptr = REAL(strtok)(str, delim);
+	/* ret_ptr points to a private libc-side buffer. */
+	RETURN_PTR(ret_ptr, ret_ptr, (char*) ret_ptr + (ret_ptr ? strlen(ret_ptr) + 1 : 1));
+}
+
+DECLARE(char*, fgets, char *s, int size, FILE *stream)
+{
+	BEGIN(fgets);
+	char *ret_ptr = REAL(fgets)(s, size, stream);
+	if (ret_ptr)
+	{
+		RETURN_PTR_ARGBOUNDS(ret_ptr, 0, s);
+	}
+	else
+	{
+		RETURN_NULL;
+	}
+}
+
 // 
 // // return arg
 // __WEAK_INLINE  char * softboundcets_mkdtemp(char *template){
@@ -304,13 +326,6 @@ DECLARE(FILE*, fopen, const char *fname, const char *mode)
 // 
 // }
 // 
-// __WEAK_INLINE char* softboundcets_fgets(char* s, int size, FILE* stream){
-// 
-//   char* ret_ptr = fgets(s, size, stream);
-//   __softboundcets_propagate_metadata_shadow_stack_from(1,0);
-// 
-//   return ret_ptr;
-// }
 // 
 // 
 // #ifdef _GNU_SOURCE
