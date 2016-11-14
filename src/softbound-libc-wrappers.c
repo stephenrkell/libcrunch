@@ -93,27 +93,14 @@ DECLARE(int **, __ctype_tolower_loc, void)
 	int ** ret_ptr = REAL(__ctype_tolower_loc)();
 	RETURN_PTR(ret_ptr, ret_ptr, (char*) (ret_ptr + 1));
 }
-// 
-// __WEAK_INLINE int const**  softboundcets___ctype_tolower_loc(void) {
-//   
-//   int const ** ret_ptr  =  __ctype_tolower_loc();  
-//   __softboundcets_store_return_metadata((void*) ret_ptr, 
-//                                         (void*) ((char*)ret_ptr + 1024*1024),
-//                                         1, __softboundcets_global_lock);
-//   return ret_ptr;
-// 
-// }
-// #endif
-// 
-// __WEAK_INLINE FILE* softboundcets_fopen(const char* path, const char* mode){                                  
-// 
-//   void* ret_ptr = (void*) fopen(path, mode);
-//   void* ret_ptr_bound = (char*) ret_ptr + sizeof(FILE);
-// 
-//   __softboundcets_store_return_metadata(ret_ptr, ret_ptr_bound, 
-//                                         1, (void*) __softboundcets_global_lock);
-//   return (FILE*)ret_ptr;
-// }
+
+DECLARE(FILE*, fopen, const char *fname, const char *mode)
+{
+	BEGIN(fopen);
+	FILE *ret_ptr = REAL(fopen)(fname, mode);
+	RETURN_PTR(ret_ptr, ret_ptr, (char*) ret_ptr + /* HACK */ 1024 * 1024);
+}
+
 // 
 // // return arg
 // __WEAK_INLINE  char * softboundcets_mkdtemp(char *template){
