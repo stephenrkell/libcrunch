@@ -23,6 +23,10 @@
 #define BEGIN(name) _Bool caller_is_inst = __tweak_argument_bounds_cookie(MANGLE( name ))
 #define RETURN_PTR(p, base, limit) __push_result_bounds_base_limit(caller_is_inst, (p), \
 		(uintptr_t) (base), (uintptr_t) (limit)); return ret_ptr
+#define RETURN_PTR_ARGBOUNDS(p, off, argname) __push_local_result_bounds(caller_is_inst, \
+		__peek_argument_bounds(caller_is_inst, (off), argname, "argument " #argname )); \
+		return ret_ptr
+#define RETURN_NULL __push_result_bounds_base_limit(caller_is_inst, NULL, 0, 1); return NULL
 
 /* Some common wrapper pattens:
  * 
@@ -43,12 +47,21 @@ DECLARE(DIR*, fdopendir, int fd)
 	void* ret_ptr = REAL(fdopendir)(fd);
 	RETURN_PTR(ret_ptr, ret_ptr, (char*) ret_ptr + /* HACK */ 1024 * 1024);
 }
-// __WEAK_INLINE char* softboundcets_strchr(const char* s, int c){
-// 
-//   char* ret_ptr = strchr(s, c);
-//    __softboundcets_propagate_metadata_shadow_stack_from(1, 0);
-//    return ret_ptr;
-// }
+
+DECLARE(char*, strchr, const char *s, int c)
+{
+	BEGIN(strchr);
+	char *ret_ptr = REAL(strchr)(s, c);
+	if (ret_ptr)
+	{
+		RETURN_PTR_ARGBOUNDS(ret_ptr, 0, s);
+	}
+	else
+	{
+		RETURN_NULL;
+	}
+}
+
 // #if defined(__linux__)
 // __WEAK_INLINE int* softboundcets___errno_location() {
 //   void* ret_ptr = (int *)__errno_location();
@@ -59,29 +72,27 @@ DECLARE(DIR*, fdopendir, int fd)
 //   
 //   return ret_ptr;
 // }
-// 
-// __WEAK_INLINE unsigned short const** 
-// softboundcets___ctype_b_loc(void) {
-// 
-//   unsigned short const** ret_ptr =__ctype_b_loc();
-//   __softboundcets_store_return_metadata((void*) ret_ptr, 
-//                                         (void*)
-//                                         ((char*) ret_ptr + 1024*1024), 
-//                                         1, __softboundcets_global_lock);
-//   return ret_ptr;
-// }
-// 
-// __WEAK_INLINE int const**  softboundcets___ctype_toupper_loc(void) {
-//   
-//   int const ** ret_ptr  =  __ctype_toupper_loc();  
-//   __softboundcets_store_return_metadata((void*) ret_ptr, 
-//                                         (void*)
-//                                         ((char*)ret_ptr + 1024*1024), 
-//                                         1, __softboundcets_global_lock);
-//   return ret_ptr;
-// 
-// }
-// 
+
+DECLARE(short const **, __ctype_b_loc, void)
+{
+	BEGIN(__ctype_b_loc);
+	short const** ret_ptr = REAL(__ctype_b_loc)();
+	RETURN_PTR(ret_ptr, ret_ptr, (char*) ret_ptr + /* HACK */ 1024 * 1024);
+}
+
+DECLARE(int **, __ctype_toupper_loc, void)
+{
+	BEGIN(__ctype_toupper_loc);
+	int ** ret_ptr = REAL(__ctype_toupper_loc)();
+	RETURN_PTR(ret_ptr, ret_ptr, (char*) (ret_ptr + 1));
+}
+
+DECLARE(int **, __ctype_tolower_loc, void)
+{
+	BEGIN(__ctype_tolower_loc);
+	int ** ret_ptr = REAL(__ctype_tolower_loc)();
+	RETURN_PTR(ret_ptr, ret_ptr, (char*) (ret_ptr + 1));
+}
 // 
 // __WEAK_INLINE int const**  softboundcets___ctype_tolower_loc(void) {
 //   
