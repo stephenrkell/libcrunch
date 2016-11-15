@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <ctype.h>
 #include "libcrunch_private.h"
 #include "libcrunch_cil_inlines.h"
 
@@ -978,3 +979,20 @@ DECLARE(char*, fgets, char *s, int size, FILE *stream)
 // }
 // 
 // 
+
+static void init(void) __attribute__((constructor));
+static void init(void)
+{
+	/* It's not just about wrapping functions. Initialise the globals.
+	 * FIXME: not sure why SoftBound doesn't do this. */
+	void **p = (void**) __ctype_b_loc();
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = 768;
+	p = (void**) __ctype_toupper_loc();
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = 384 * sizeof (int);
+	p = (void**) __ctype_tolower_loc();
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = 384 * sizeof (int);
+}
+
