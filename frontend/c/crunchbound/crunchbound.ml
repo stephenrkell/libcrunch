@@ -1744,7 +1744,8 @@ let rec initializationExprMightPointToArray e =
 
 let prependShadowBoundsInitializer helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals =
     if isStaticallyNullPtr initializationValExpr then ()
-    else if not (initializationExprMightPointToArray initializationValExpr) then () else
+    (* Be more conservative if emulating SoftBound. It really needs the bounds info. *)
+    else if (not !emulateSoftBound && not (initializationExprMightPointToArray initializationValExpr)) then () else
     let instrsToPrepend = makeShadowBoundsInitializerCalls helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals
     in
     initFunc.sbody <- { battrs = []; bstmts = [{
