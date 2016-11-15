@@ -2854,9 +2854,13 @@ class crunchBoundVisitor = fun enclosingFile ->
         None -> (* expression outside function *) SkipChildren
       | Some(f) -> 
           (* Need to remember parent lval *)
-          let simplifiedE = match simplifyPtrExprs outerE with
-              SizeOfE(subE) -> SizeOf(Cil.typeOf subE)
-            | subE -> subE
+          let initialSimplifiedE = simplifyPtrExprs outerE in
+          let simplifiedE = match initialSimplifiedE with
+                (* HACK around CIL's bonkers encoding of __builtin_va* primitives. *)
+                SizeOfE(Lval(Var(x, NoOffset))) when stringStartsWith x.vname "__builtin_"
+                  -> initialSimplifiedE
+            | SizeOfE(subE) -> SizeOf(Cil.typeOf subE)
+            | _ -> initialSimplifiedE
           in
           let _ = match simplifiedE with
             AddrOf(lv) -> underAddrOf := true
