@@ -7,6 +7,9 @@ symlinks:
 	ln -sf ../src/libcrunch_stubs.o libcrunch_stubs.o
 	ln -sf ../src/libcrunch_wrappers.o libcrunch_wrappers.o
 
+clean:
+	rm -f *.o *.so
+
 wrap.ldopts: symlinks
 	nm --format=posix libcrunch_wrappers.o | grep __wrap_ | \
 	        sed -r 's/__wrap_([^[:blank:]]*).*/--wrap \1/' > "$@" \
