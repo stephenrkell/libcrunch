@@ -135,9 +135,12 @@ checkrun-softbound-%: softbound-%/check-stamp
 	true # remembered pass of softbound-$*
 softbound-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "case is softbound-$*" && \
-	$(MAKE) cleanrun-softbound-$* 1>$$out 2>$$err && \
-           ! grep '^queries handled.* [1-9]\+[0-9]*$$' $$err && \
-		   match "out-of-bounds pointers created" '0' >/dev/null; then touch "$@"; else false; fi
+	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
+	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
+	if $(MAKE) cleanrun-softbound-$* 1>$$out 2>$$err && \
+           . ./checks.sh && tail -n26 "$$err" | \
+                match "out-of-bounds pointers created" '0' >/dev/null && \
+                ! grep 'calls to __fetch_bounds:.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
 # Bounds cases might not report passed type checks
 checkrun-bounds-%: bounds-%/check-stamp
