@@ -900,13 +900,15 @@ let boundsUpdateInstrs blv ptrExp boundsDescr
                    loc
             )]
 
-let hoistAndCheckAdjustment ~doDerefCheck enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ptrExp intExp localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
+let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ptrExp intExp localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
      * then copy from the temporary to the actual target. *)
-    (* The argument doDerefCheck, if set, means that
-     * - we're emulating SoftBound;
-     * - we're called from a context where the created pointer will be immediately dereferenced.
+    (* The argument isBeingDerefed, if set, means that we're derefing.
+     * We may or may not be emulating SoftBound, but 
+     * we're called from a context where the created pointer will be immediately dereferenced.
+     * We always create the deref check if so; it's up to the #defines to enable/disable
+     # the deref check and the adjust check.
      *)
     let loc = instrLoc currentInst in
     let exprTmpVar = Cil.makeTempVar ~name:"__cil_adjexpr_" enclosingFunction (typeOf ptrExp) in
@@ -969,44 +971,42 @@ let hoistAndCheckAdjustment ~doDerefCheck enclosingFile enclosingFunction helper
       (* first enqueue an assignment of the whole expression to exprTmpVar *)
       Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
       (* next enqueue the check call *)
-      if (not doDerefCheck) then
-        let checkResultVar = Cil.makeTempVar ~name:"__cil_boundscheck_" enclosingFunction boolType in
-        checkResultVar.vattr <- [Attr("unused", [])];
-        Call( (* Some((Var(exprTmpVar), NoOffset)) *) (* None *) Some(Var(checkResultVar), NoOffset), (* return value dest *)
-            (Lval(Var(helperFunctions.checkDerivePtr.svar),NoOffset)),  (* lvalue of function to call *)
-            [ 
-              (* const void **p_derived *)
-              CastE(voidConstPtrPtrType, mkAddrOf (Var(exprTmpVar), NoOffset))
-            ;
-              (* const void *derivedfrom *)
-              ptrExp
-            ;
-              (* __libcrunch_bounds_t *derivedfrom_bounds *)
-              ( match boundsDescrForAdjustedExpr with
-                    BoundsLval(lv) -> mkAddrOf lv
-                  | _ -> 
-                        (* We just created a variable and stored some bounds to it
-                         * (invalid if we're MustFetch, valid if we have the rvals).
-                         * So just pass that temporary's address. (Although we created
-                         * it to store the *derived* pointer's bounds, by definition
-                         * these must be the same as the derived-from bounds, and that's
-                         * what we initialised it with if we init'd it at all.) *)
-                        mkAddrOf (Var(exprTmpBoundsVar), NoOffset)
-              )
-              (* struct uniqtype *t *)  (* the pointed-*TO* type of the pointer *)
-            ; (let pointeeUniqtypeVar = 
-                let pointeeTs = match (exprConcreteType ptrExp) with
-                        TSPtr(ts, _) -> ts
-                      | _ -> failwith "recipient is not a pointer"
-                 in ensureUniqtypeGlobal pointeeTs enclosingFile uniqtypeGlobals
-              in
-              mkAddrOf (Var(pointeeUniqtypeVar), NoOffset)
-              )
-            ; makeSizeOfPointeeType ptrExp
-            ],
-            loc
-      )
-      else (* doDerefCheck *)
+      let checkResultVar = Cil.makeTempVar ~name:"__cil_boundscheck_" enclosingFunction boolType in
+      checkResultVar.vattr <- [Attr("unused", [])];
+      Call( (* Some((Var(exprTmpVar), NoOffset)) *) (* None *) Some(Var(checkResultVar), NoOffset), (* return value dest *)
+          (Lval(Var(helperFunctions.checkDerivePtr.svar),NoOffset)),  (* lvalue of function to call *)
+          [ 
+            (* const void **p_derived *)
+            CastE(voidConstPtrPtrType, mkAddrOf (Var(exprTmpVar), NoOffset))
+          ;
+            (* const void *derivedfrom *)
+            ptrExp
+          ;
+            (* __libcrunch_bounds_t *derivedfrom_bounds *)
+            ( match boundsDescrForAdjustedExpr with
+                  BoundsLval(lv) -> mkAddrOf lv
+                | _ -> 
+                      (* We just created a variable and stored some bounds to it
+                       * (invalid if we're MustFetch, valid if we have the rvals).
+                       * So just pass that temporary's address. (Although we created
+                       * it to store the *derived* pointer's bounds, by definition
+                       * these must be the same as the derived-from bounds, and that's
+                       * what we initialised it with if we init'd it at all.) *)
+                      mkAddrOf (Var(exprTmpBoundsVar), NoOffset)
+            )
+            (* struct uniqtype *t *)  (* the pointed-*TO* type of the pointer *)
+          ; (let pointeeUniqtypeVar = 
+              let pointeeTs = match (exprConcreteType ptrExp) with
+                      TSPtr(ts, _) -> ts
+                    | _ -> failwith "recipient is not a pointer"
+               in ensureUniqtypeGlobal pointeeTs enclosingFile uniqtypeGlobals
+            in
+            mkAddrOf (Var(pointeeUniqtypeVar), NoOffset)
+            )
+          ; makeSizeOfPointeeType ptrExp
+          ],
+          loc
+       )] @ (if isBeingDerefed then [
        Call(None,
             (Lval(Var(helperFunctions.checkDeref.svar),NoOffset)),
             [ Lval(Var(exprTmpVar), NoOffset)
@@ -1015,8 +1015,8 @@ let hoistAndCheckAdjustment ~doDerefCheck enclosingFile enclosingFunction helper
                   | _ -> 
                         (Lval(Var(exprTmpBoundsVar), NoOffset))
             ], loc
-        )
-    ])
+       )] else [])
+    ) (* end pair *)
     in
     let resTmp, resInstrs = res
     in
@@ -2800,7 +2800,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             if (not isPossiblyOOB) then
                                 (* simple recursive call *)
                                 hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(indexExp, ign)]) origHost (prevOffsetList @ [Index(indexExp, ign)])
-                            else if not !emulateSoftBound then
+                            else 
                                 (* if we started with x[i].rest, 
                                  * make a temporary to hold &x[0] + i, 
                                  * check that,
@@ -2813,11 +2813,11 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  * We need to multiply.
                                  * OR DO WE? 
                                  * Does StartOf always give us a pointer to the raw element type? 
-                                 * If it gives us pointers to arrays, we're okay. *)
+                                 * If it gives us pointers to arrays, we're okay. And it does. *)
                                 let ptrExp =  (Cil.mkAddrOrStartOf (lhost, offsetFromList offsetsOkayWithoutCheck))
                                 in
                                 let (tempVar, checkInstrs) = hoistAndCheckAdjustment
-                                    ~doDerefCheck:false
+                                    ~isBeingDerefed:(not weAreUnderAddrOf)
                                     enclosingFile theFunc
                                     helperFunctions uniqtypeGlobals 
                                     ptrExp
@@ -2833,39 +2833,12 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 )
                                 in 
                                 res
-                            else (* We are emulating softbound *)
-                                    (* How do deref check instrs differ from adjustment check?
-                                     * Instead of creating a pointer, check-adjusting it and then
-                                     * proceeding with its deref,
-                                     * we create a pointer, blindly adjust it and then
-                                     * proceed with its check-deref.
-                                     * It's similar so we fold it into hoistAndCheckAdjustment
-                                     *)
-                                if not weAreUnderAddrOf then
-                                    let ptrExp =  (Cil.mkAddrOrStartOf (lhost, offsetFromList offsetsOkayWithoutCheck))
-                                    in
-                                    let (tempVar, derefCheckInstrs) = hoistAndCheckAdjustment
-                                        ~doDerefCheck:true
-                                        enclosingFile theFunc
-                                        helperFunctions uniqtypeGlobals 
-                                        ptrExp
-                                        (* intExp *) intExp
-                                        (* localLvalToBoundsFun *) localLvalToBoundsFun
-                                        !currentFuncAddressTakenLocalNames
-                                        !currentInst
-                                        tempLoadExprs
-                                    in (self#queueInstr derefCheckInstrs;
-                                        hoistIndexing rest (Mem(Lval(Var(tempVar), NoOffset))) [] origHost (prevOffsetList @ [Index(intExp, ign)])
-                                        )
-                                else
-                                    (* simple recursive call *)
-                                    hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(indexExp, ign)]) origHost (prevOffsetList @ [Index(indexExp, ign)])
              in
              (* Check the initial deref, if there is one and we're checking derefs;
               * then we have to check the indexing. *)
              let (initialHost, initialOff) = lv in
              let (postDerefHost, postDerefOff) = match initialHost with
-                 Mem(memExpr) when !emulateSoftBound && not weAreUnderAddrOf ->
+                 Mem(memExpr) when not weAreUnderAddrOf ->
                      hoistDeref memExpr (offsetToList initialOff)
                    | _ -> lv
              in
@@ -2881,7 +2854,10 @@ class crunchBoundVisitor = fun enclosingFile ->
         None -> (* expression outside function *) SkipChildren
       | Some(f) -> 
           (* Need to remember parent lval *)
-          let simplifiedE = simplifyPtrExprs outerE in
+          let simplifiedE = match simplifyPtrExprs outerE with
+              SizeOfE(subE) -> SizeOf(Cil.typeOf subE)
+            | subE -> subE
+          in
           let _ = match simplifiedE with
             AddrOf(lv) -> underAddrOf := true
               | StartOf(lv) -> underAddrOf := true (* necessary? *)
@@ -2995,7 +2971,8 @@ class crunchBoundVisitor = fun enclosingFile ->
           (* Now we just need to handle pointer arithmetic. 
            * We let it stand if we're at top level; otherwise we hoist it
            * to another temporary. *)
-        | _ -> (let maybeAdjustment = begin match e with
+        | _ -> (* check for pointer arithmetic *)
+             (let maybeAdjustment = begin match e with
               |  BinOp(PlusPI, ptrExp, intExp, t) -> Some(ptrExp, intExp)
               |  BinOp(IndexPI, ptrExp, intExp, t) -> Some(ptrExp, intExp)
               |  BinOp(MinusPI, ptrExp, intExp, t) -> Some(ptrExp, UnOp(Neg, intExp, Cil.typeOf intExp))
@@ -3013,7 +2990,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 else begin
                     debug_print 1 ("Not top-level, so rewrite to use temporary\n");
                     flush stderr;
-                    let tempVar, checkInstrs = hoistAndCheckAdjustment ~doDerefCheck:false 
+                    let tempVar, checkInstrs = hoistAndCheckAdjustment ~isBeingDerefed:false 
                                     enclosingFile f
                                     helperFunctions uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
