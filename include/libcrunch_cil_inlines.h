@@ -1303,7 +1303,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifdef EMULATE_SOFTBOUND
+#ifdef LIBCRUNCH_EMULATE_SOFTBOUND
 	return 1;
 #else
 	/* PRECONDITIONS (a.k.a. things we don't need to check here): 
