@@ -75,13 +75,13 @@ type helperFunctionsRecord = {
  mutable checkDeref: fundec
 }
 
-let stringStartswith s pref = 
+let stringStartsWith s pref = 
   if (String.length s) >= (String.length pref) 
   then (String.sub s 0 (String.length pref)) = pref 
   else false
 
-let varIsOurs vi = stringStartswith vi.vname "__liballocs_" 
-             || stringStartswith vi.vname "__libcrunch_" 
+let varIsOurs vi = stringStartsWith vi.vname "__liballocs_" 
+             || stringStartsWith vi.vname "__libcrunch_" 
               || stringEndsWith vi.vdecl.file "libcrunch_cil_inlines.h"
 
 let instrLoc (maybeInst : Cil.instr option) =
@@ -2654,8 +2654,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                 If we're emulating SoftBound we check/hoist derefs as well as indexing.
               *)
              let hoistDeref memExpr offsetsOkayWithoutCheck =
+                debug_print 1 ("Hoisting deref of " ^ (expToCilString memExpr) ^ "\n");
                 (* If we're working with a Mem lvalue, it means we have a deref we 
-                 * want to hoist if (and only if) we're emulating SoftBound.
+                 * want to hoist.
                  * By construction, thanks to ChangeDoChildrenPost, any nested derefs
                  * or indexing inside the memExpr will have been hoisted already.
                  * However, we could still be derefing a global, say; we can't assume
@@ -2857,7 +2858,7 @@ class crunchBoundVisitor = fun enclosingFile ->
           let initialSimplifiedE = simplifyPtrExprs outerE in
           let simplifiedE = match initialSimplifiedE with
                 (* HACK around CIL's bonkers encoding of __builtin_va* primitives. *)
-                SizeOfE(Lval(Var(x, NoOffset))) when stringStartsWith x.vname "__builtin_"
+                SizeOfE(Lval(Var(x), NoOffset)) when stringStartsWith x.vname "__builtin_"
                   -> initialSimplifiedE
             | SizeOfE(subE) -> SizeOf(Cil.typeOf subE)
             | _ -> initialSimplifiedE
