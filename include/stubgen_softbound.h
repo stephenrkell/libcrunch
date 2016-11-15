@@ -1,4 +1,7 @@
-#ifdef LIBCRUNCH_EMULATE_SOFTBOUND
+/* These wrappers are only sane if void* carry bounds. 
+ * Otherwise there are no pointers to propagate. */
+
+#ifdef LIBCRUNCH_VOID_POINTERS_HAVE_BOUNDS
 
 #define do_wrapper_init(name) \
   _Bool __caller_is_inst = __tweak_argument_bounds_cookie(__wrap_## name); \

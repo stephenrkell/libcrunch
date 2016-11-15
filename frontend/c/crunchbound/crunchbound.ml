@@ -46,7 +46,9 @@ open Cilallocs
 module E = Errormsg
 module H = Hashtbl
 
-let emulateSoftBound = ref false
+let voidPtrHasBounds = ref false
+let noPointerTypeInfo = ref false
+let skipSecondarySplit = ref false
 
 type helperFunctionsRecord = {
  mutable fetchBoundsInl : fundec; 
@@ -217,7 +219,7 @@ let rec boundsTForT (t : Cil.typ) gs =
       | TInt(ik, attrs) -> None
       | TFloat(fk, attrs) -> None
       | TPtr(pt, attrs) -> (match (Cil.typeSig pt) with 
-            TSBase(TVoid(_)) -> if !emulateSoftBound then Some(bounds_t) else None 
+            TSBase(TVoid(_)) -> if !voidPtrHasBounds then Some(bounds_t) else None 
             | _ -> Some(bounds_t))
       | TArray(at, None, attrs) -> failwith "asked bounds type for unbounded array type"
       | TArray(at, Some(boundExpr), attrs) -> 
@@ -256,7 +258,7 @@ let exprNeedsBounds expr enclosingFile =
 
 let castNeedsFreshBounds sourceE targetT enclosingFile =
     let sourceT = Cil.typeOf sourceE in
-    if (!emulateSoftBound && isPointerType sourceT) then false else
+    if (!noPointerTypeInfo && isPointerType sourceT) then false else
     let (sourceTS, targetTS) = (Cil.typeSig sourceT, Cil.typeSig targetT) in
     let sourceConcrete = getConcreteType (decayArrayToCompatiblePointer sourceTS) in
     let targetConcrete = getConcreteType (decayArrayToCompatiblePointer targetTS) in
@@ -900,7 +902,7 @@ let boundsUpdateInstrs blv ptrExp boundsDescr
                    loc
             )]
 
-let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ptrExp intExp localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
+let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ptrExp intExp checkEvenIfStaticallyZero localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
     (* To avoid leaking bad pointers when writing to a shared location, 
      * we make the assignment to a temporary, then check the temporary,
      * then copy from the temporary to the actual target. *)
@@ -969,10 +971,12 @@ let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction help
          * Worth reading Moessenboeck's bounds checking optimisation at this point.
          *)
       (* first enqueue an assignment of the whole expression to exprTmpVar *)
-      Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc );
-      (* next enqueue the check call *)
-      let checkResultVar = Cil.makeTempVar ~name:"__cil_boundscheck_" enclosingFunction boolType in
-      checkResultVar.vattr <- [Attr("unused", [])];
+      Set( (Var(exprTmpVar), NoOffset), BinOp(PlusPI, ptrExp, intExp, Cil.typeOf ptrExp), loc )
+      ] @
+      (* next enqueue the check call, assuming we're not statically zero *)
+      (if (not (isStaticallyZero intExp)) || checkEvenIfStaticallyZero then
+      [let checkResultVar = Cil.makeTempVar ~name:"__cil_boundscheck_" enclosingFunction boolType in
+      (checkResultVar.vattr <- [Attr("unused", [])];
       Call( (* Some((Var(exprTmpVar), NoOffset)) *) (* None *) Some(Var(checkResultVar), NoOffset), (* return value dest *)
           (Lval(Var(helperFunctions.checkDerivePtr.svar),NoOffset)),  (* lvalue of function to call *)
           [ 
@@ -1006,7 +1010,7 @@ let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction help
           ; makeSizeOfPointeeType ptrExp
           ],
           loc
-       )] @ (if isBeingDerefed then [
+       )) ] else []) @ (if isBeingDerefed then [
        Call(None,
             (Lval(Var(helperFunctions.checkDeref.svar),NoOffset)),
             [ Lval(Var(exprTmpVar), NoOffset)
@@ -1036,7 +1040,7 @@ let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ca
     in
     (* If we're emulating SoftBound, we still get called -- but only for casts that create 
      * pointers from integers. Get this case out of the way first. *)
-    if !emulateSoftBound then (exprTmpVar,
+    if !noPointerTypeInfo then (exprTmpVar,
         [makeCallToMakeBounds (Some(Var(exprTmpBoundsVar), NoOffset)) zero zero loc helperFunctions.makeBounds]
     )
     else
@@ -1256,7 +1260,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
   (* Will fill these in during initializer *) 
   val mutable helperFunctions = {
      fetchBoundsInl = emptyFunction "__fetch_bounds_inl";
-     fetchBoundsOol = emptyFunction (if !emulateSoftBound then "__fetch_bounds_ool_via_dladdr" else "__fetch_bounds_ool");
+     fetchBoundsOol = emptyFunction (if !noPointerTypeInfo then "__fetch_bounds_ool_via_dladdr" else "__fetch_bounds_ool");
      fetchBoundsFull = emptyFunction "__fetch_bounds_full";
      makeBounds = emptyFunction "__make_bounds";
      pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
@@ -1304,7 +1308,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
     ;
     helperFunctions.fetchBoundsOol <- findOrCreateExternalFunctionInFile 
-                            enclosingFile (if !emulateSoftBound then "__fetch_bounds_ool_via_dladdr" 
+                            enclosingFile (if !noPointerTypeInfo then "__fetch_bounds_ool_via_dladdr" 
                                 else "__fetch_bounds_ool") (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
@@ -1530,7 +1534,7 @@ let containedPointerExprsForExpr e =
       | TFloat(fk, attrs) -> []
       | TPtr(pt, attrs) -> 
         (match (Cil.typeSig pt) with 
-            TSBase(TVoid(_)) -> if !emulateSoftBound then [NoOffset] else []
+            TSBase(TVoid(_)) -> if !voidPtrHasBounds then [NoOffset] else []
             | _ -> [NoOffset]
         )
       | TArray(at, None, attrs) -> failwith "asked to enumerate ptroffs for unbounded array type"
@@ -1592,8 +1596,8 @@ let containedPointerExprsForExpr e =
             failwith ("internal error: did not expect array or struct type: " ^ 
                 (typToString (Cil.typeOf e)))
      |  _ when (
-            ((not !emulateSoftBound) && isNonVoidPointerType (Cil.typeOf e))
-        || (!emulateSoftBound && isPointerType (Cil.typeOf e))) -> [e]
+            ((not !voidPtrHasBounds) && isNonVoidPointerType (Cil.typeOf e))
+        || (!voidPtrHasBounds && isPointerType (Cil.typeOf e))) -> [e]
      |  _ -> []
 
 let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 'a) (outerE : Cil.exp) currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs (* : 'a list *) wholeFile = 
@@ -1744,8 +1748,7 @@ let rec initializationExprMightPointToArray e =
 
 let prependShadowBoundsInitializer helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals =
     if isStaticallyNullPtr initializationValExpr then ()
-    (* Be more conservative if emulating SoftBound. It really needs the bounds info. *)
-    else if (not !emulateSoftBound && not (initializationExprMightPointToArray initializationValExpr)) then () else
+    else 
     let instrsToPrepend = makeShadowBoundsInitializerCalls helperFunctions initFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals
     in
     initFunc.sbody <- { battrs = []; bstmts = [{
@@ -2709,7 +2712,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                          in
                          let intExp = (* BinOp(Mult, indexExp, makeIntegerConstant arrayElementCount, intType) *) indexExp
                          in
-                         let isPossiblyOOB = 
+                         let (isNotStaticallyInBounds, isIndexingFlexibleArray) = 
                              (* Try to get a bound *)
                              let maybeBound = match (lhost, offsetsOkayWithoutCheck) with
                                     (Var(vi), _) -> 
@@ -2727,8 +2730,19 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 None -> 
                                     (* FIXME: write test cases for this flexible-array and 
                                      * static-zero stuff. *)
-                                    (* No bound on the array. 
-                                     * We let statically-zero bounds through without check
+                                    (* We're indexing on a host that is *not* 
+                                     * an array with a size bound.
+                                     * It might be an array with no size bound, or a non-array,
+                                     * i.e. a Mem host.
+                                     * In general, this indexing needs to be hoisted and checked.
+                                     * If the index expr is statically zero, we will
+                                     * detect this later after we've converted it to a pointer
+                                     * adjustment. FIXME: actually we don't yet. ALSO,
+                                     * if we do, we need to make an exception for pointers
+                                     * generated from &s.arr[0] where arr is a flexible array
+                                     * member, since its length might be 0.
+                                     * If we're on a Mem, we will hoist the deref later anyway.
+                                     * We let through statically-zero index exprs without check
                                      * *if* the array is not inside a struct 
                                      * i.e. is not a flexible array member "[]".
                                      * for which the [0] selector might not be valid. *)
@@ -2737,15 +2751,10 @@ class crunchBoundVisitor = fun enclosingFile ->
                                             Field(fi, _) :: rest -> true
                                           | _ -> false
                                     in
-                                    (* isPossiblyOOB = *)
-                                    isSelectingOnFlexibleArrayMember 
-                                        || (not (isStaticallyZero intExp))
-                                        (* If we're emulating SoftBound, then Index[0] on a Mem lhost
-                                         * is doing a deref, so we should check it. *)
-                                        || !emulateSoftBound
+                                    (true, isSelectingOnFlexibleArrayMember)
                               | Some(bound) -> match constInt64ValueOfExpr intExp with
                                     Some(intValue) -> 
-                                        intValue < (Int64.of_int 0) || intValue >= bound
+                                        (intValue < (Int64.of_int 0) || intValue >= bound, false)
                                   | None ->
                                     (* This means we couldn't simplify the expression
                                      * to a constant. We really want to dynamically
@@ -2778,13 +2787,17 @@ class crunchBoundVisitor = fun enclosingFile ->
                                      *    Perhaps more helpful would be to trap the address
                                      *    of the local.
                                      *)
-                                    (* isPossiblyOOB = *)
+                                    (* isNotStaticallyInBounds = *)
                                     if hostIsLocal origHost !currentFuncAddressTakenLocalNames then
                                         (* Emit a simple check that we're in-bounds.
                                          * This is sufficient to ensure that 
                                          * access to the cached bounds locals,
                                          * even using the variable intExp,
                                          * is safe. *)
+                                        (* NOTE: what was the rationale for separating out
+                                         * this case? I think it was so that non-address-taken
+                                         * locals woul stay non-address-taken. Not sure whether
+                                         * the fear is justified. *)
                                         let checkInstrs = checkInLocalBounds 
                                             enclosingFile theFunc
                                             helperFunctions
@@ -2795,10 +2808,10 @@ class crunchBoundVisitor = fun enclosingFile ->
                                             !currentInst
                                         in
                                         self#queueInstr checkInstrs;
-                                        false (* i.e. *not* possibly OOB, once we've checked. *)
-                                    else true
+                                        (false, false) (* i.e. *not* possibly OOB, once we've checked. *)
+                                    else (true, false)
                             in
-                            if (not isPossiblyOOB) then
+                            if (not isNotStaticallyInBounds) then
                                 (* simple recursive call *)
                                 hoistIndexing rest lhost (offsetsOkayWithoutCheck @ [Index(indexExp, ign)]) origHost (prevOffsetList @ [Index(indexExp, ign)])
                             else 
@@ -2823,6 +2836,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     helperFunctions uniqtypeGlobals 
                                     ptrExp
                                     (* intExp *) intExp
+                                    isIndexingFlexibleArray
                                     (* localLvalToBoundsFun *) localLvalToBoundsFun
                                     !currentFuncAddressTakenLocalNames
                                     !currentInst
@@ -2973,7 +2987,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                         (Lval(Var(tempVar), NoOffset))
                     )
                 end else e
-          (* Now we just need to handle pointer arithmetic. 
+          (* Now we just need to handle pointer arithmetic that appears in code as such.
            * We let it stand if we're at top level; otherwise we hoist it
            * to another temporary. *)
         | _ -> (* check for pointer arithmetic *)
@@ -3000,6 +3014,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     helperFunctions uniqtypeGlobals 
                                     (* ptrExp *) ptrExp
                                     (* intExp *) intExp
+                                    (* checkEvenIfStaticallyZero *) false
                                     (* localLvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)
                                     !currentFuncAddressTakenLocalNames
                                     !currentInst
@@ -3348,19 +3363,28 @@ let feature : Feature.t =
   { fd_name = "crunchbound";
     fd_enabled = false;
     fd_description = "dynamic bounds checking of pointer indexing and arithmetic";
-    fd_extraopt = [("--emulate-softbound", Arg.Unit (fun _ -> emulateSoftBound := true), 
-       " emulate SoftBound (no type info, ignore casts)")];
+    fd_extraopt = [("--emulate-softbound", Arg.Unit (fun _ -> 
+        voidPtrHasBounds := true; 
+        noPointerTypeInfo := true;
+        skipSecondarySplit := true
+    ), " emulate SoftBound (no type info, ignore casts, no secondary path)")];
     fd_doit = 
     (function (fl: file) -> 
       debug_print 1 ("command line args are:\n"
        ^ (String.concat ", " (Array.to_list Sys.argv) ) );
-      let _ = if !emulateSoftBound then 
-        debug_print 1 "emulating SoftBound"
-      else ()
+      let _ = (if !voidPtrHasBounds then 
+        debug_print 1 "void* has bounds (like SoftBound)"
+      else debug_print 1 "void* does not have bounds";
+        if !noPointerTypeInfo then 
+        debug_print 1 "no pointer type info assumed (like SoftBound)"
+      else (debug_print 1 "using pointer type info");
+        if !skipSecondarySplit then 
+        debug_print 1 "skip secondary path (like SoftBound)"
+      else (debug_print 1 "enabling secondary path"))
       in
       let tpFunVisitor = new crunchBoundVisitor fl in
       visitCilFileSameGlobals tpFunVisitor fl;
-      if (not !emulateSoftBound) then 
+      if (not !skipSecondarySplit) then 
         let splitVisitor = new primarySecondarySplitVisitor fl in
         visitCilFileSameGlobals splitVisitor fl 
         else ()

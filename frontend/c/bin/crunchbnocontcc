@@ -49,7 +49,7 @@ class CrunchBCC(CrunchCC):
             "-DLIBCRUNCH_NO_WARN_INVALID_BOUNDS", \
             "-DLIBCRUNCH_NO_WARN_BACK_IN", \
             "-DLIBCRUNCH_NO_WARN_ONE_PAST", \
-            "-DLIBCRUNCH_NO_SECONDARY_CHECKS", \
+            "-DLIBCRUNCH_NO_SECONDARY_PATH", \
             "-DLIBCRUNCH_ABORT_ON_OOB", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \

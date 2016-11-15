@@ -176,7 +176,8 @@ extern struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache;
 #define LIBCRUNCH_TRAP_INVALID 3
 #define LIBCRUNCH_TRAP_TAG_WIDTH 2
 #define LIBCRUNCH_TRAP_TAG_MASK (((unsigned long)((1ul<<LIBCRUNCH_TRAP_TAG_WIDTH) - 1ul)) << LIBCRUNCH_TRAP_TAG_SHIFT)
-/* NOTE: kernel-pointer support is BROKEN with this definition. */
+/* This mask has all bits *below* the trap bits set, but no others.
+ * NOTE: kernel-pointer support is BROKEN with this definition. */
 #define LIBCRUNCH_TRAP_BOTTOM_MASK ((unsigned long)((1ul<<LIBCRUNCH_TRAP_TAG_SHIFT) - 1ul))
 
 extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
@@ -191,6 +192,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
 }
 
 extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag);
 
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void);
 extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void)
@@ -808,6 +810,36 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_like_
 	return ptr;
 #endif
 }
+/* This means "ensure the trap is exactly this, no matter what it was previously. 
+ * The safe was is to detrap and retrap. */
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag)
+{
+#ifndef LIBCRUNCH_NOOP_INLINES
+	unsigned long val = (unsigned long) any_ptr;
+#ifdef LIBCRUNCH_USING_TRAP_PTRS
+#define WORD_BITS (8 * sizeof (unsigned long))
+#define SHIFT_AMOUNT (WORD_BITS - LIBCRUNCH_TRAP_TAG_SHIFT)
+#ifdef LIBCRUNCH_KERNEL_POINTERS
+	return __libcrunch_trap((const void*) (
+	/* Leave the top one non-canonical bit of the pointer present. It will fill in the rest. */
+		((signed long) (val << SHIFT_AMOUNT)) >> SHIFT_AMOUNT
+	), tag);
+#else
+	/* Use a possibly-faster mask-based approach */
+	return (((unsigned long) val) & ~LIBCRUNCH_TRAP_TAG_MASK) |
+		 (((unsigned long) tag) << LIBCRUNCH_TRAP_TAG_SHIFT);
+#endif
+#undef WORD_BITS
+#undef SHIFT_AMOUNT
+#else /* no trap ptrs */
+	return (unsigned long) val;
+#endif
+#else
+	return any_ptr;
+#endif
+}
+
 /* We use this one in pointer differencing and cast-to-integer. 
  * We return an unsigned long to avoid creating a pointless cast *back* to pointer. 
  * Instead, when doing pointer differencing, crunchbound takes on the task 
@@ -1087,7 +1119,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_d
 extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifdef LIBCRUNCH_EMULATE_SOFTBOUND
+#ifndef LIBCRUNCH_USING_TRAP_PTRS
 	return 1;
 #else
 	/* To make things go fast, we need to keep this to the minimum. We use the Austin et al's
@@ -1117,7 +1149,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_d
 #endif
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
 	_Bool success;
-#if defined(LIBCRUNCH_NO_SECONDARY_CHECKS) && defined(LIBCRUNCH_USING_TRAP_PTRS)
+#if defined(LIBCRUNCH_NO_SECONDARY_PATH) && defined(LIBCRUNCH_USING_TRAP_PTRS)
 	/* No secondary path, so have to handle traps here too -- both "one past" (trap)
 	 * and "back in" (detrap) cases.
 	 *
@@ -1135,7 +1167,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_d
 	{
 		if (unlikely(addr - base == size))
 		{
-			// no-op if derived was already trapped
+			// FIXME: needs to be "re-trap", i.e. no-op if derived was already trapped
 			*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST); // TODO: try with conditional trap
 		}
 		else
@@ -1156,13 +1188,21 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_d
 	 * adjustment of the old pointer? It depends how much we're adjusting it by.
 	 * FIXME: fill this in. */
 #else
+#if defined(LIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK)
+	success = addr - base <= size;
+	if (unlikely(addr - base == size))
+	{
+		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
+	}
+#else
 	success = addr - base < size;
 #endif
-#if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_CHECKS)
+#endif
+#if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_PATH)
 	if (!success) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
 #endif
-#ifdef LIBCRUNCH_NO_SECONDARY_CHECKS
+#ifdef LIBCRUNCH_NO_SECONDARY_PATH
 	if (!success)
 	{
 		__libcrunch_bounds_error(*p_derived, derivedfrom, derivedfrom_bounds);
@@ -1180,7 +1220,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_d
 extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
 extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
 {
-#ifdef LIBCRUNCH_EMULATE_SOFTBOUND
+#ifdef LIBCRUNCH_CHECK_DEREF
 	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
 	unsigned long size = __libcrunch_get_size(ptr_bounds, ptr);
 	if (likely((unsigned long) ptr - base < size))
@@ -1189,7 +1229,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(con
 	} else
 	{
 		__libcrunch_soft_deref_error_at(ptr, ptr_bounds, __libcrunch_get_pc());
-#if defined(LIBCRUNCH_ABORT_ON_OOB) || defined(LIBCRUNCH_EMULATE_SOFTBOUND)
+#ifdef LIBCRUNCH_ABORT_ON_OOB
 		abort();
 #endif
 	}
@@ -1200,7 +1240,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifdef LIBCRUNCH_NO_SECONDARY_CHECKS
+#ifdef LIBCRUNCH_NO_SECONDARY_PATH
 	abort();     // <-- this makes things go much faster!
 #endif
 	/* We're a secondary check. We assume the primary check has already happened, and failed. */
@@ -1225,7 +1265,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	unsigned long base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
 	unsigned long size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
 	if (!(pre_detrap_addr - naive_base >= size)) __builtin_unreachable();
-#ifndef LIBCRUNCH_EMULATE_SOFTBOUND
+#ifndef LIBCRUNCH_NO_SECONDARY_PATH
 	// ensure valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom))
 	{
@@ -1303,7 +1343,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifdef LIBCRUNCH_EMULATE_SOFTBOUND
+#ifndef LIBCRUNCH_USING_TRAP_PTRS
 	return 1;
 #else
 	/* PRECONDITIONS (a.k.a. things we don't need to check here): 
@@ -1413,7 +1453,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 			// && existing_shadow_bounds_valid
 			))
 	{
-#ifndef LIBCRUNCH_EMULATE_SOFTBOUND
+#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
 		val_bounds = val ? __fetch_bounds_ool(val, val, val_pointee_type) : __make_bounds(0, 1);
 		if (__libcrunch_bounds_invalid(val_bounds, val)) __builtin_unreachable();
 #else
@@ -1527,7 +1567,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	if (!ptr) return __libcrunch_make_invalid_bounds(derived);
 	if (!t) return __libcrunch_make_invalid_bounds(derived);
 	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from, t);
-#ifndef LIBCRUNCH_EMULATE_SOFTBOUND
+#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
 	if (unlikely(__libcrunch_bounds_invalid(bounds, ptr)))
 	{
 		bounds = __fetch_bounds_ool(ptr, derived, t);
@@ -1835,7 +1875,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_s
 extern inline void (__attribute__((always_inline,gnu_inline)) __primary_secondary_transition)(void);
 extern inline void (__attribute__((always_inline,gnu_inline)) __primary_secondary_transition)(void)
 {
-#ifdef LIBCRUNCH_NO_SECONDARY_CHECKS
+#ifdef LIBCRUNCH_NO_SECONDARY_PATH
 	abort();
 #else
 	++__libcrunch_primary_secondary_transitions;
