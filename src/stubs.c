@@ -32,7 +32,11 @@ static void init(void)
 	 * so that it can accurately track mmappings. To test for overriddenness,
 	 * we use a hidden alias for something that will be overridden by our
 	 * overrider, here the init flag. */
-	if (&__libcrunch_is_initialized == &our_init_flag) __liballocs_systrap_init();
+	//if (&__libcrunch_is_initialized == &our_init_flag) __liballocs_systrap_init();
+	/* HACK: the above is broken by LTO on gcc 5.x onwards (see bug 78407)
+	 * so instead use the is-really-loaded trick. */
+	_Bool libcrunch_is_loaded = (&__libcrunch_really_loaded);
+	if (!libcrunch_is_loaded) __liballocs_systrap_init();
 }
 
 void __libcrunch_scan_lazy_typenames(void *blah) {}

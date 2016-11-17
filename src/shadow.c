@@ -151,7 +151,6 @@ __thread unsigned long *volatile __bounds_sp;
 /* HACK -- but actually not useful in this object. */
 // _Bool __lookup_static_allocation_by_name(struct link_map *l, const char *name,
 // 	void **out_addr, size_t *out_len) __attribute__((weak));
-extern int __libcrunch_really_loaded __attribute__((weak));
 
 extern char **environ;
 static void init_shadow_space(void) // constructor (declared above)

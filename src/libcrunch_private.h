@@ -47,6 +47,9 @@ extern unsigned long __libcrunch_created_invalid_pointer;
 extern unsigned long __libcrunch_fetch_bounds_called;
 extern unsigned long __libcrunch_fetch_bounds_missed_cache;
 
+/* Only defined in the real libcrunch (preload version, not stubs) */
+extern int __libcrunch_really_loaded __attribute__((weak));
+
 void __libcrunch_uncache_is_a(const void *allocptr, size_t size);
 void __libcrunch_uncache_all(const void *allocptr, size_t size);
 
