@@ -2837,7 +2837,7 @@ __libcrunch_bounds_t
 			Elf64_Sym *found = symbol_lookup_in_object(obj_handle, i.dli_sname);
 			if (found)
 			{
-				void *base = sym_to_addr_in_object(obj_handle, found);
+				void *base = sym_to_addr(found);
 				void *limit = (char*) base + found->st_size;
 				return __make_bounds((unsigned long) base, (unsigned long) limit);
 			}
