@@ -1735,7 +1735,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
 		{
-			warnx("Code at %p received invalid bounds at offset %d for ptr value %p (expr %s)",
+			warnx("Code at %p received invalid bounds at offset %lu for ptr value %p (expr %s)",
 				__libcrunch_get_pc(), offset, ptr, debugstr);
 		}
 #endif
@@ -1836,7 +1836,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #ifndef LIBCRUNCH_NO_WARN_INVALID_BOUNDS
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
 		{
-			warnx("Code at %p was returned invalid bounds (by %s) at offset %d for ptr value %p",
+			warnx("Code at %p was returned invalid bounds (by %s) at offset %lu for ptr value %p",
 				__libcrunch_get_pc(), calleestr, offset, ptr);
 		}
 #endif
