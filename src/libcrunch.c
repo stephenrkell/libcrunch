@@ -22,7 +22,6 @@
 #ifdef USE_REAL_LIBUNWIND
 #include <libunwind.h>
 #endif
-#include "maps.h"
 #include "relf.h"
 #include "libcrunch.h"
 #include "libcrunch_private.h"
