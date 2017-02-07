@@ -18,36 +18,24 @@ sys.path.append(liballocs_base + "/tools/lang/c/lib")
 from allocscc import AllocsCC
 
 class CrunchCC(AllocsCC):
-        
-    def getCillyArgs(self, sourceFiles):
-        # PROBLEM: we only want to -include if we're compiling a C file. 
-        # Note that normally cilly will figure out when we're compiling
-        # a .S file, say, and only pass options that are relevant. But
-        # it would be asking too much in this case. 
-        
-        allSourceFilesAreC = True
-        for sourceFile in sourceFiles:
-            if sourceFile.lang != "c" and not sourceFile.endswith(".c"):
-                allSourceFilesAreC = False
-        
-        includeArgs = []
-        if len(sourceFiles) > 0 and allSourceFilesAreC:
-            # We can only do trumptr, and anything else that involves -include, 
-            # if we're compiling only C files.
-            includeArgs = ["-I" + self.getLibAllocsBaseDir() + "/include", \
+    
+    def getIncludeArgs(self, sourceFiles):
+        # PROBLEM: if we have a mixture of C and non-C, this will break.
+        return AllocsCC.getIncludeArgs(self, sourceFiles) + \
+             (["-I" + self.getLibAllocsBaseDir() + "/include", \
                 "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
                  "-include", \
-                os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
-               "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../dumpreftypes/dumpreftypes.cmxs"),  "--dodumpreftypes", \
-               "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"),  "--dotrumptr" \
-            ]
-        else:
-            self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
+                os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h"] \
+                  if (len(sourceFiles) > 0 and self.areAllSourceFilesC(sourceFiles)) else [])
         
-        # do dumpallocs et al *and* trumptr
+    def getCillyArgs(self, sourceFiles):
+        # PROBLEM: if we have a mixture of C and non-C, this will break.
         return AllocsCC.getCillyArgs(self, sourceFiles) + \
             ["--keepunused"] \
-            + includeArgs + \
+            + (["--load=%s" % (os.path.dirname(sys.argv[0]) + "/../dumpreftypes/dumpreftypes.cmxs"),  "--dodumpreftypes", \
+               "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), \
+               "--dotrumptr" \
+             ] if (len(sourceFiles) > 0 and self.areAllSourceFilesC(sourceFiles)) else []) + \
             ["-Wno-unused-variable", "-Wno-unused-label"]
             # We need the above -Wno-unused-... because CIL creates
             # some unused stuff (unavoidably, I believe) which will
