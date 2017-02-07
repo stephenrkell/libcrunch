@@ -63,6 +63,15 @@ enum dwarf_regs_x86_64
 #define MAX(x, y) (((x) < (y)) ? (y) : (x))
 #endif
 
+/* We need our own overriding versions of these, since the _stubs.so copies
+ * won't be available to the preload object. */
+void **__libcrunch_bounds_bases_region_00;
+void **__libcrunch_bounds_bases_region_2a;
+void **__libcrunch_bounds_bases_region_7a;
+unsigned long *__libcrunch_bounds_sizes_region_00;
+unsigned long *__libcrunch_bounds_sizes_region_2a;
+unsigned long *__libcrunch_bounds_sizes_region_7a;
+
 /* Heap storage sized using a "loose" data type, like void*,
  * is marked as loose, and becomes non-loose when a cast to a non-loose type.
  * Annoyingly, liballocs eagerly replaces alloc site info with uniqtype

@@ -22,6 +22,13 @@ unsigned long int __libcrunch_fetch_bounds_missed_cache = 0;
 unsigned long int __libcrunch_primary_secondary_transitions = 0;
 unsigned long int __libcrunch_fault_handler_fixups = 0;
 
+void **__libcrunch_bounds_bases_region_00;
+void **__libcrunch_bounds_bases_region_2a;
+void **__libcrunch_bounds_bases_region_7a;
+unsigned long *__libcrunch_bounds_sizes_region_00;
+unsigned long *__libcrunch_bounds_sizes_region_2a;
+unsigned long *__libcrunch_bounds_sizes_region_7a;
+
 void __liballocs_systrap_init(void);
 static void init(void) __attribute__((constructor));
 static void init(void)

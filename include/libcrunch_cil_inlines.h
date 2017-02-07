@@ -58,12 +58,12 @@ typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
 // //     ((((((1ul<<47) * BOUNDS_RATIO) / (BOUNDS_RATIO + 1)) >> 40) /*+ 1*/) << 40) \
 // // )
 
-void **__libcrunch_bounds_bases_region_00;
-void **__libcrunch_bounds_bases_region_2a;
-void **__libcrunch_bounds_bases_region_7a;
-unsigned long *__libcrunch_bounds_sizes_region_00;
-unsigned long *__libcrunch_bounds_sizes_region_2a;
-unsigned long *__libcrunch_bounds_sizes_region_7a;
+extern void **__libcrunch_bounds_bases_region_00;
+extern void **__libcrunch_bounds_bases_region_2a;
+extern void **__libcrunch_bounds_bases_region_7a;
+extern unsigned long *__libcrunch_bounds_sizes_region_00;
+extern unsigned long *__libcrunch_bounds_sizes_region_2a;
+extern unsigned long *__libcrunch_bounds_sizes_region_7a;
 
 #ifndef unlikely
 #define __libcrunch_defined_unlikely
