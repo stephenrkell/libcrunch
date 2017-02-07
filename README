@@ -12,32 +12,13 @@ but time will tell... it is still fairly immature and unevaluated. There
 is no temporal memory checking at present, but a GC is on the cards.
 
 All this is build on top of my other project, liballocs, which you
-should build (and probably understand) first. Nevertheless, for the
-impatient, if you're on a Debian-based x86-64 GNU/Linux machine with gcc
-4.9 or later, you can try the following, which is tested on Debian
-jessie.
+should build (and probably understand) first. Overall, the build looks
+something like this.
 
-$ apt-get install libelf-dev autoconf automake libtool pkg-config \
-    autoconf-archive libdwarf-dev ocaml ocaml-findlib \
-    openjdk-7-jre-headless make git g++ gawk libunwind-dev \
-    libc6-dev-i386 zlib1g-dev libc6-dbg gdb \
-    libboost-{iostreams,regex,serialization,filesystem}1.55-dev
 $ git clone https://github.com/stephenrkell/liballocs.git
-$ cd liballocs
-$ git submodule init
-$ git submodule update
-$ make -C contrib -jn         # for your favourite n
-$ ./autogen.sh
-$ . contrib/env.sh
-$ ./configure --prefix=/usr/local
-$ make -jn                    # for your favourite n
-$ cd ..
+$ cat liballocs/README
+(and follow those instructions, then...)
 $ export LIBALLOCS=`pwd`/liballocs
-$ sudo mkdir /usr/lib/allocsites # metadata will live here
-$ sudo chown root:staff /usr/lib/allocsites
-$ sudo chmod g+w /usr/lib/allocsites
-$ make -f "$LIBALLOCS"/tools/Makefile.allocsites \
-  /usr/lib/allocsites$( readlink -f /lib/x86_64-linux-gnu/libc.so.6 )-types.so
 $ git clone https://github.com/stephenrkell/libcrunch.git
 $ cd libcrunch
 $ make -jn                    # for your favourite n
@@ -83,11 +64,12 @@ Tips for non-Debian or non-jessie users:
   cxxabi.
 
 
-
 Liballocs models programs during execution in terms of /typed
 allocations/. It reifies data types, providing fast access to
-per-allocation metadata. Libcrunch extends this with check functions,
-thereby allowing assertions such as 
+per-allocation metadata. 
+
+Libcrunch extends this with check functions, thereby allowing assertions
+such as 
 
 assert(__is_aU(p, &__uniqtype_Widget));
 
