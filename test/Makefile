@@ -259,3 +259,4 @@ clean: # (delete anything whose name is a prefix of a .c file's and doesn't cont
 	rm -f $(filter-out .,$(patsubst %.c,%,$(shell find -name '*.c')))
 	rm -f $(filter-out .,$(patsubst %.cc,%,$(shell find -name '*.cc')))
 	find -name '*.cil.*'  -o -name '*.i' -o -name '*.o' -o -name '*.s' -o -name '*.allocs' | xargs rm -f
+	rm -f */check-stamp
