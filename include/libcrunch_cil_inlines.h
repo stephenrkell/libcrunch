@@ -180,22 +180,22 @@ extern struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache;
  * NOTE: kernel-pointer support is BROKEN with this definition. */
 #define LIBCRUNCH_TRAP_BOTTOM_MASK ((unsigned long)((1ul<<LIBCRUNCH_TRAP_TAG_SHIFT) - 1ul))
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aU )(const void *obj, const void *uniqtype);
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __inline_assert)(
 	int cond, const char *assertion, const char *file, unsigned int line, const char *func
 		);
-extern inline void (__attribute__((always_inline,gnu_inline)) __inline_assert)(
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __inline_assert)(
 	int cond, const char *assertion, const char *file, unsigned int line, const char *func
 		){
 	if (!cond) __assert_fail(assertion, file, line, func);
 }
 
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr);
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_detrap)(const void *any_ptr);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag);
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void);
-extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_init)(void)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_init)(void);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_init)(void)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (unlikely(! & __libcrunch_is_initialized))
@@ -215,8 +215,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_check_i
 	return 0;
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_local_bounds)(int idx, int limit);
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_local_bounds)(int idx, int limit)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_local_bounds)(int idx, int limit);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_local_bounds)(int idx, int limit)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	/* FIXME: actually do something more sophisticated involving trap pointers here. */
@@ -259,7 +259,7 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_
 	} while (0)
 #endif
 
-extern inline int __attribute__((always_inline,gnu_inline)) __is_aU(const void *obj, struct uniqtype *r)
+extern inline int __attribute__((always_inline,gnu_inline,used)) __is_aU(const void *obj, struct uniqtype *r)
 {
 	LIBCRUNCH_BASIC_CHECKS;
 	
@@ -288,7 +288,7 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aU(const void *
 	return __is_a_internal(obj, r);
 }
 
-extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *obj, const char *typestr)
+extern inline int __attribute__((always_inline,gnu_inline,used)) __is_aS(const void *obj, const char *typestr)
 {
 	LIBCRUNCH_BASIC_CHECKS;
 	
@@ -309,8 +309,8 @@ extern inline int __attribute__((always_inline,gnu_inline)) __is_aS(const void *
  * "&&mylabel" is a local variable, then does bogus UB optimisations on the
  * result. SIGH. Use an arch-specific sequence instead. DOUBLE SIGH: if we
  * write "callq 0" it gets relocated, so use .byte. */
-extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_pc)(void);
-extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_pc)(void)
+extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_pc)(void);
+extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_pc)(void)
 {
 	// mylabel: return &&mylabel;
 	void *addr;
@@ -324,8 +324,8 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 }
 void warnx(const char *fmt, ...);
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val __attribute__((unused)), unsigned long from_size __attribute__((unused)));
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val __attribute__((unused)), unsigned long from_size __attribute__((unused)))
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val __attribute__((unused)), unsigned long from_size __attribute__((unused)));
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val __attribute__((unused)), unsigned long from_size __attribute__((unused)))
 {
 #ifdef LIBCRUNCH_TRACE_WIDEN_INT_TO_POINTER
 	/* To get a return address, use a noinline nested function. */
@@ -333,8 +333,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_trace_
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache __attribute__((unused)));
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache __attribute__((unused)))
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache __attribute__((unused)));
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache __attribute__((unused)))
 {
 #ifdef DEBUG
 	unsigned visited_linear = 0u;
@@ -367,8 +367,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_check_
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_unlink )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_unlink )(struct __libcrunch_cache *cache, unsigned i)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_unlink )(struct __libcrunch_cache *cache, unsigned i);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_unlink )(struct __libcrunch_cache *cache, unsigned i)
 {
 	__libcrunch_check_cache_sanity(cache);
 	// unset validity and make this the next victim
@@ -386,8 +386,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_
 	__libcrunch_check_cache_sanity(cache);
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_push_head_mru )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_push_head_mru )(struct __libcrunch_cache *cache, unsigned i)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_push_head_mru )(struct __libcrunch_cache *cache, unsigned i);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_push_head_mru )(struct __libcrunch_cache *cache, unsigned i)
 {
 	__libcrunch_check_cache_sanity(cache);
 	/* Put us at the head of the LRU chain. */
@@ -404,8 +404,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_
 	__libcrunch_check_cache_sanity(cache);
 }	
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_bump_victim )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_bump_victim )(struct __libcrunch_cache *cache, unsigned i)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_victim )(struct __libcrunch_cache *cache, unsigned i);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_victim )(struct __libcrunch_cache *cache, unsigned i)
 {
 	__libcrunch_check_cache_sanity(cache);
 	// make sure we're not the next victim
@@ -419,8 +419,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_
 	__libcrunch_check_cache_sanity(cache);
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_bump_mru )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_bump_mru )(struct __libcrunch_cache *cache, unsigned i)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_mru )(struct __libcrunch_cache *cache, unsigned i);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_mru )(struct __libcrunch_cache *cache, unsigned i)
 {
 	__libcrunch_check_cache_sanity(cache);
 	if (cache->head_mru != i)
@@ -431,8 +431,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __libcrunch_cache_
 	__libcrunch_check_cache_sanity(cache);
 }
 
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline)) __libcrunch_cache_lookup )(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period);
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline)) __libcrunch_cache_lookup )(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
+extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup )(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period);
+extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup )(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	__libcrunch_check_cache_sanity(cache);
@@ -467,8 +467,8 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 	return (void*)0;
 }
 
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline)) __libcrunch_cache_lookup_notype )(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period);
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline)) __libcrunch_cache_lookup_notype )(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period)
+extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup_notype )(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period);
+extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup_notype )(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	__libcrunch_check_cache_sanity(cache);
@@ -501,8 +501,8 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 	return (void*)0;
 }
 
-extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline)) __libcrunch_get_cached_object_type)(const void *addr);
-extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline)) __libcrunch_get_cached_object_type)(const void *addr)
+extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_cached_object_type)(const void *addr);
+extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_cached_object_type)(const void *addr)
 {
 	struct __libcrunch_cache_entry_s *found = __libcrunch_cache_lookup_notype(
 		&__libcrunch_is_a_cache,
@@ -514,8 +514,8 @@ extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline)) __libc
 	return (void*)0;
 }
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype);
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const void *obj, const void *uniqtype)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aU )(const void *obj, const void *uniqtype)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!obj) 
@@ -572,8 +572,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aU )(const voi
 #endif
 }
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const void *obj, const char *typestr);
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const void *obj, const char *typestr)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aS) (const void *obj, const char *typestr);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aS) (const void *obj, const char *typestr)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!obj)
@@ -599,8 +599,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_aS) (const voi
 #endif
 }
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const void *obj, const void *uniqtype);
-extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const void *obj, const void *uniqtype)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __like_aU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __like_aU )(const void *obj, const void *uniqtype)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!obj) 
@@ -635,8 +635,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __like_aU )(const v
 #endif
 }
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __loosely_like_aU )(const void *obj, const void *uniqtype);
-extern inline int (__attribute__((always_inline,gnu_inline)) __loosely_like_aU )(const void *obj, const void *uniqtype)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __loosely_like_aU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __loosely_like_aU )(const void *obj, const void *uniqtype)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!obj) 
@@ -671,8 +671,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __loosely_like_aU )
 #endif
 }
 
-extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const void *obj, const char *s);
-extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const void *obj, const char *s)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __named_aU )(const void *obj, const char *s);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __named_aU )(const void *obj, const char *s)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!obj)
@@ -701,8 +701,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __named_aU )(const 
 	return 1;
 #endif
 }
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_refiningU )(const void *obj, const void *uniqtype);
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_refiningU )(const void *obj, const void *uniqtype)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_a_function_refiningU )(const void *obj, const void *uniqtype);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_a_function_refiningU )(const void *obj, const void *uniqtype)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!obj)
@@ -735,8 +735,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_function_ref
 	return 1;
 #endif
 }
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_pointer_of_degree)(const void *obj, int d);
-extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_pointer_of_degree)(const void *obj, int d)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_a_pointer_of_degree)(const void *obj, int d);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_a_pointer_of_degree)(const void *obj, int d)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!obj)
@@ -756,8 +756,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __is_a_pointer_of_d
 	return 1;
 #endif
 }
-extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)(const void *target, const void *value);
-extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)(const void *target, const void *value)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __can_hold_pointer)(const void *target, const void *value);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __can_hold_pointer)(const void *target, const void *value)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	if (!target)
@@ -783,8 +783,8 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __can_hold_pointer)
 	return 1;
 #endif
 }
-extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)(const void *ptr, unsigned short tag);
-extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)(const void *ptr, unsigned short tag)
+extern inline void *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_trap)(const void *ptr, unsigned short tag);
+extern inline void *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_trap)(const void *ptr, unsigned short tag)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	/* use XOR to allow kernel-mode pointers too (even though we generally don't support these) */
@@ -793,8 +793,8 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_trap)
 	return ptr;
 #endif
 }
-extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_like_trapped)(const void *maybe_trapped, const void *ptr);
-extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_like_trapped)(const void *maybe_trapped, const void *ptr)
+extern inline void *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_like_trapped)(const void *maybe_trapped, const void *ptr);
+extern inline void *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_like_trapped)(const void *maybe_trapped, const void *ptr)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	return (void *)(
@@ -812,8 +812,8 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_like_
 }
 /* This means "ensure the trap is exactly this, no matter what it was previously. 
  * The safe was is to detrap and retrap. */
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag);
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag)
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_retrap)(const void *any_ptr, unsigned short tag)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	unsigned long val = (unsigned long) any_ptr;
@@ -844,8 +844,8 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
  * We return an unsigned long to avoid creating a pointless cast *back* to pointer. 
  * Instead, when doing pointer differencing, crunchbound takes on the task 
  * of the scaling the difference by the pointer target type size. */
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr);
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_detrap)(const void *any_ptr)
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_detrap)(const void *any_ptr);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_detrap)(const void *any_ptr)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 // 	/* Recall that traps work by XORing with the non-canonical bits of the pointer,
@@ -876,8 +876,8 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 #endif
 }
 /* ONLY use untrap if you're *sure* you have a trapped pointer! */
-extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag __attribute__((unused)));
-extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untrap)(const void *trapptr, unsigned short tag __attribute__((unused)))
+extern inline void *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_untrap)(const void *trapptr, unsigned short tag __attribute__((unused)));
+extern inline void *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_untrap)(const void *trapptr, unsigned short tag __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 	///* XOR is handy like this */
@@ -888,8 +888,8 @@ extern inline void *(__attribute__((always_inline,gnu_inline)) __libcrunch_untra
 #endif
 }
 
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_ptr_trap_bits)(const void *maybe_trap/*, unsigned short tag*/);
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_ptr_trap_bits)(const void *maybe_trap/*, unsigned short tag*/)
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_ptr_trap_bits)(const void *maybe_trap/*, unsigned short tag*/);
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_ptr_trap_bits)(const void *maybe_trap/*, unsigned short tag*/)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 #ifdef LIBCRUNCH_USING_TRAP_PTRS
@@ -925,8 +925,8 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrun
 	return 0;
 #endif
 }
-extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap_ptr)(const void *maybe_trap/*, unsigned short tag*/);
-extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap_ptr)(const void *maybe_trap/*, unsigned short tag*/)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __libcrunch_is_trap_ptr)(const void *maybe_trap/*, unsigned short tag*/);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __libcrunch_is_trap_ptr)(const void *maybe_trap/*, unsigned short tag*/)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 #ifdef LIBCRUNCH_USING_TRAP_PTRS
@@ -940,15 +940,15 @@ extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_is_trap
 #endif
 }
 /*
-extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(const __libcrunch_bounds_t *in);
-extern inline int (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(const __libcrunch_bounds_t *in)
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __libcrunch_bounds_invalid)(const __libcrunch_bounds_t *in);
+extern inline int (__attribute__((always_inline,gnu_inline,used)) __libcrunch_bounds_invalid)(const __libcrunch_bounds_t *in)
 {
 	return in->base == (void*) -1;
 }
 */
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __make_bounds)(unsigned long base, unsigned long limit)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __make_bounds)(unsigned long base, unsigned long limit);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __make_bounds)(unsigned long base, unsigned long limit)
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return (__libcrunch_bounds_t) {
@@ -960,8 +960,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_max_bounds)(const void *ptr __attribute__((unused)));
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_max_bounds)(const void *ptr __attribute__((unused)))
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __libcrunch_max_bounds)(const void *ptr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __libcrunch_max_bounds)(const void *ptr __attribute__((unused)))
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* Max bounds are when the two values are equal, 
@@ -979,8 +979,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 }
 
-extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_base)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)));
-extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_base)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)))
+extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_base)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)));
+extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_base)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)))
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* The bounds are storing only the lower bits of the base.
@@ -1008,14 +1008,14 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 #endif
 }
 
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_get_size)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)));
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __libcrunch_get_size)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)))
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_size)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)));
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_size)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)))
 {
 	return bounds.size;
 }
 
-extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_limit)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)));
-extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_limit)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)))
+extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_limit)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)));
+extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_limit)(__libcrunch_bounds_t bounds, const void *derivedfrom __attribute__((unused)))
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return (char*) __libcrunch_get_base(bounds, derivedfrom)
@@ -1025,8 +1025,8 @@ extern inline void * (__attribute__((always_inline,gnu_inline)) __libcrunch_get_
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __libcrunch_make_invalid_bounds)(const void *ptr)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __libcrunch_make_invalid_bounds)(const void *ptr);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __libcrunch_make_invalid_bounds)(const void *ptr)
 {
 	/* Regardless of representation, to make invalid bounds we choose the ptr 
 	 * itself as the base, and 0 as the size. This *always* fails the Austin
@@ -1042,8 +1042,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 }
 
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, const void *ptr __attribute__((unused)));
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, const void *ptr __attribute__((unused)))
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, const void *ptr __attribute__((unused)));
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __libcrunch_bounds_invalid)(__libcrunch_bounds_t bounds, const void *ptr __attribute__((unused)))
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return bounds.size == 0;
@@ -1052,8 +1052,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_bound
 #endif
 }
 
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid_bounds_equal)(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2);
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid_bounds_equal)(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2)
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __libcrunch_valid_bounds_equal)(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2);
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __libcrunch_valid_bounds_equal)(__libcrunch_bounds_t bounds1, __libcrunch_bounds_t bounds2)
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return bounds1.base == bounds2.base && bounds1.size == bounds2.size;
@@ -1062,8 +1062,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __libcrunch_valid
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz)
 {
 	/* We understand trap ptrs */
 	const void *testptr;
@@ -1115,8 +1115,8 @@ extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const voi
 extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
 /* Both in libcrunch.c. */
 
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 #ifndef LIBCRUNCH_USING_TRAP_PTRS
@@ -1217,8 +1217,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __primary_check_d
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
-extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
 {
 #ifdef LIBCRUNCH_CHECK_DEREF
 	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
@@ -1236,8 +1236,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __check_deref)(con
 #endif
 }
 
-extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)));
-extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)))
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)));
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 #ifdef LIBCRUNCH_NO_SECONDARY_PATH
@@ -1339,8 +1339,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,3))) __se
 	return 1;
 #endif
 }
-extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
-extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
 #ifndef LIBCRUNCH_USING_TRAP_PTRS
@@ -1386,8 +1386,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,nonnull(1,2,3))) __
 #define BASE_STORED(ptr) ((void**)(((unsigned long) (ptr)) ^ 0x700000000000ul))
 #define SIZE_STORED(ptr) ((unsigned *)((((unsigned long) (ptr)) >> 1) + 0x080000000000ul))
 
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t);
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t)
+extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t);
+extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t)
 {
 	/* This is necessary for polymorphic code requiring "grubbed" pointer type info
 	 * -- see crunchbound. */
@@ -1419,8 +1419,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __shado
 	*(SIZE_STORED(stored_pointer_addr)) = (unsigned) val_bounds.size;
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type);
-extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type)
+extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type);
+extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __store_pointer_nonlocal)(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, struct uniqtype *val_pointee_type)
 {
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	unsigned long dest_addr __attribute__((unused)) = (unsigned long) dest;
@@ -1499,8 +1499,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,nonnull(1))) __store
 /* This is now and out-of-line path. */
 extern void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type);
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from)
 {
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	if (!ptr) return __make_bounds(0, 1);
@@ -1546,8 +1546,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	return __libcrunch_make_invalid_bounds(ptr);
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t)
 {
 	/* We could choose to inline or not:
 	 * - shadow-space lookup
@@ -1561,8 +1561,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 	return __fetch_bounds_from_shadow_space(ptr, loaded_from);
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
 {
 	if (!ptr) return __libcrunch_make_invalid_bounds(derived);
 	if (!t) return __libcrunch_make_invalid_bounds(derived);
@@ -1578,8 +1578,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,nonn
 }
 
 extern __thread unsigned long *volatile __bounds_sp;
-extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bounds_stack_space)(unsigned long n);
-extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bounds_stack_space)(unsigned long n)
+extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __alloc_bounds_stack_space)(unsigned long n);
+extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __alloc_bounds_stack_space)(unsigned long n)
 {
 	__bounds_sp -= (n % sizeof (unsigned long) == 0) ? 
 		(n / sizeof (unsigned long))
@@ -1639,8 +1639,8 @@ extern inline void *(__attribute__((always_inline,gnu_inline,malloc)) __alloc_bo
  * - A. obviously yes. so what do we do? 
  */
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argument_bounds)(__libcrunch_bounds_t bounds);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argument_bounds)(__libcrunch_bounds_t bounds)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_argument_bounds)(__libcrunch_bounds_t bounds);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_argument_bounds)(__libcrunch_bounds_t bounds)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	__libcrunch_bounds_t *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
@@ -1657,8 +1657,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_argum
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_base_limit)(const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_argument_bounds_base_limit)(const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_argument_bounds_base_limit)(const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	__libcrunch_bounds_t *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
@@ -1675,8 +1675,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bo
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from, struct uniqtype *t);
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from, struct uniqtype *t)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from, struct uniqtype *t);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_push_argument_bounds)(const void *ptr, void **loaded_from, struct uniqtype *t)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	__libcrunch_bounds_t *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
@@ -1693,8 +1693,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_a
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_cookie)(const void *callee);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bounds_cookie)(const void *callee)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_argument_bounds_cookie)(const void *callee);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_argument_bounds_cookie)(const void *callee)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	void **c = __alloc_bounds_stack_space(sizeof (void*));
@@ -1704,8 +1704,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_argument_bo
 #endif
 }
 
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __tweak_argument_bounds_cookie)(const void *callee);
-extern inline _Bool (__attribute__((always_inline,gnu_inline)) __tweak_argument_bounds_cookie)(const void *callee)
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __tweak_argument_bounds_cookie)(const void *callee);
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __tweak_argument_bounds_cookie)(const void *callee)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* Consume the cookie, by changing it to an address which is unique to the callee 
@@ -1717,8 +1717,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline)) __tweak_argument_
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)));
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)))
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* Were we passed anything? 
@@ -1761,8 +1761,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_result_bounds)(_Bool really, __libcrunch_bounds_t bounds);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_result_bounds)(_Bool really, __libcrunch_bounds_t bounds)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_result_bounds)(_Bool really, __libcrunch_bounds_t bounds);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_result_bounds)(_Bool really, __libcrunch_bounds_t bounds)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	if (really)
@@ -1782,8 +1782,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_local_resul
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(_Bool really, const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit);
-extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_bounds_base_limit)(_Bool really, const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_result_bounds_base_limit)(_Bool really, const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_result_bounds_base_limit)(_Bool really, const void *ptr __attribute__((unused)), unsigned long base, unsigned long limit)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	if (really)
@@ -1803,8 +1803,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __push_result_boun
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from, struct uniqtype *t);
-extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from, struct uniqtype *t)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from, struct uniqtype *t);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_push_result_bounds)(_Bool really, const void *ptr, void **loaded_from, struct uniqtype *t)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	if (really)
@@ -1824,8 +1824,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __fetch_and_push_r
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)));
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)))
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* If the cookie hasn't been tweaked, do nothing. */
@@ -1862,8 +1862,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline)) __
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void *saved_ptr);
-extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_stack)(void *saved_ptr)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_bounds_stack)(void *saved_ptr);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_bounds_stack)(void *saved_ptr)
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	__bounds_sp = (unsigned long *) saved_ptr;
@@ -1872,8 +1872,8 @@ extern inline void (__attribute__((always_inline,gnu_inline)) __cleanup_bounds_s
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline)) __primary_secondary_transition)(void);
-extern inline void (__attribute__((always_inline,gnu_inline)) __primary_secondary_transition)(void)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(void);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(void)
 {
 #ifdef LIBCRUNCH_NO_SECONDARY_PATH
 	abort();
