@@ -16,6 +16,15 @@ export ALLOCSITES_BASE
 export LIBCRUNCH_BASE := $(realpath $(dir $(THIS_MAKEFILE))/..)
 export LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY := 1
 
+# To support differential testing against implementations, each test
+# is allowed to provide a list of the frontends it wants to test.
+# It should do this in mk.inc.
+# What does run-% or checkrun-% do in these circumstances?
+# What do we do with the %/check-stamp files?
+# Where do the builds live?
+# First step: each test is built and run in a FRONTEND dir.
+FRONTEND := crunchcc
+
 CRUNCHCC ?= $(LIBCRUNCH_BASE)/frontend/c/bin/crunchcc
 #$(warning in Makefile, CRUNCHCC is $(CRUNCHCC))
 CRUNCHCXX ?= $(LIBCRUNCH_BASE)/frontend/c++/bin/crunchc++
@@ -58,13 +67,13 @@ endif
 
 export PRELOAD := "$(LIBCRUNCH)"
 
-INCLUDE_MK_INC = `if test -e $(dir $(realpath $(THIS_MAKEFILE)))/$*/mk.inc; then /bin/echo -f mk.inc; else true; fi`
+INCLUDE_MK_INC = `if test -e $(dir $(realpath $(THIS_MAKEFILE)))/$*/mk.inc; then /bin/echo -f ../mk.inc; else true; fi`
 
-default: checkall
+default: checkalltests
 
-checkall: $(patsubst %,checkrun-%,$(cases))
-.PRECIOUS: $(patsubst %,%/check-stamp,$(cases))
-ifeq ($(realpath .),$(realpath $(dir $(THIS_MAKEFILE))))
+checkalltests: $(patsubst %,checkrun-%,$(cases))
+.PRECIOUS: $(patsubst %,%/$(FRONTEND)/check-stamp,$(cases))
+ifeq ($(MAKECMDGOAL),)
 $(warning cases are $(cases))
 endif
 
@@ -72,9 +81,9 @@ RERUN_TESTS_ON_CHANGE := $(LIBCRUNCH) $(shell find $(dir $(THIS_MAKEFILE))/../fr
 
 # Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
 # Note that bounds errors never do this. HMM. Soon, type errors might not either.
-checkrun-fail-bounds-type-%: fail-bounds-type-%/check-stamp
+checkrun-fail-bounds-type-%: fail-bounds-type-%/$(FRONTEND)/check-stamp
 	true # remembered pass of fail-bounds-type-$*
-fail-bounds-type-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+fail-bounds-type-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "expected-fail case is fail-bounds-type-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -83,9 +92,9 @@ fail-bounds-type-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 		    match "       failed otherwise" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
 		(tail -n26 $$err; false)
-checkrun-fail-bounds-%: fail-bounds-%/check-stamp
+checkrun-fail-bounds-%: fail-bounds-%/$(FRONTEND)/check-stamp
 	true # remembered pass of fail-bounds-$*
-fail-bounds-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+fail-bounds-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "expected-fail case is fail-bounds-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -96,9 +105,9 @@ fail-bounds-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 		(tail -n26 $$err; false)
 
 # Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
-checkrun-fail-%: fail-%/check-stamp
+checkrun-fail-%: fail-%/$(FRONTEND)/check-stamp
 	true # remembered pass of fail-$*
-fail-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+fail-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "expected-fail case is fail-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -112,18 +121,18 @@ fail-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 checkrun-ignore-%:
 	true # remembered pass of ignore-$*
 # Some cases are expected to abort the program (assertion failed, segfault, etc.)
-checkrun-abort-%: abort-%/check-stamp
+checkrun-abort-%: abort-%/$(FRONTEND)/check-stamp
 	true # remembered pass of abort-$*
-abort-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+abort-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "expected-fail case is abort-$*" && \
 	out=$$( echo -n "fout is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "ferr is " 1>&2; mktemp | tee /dev/stderr ) && \
 	if $(MAKE) cleanrun-abort-$* 1>$$out 2>$$err; then false; else touch "$@"; fi
 
 # Some cases are expected to succeed without liballocs being involved.
-checkrun-noquery-%: noquery-%/check-stamp
+checkrun-noquery-%: noquery-%/$(FRONTEND)/check-stamp
 	true # remembered pass of noquery-$*
-noquery-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+noquery-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "no-query case is noquery-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -131,9 +140,9 @@ noquery-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
            ! grep '^queries handled.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
 # SoftBound should also never call liballocs
-checkrun-softbound-%: softbound-%/check-stamp
+checkrun-softbound-%: softbound-%/$(FRONTEND)/check-stamp
 	true # remembered pass of softbound-$*
-softbound-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+softbound-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "case is softbound-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -143,9 +152,9 @@ softbound-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
                 ! grep 'calls to __fetch_bounds:.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
 # Bounds cases might not report passed type checks
-checkrun-bounds-%: bounds-%/check-stamp
+checkrun-bounds-%: bounds-%/$(FRONTEND)/check-stamp
 	true # remembered pass of bounds-$*
-bounds-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+bounds-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "case is bounds-$*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -155,9 +164,9 @@ bounds-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 		(tail -n26 $$err; false)
 
 # Trap bounds cases should report OOB pointers
-checkrun-trap-bounds-%: trap-bounds-%/check-stamp
+checkrun-trap-bounds-%: trap-bounds-%/$(FRONTEND)/check-stamp
 	true # remembered pass of trap-bounds-$*
-trap-bounds-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+trap-bounds-%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "case is trap-bounds-$*" && \
 	out=$$( echo -n "tout is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "terr is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -171,9 +180,9 @@ trap-bounds-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 # -- zero or more checks passed (trivially or by lazy typing)
 # -- zero checks aborted
 # -- zero checks failed
-checkrun-%: %/check-stamp
+checkrun-%: %/$(FRONTEND)/check-stamp
 	true # remembered pass of $*
-%/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+%/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "case is $*" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -186,34 +195,34 @@ checkrun-%: %/check-stamp
 		(tail -n32 $$err; false)
 
 # Some cases are special and require only an exit status of zero
-checkrun-hello: hello/check-stamp
-hello/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-hello: hello/$(FRONTEND)/check-stamp
+hello/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-hello >/dev/null 2>&1 && touch "$@"
-checkrun-hello-c++: hello-c++/check-stamp
-hello-c++/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-hello-c++: hello-c++/$(FRONTEND)/check-stamp
+hello-c++/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-hello-c++ >/dev/null 2>&1 && touch "$@"
-checkrun-hello-errno: hello-errno/check-stamp
-hello-errno/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-hello-errno: hello-errno/$(FRONTEND)/check-stamp
+hello-errno/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-hello-errno >/dev/null 2>&1 && touch "$@"
-checkrun-hello-qualified-char: hello-qualified-char/check-stamp
-hello-qualified-char/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-hello-qualified-char: hello-qualified-char/$(FRONTEND)/check-stamp
+hello-qualified-char/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-hello-qualified-char >/dev/null 2>&1 && touch "$@"
-checkrun-random: random/check-stamp
-random/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-random: random/$(FRONTEND)/check-stamp
+random/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-random >/dev/null 2>&1 && touch "$@"
-checkrun-pointer-degree: pointer-degree/check-stamp
-pointer-degree/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-pointer-degree: pointer-degree/$(FRONTEND)/check-stamp
+pointer-degree/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-pointer-degree >/dev/null 2>&1 && touch "$@"
-checkrun-bounds-simple: bounds-simple/check-stamp
-bounds-simple/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-bounds-simple: bounds-simple/$(FRONTEND)/check-stamp
+bounds-simple/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-bounds-simple >/dev/null 2>&1 && touch "$@"
-checkrun-bounds-diff: bounds-diff/check-stamp
-bounds-diff/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-bounds-diff: bounds-diff/$(FRONTEND)/check-stamp
+bounds-diff/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-bounds-diff >/dev/null 2>&1 && touch "$@"
 
 # Some cases are special and have their own matching criteria
-checkrun-lazy-typing: lazy-typing/check-stamp
-lazy-typing/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+checkrun-lazy-typing: lazy-typing/$(FRONTEND)/check-stamp
+lazy-typing/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "case is lazy-typing" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
@@ -225,38 +234,48 @@ lazy-typing/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 		    touch "$@" || \
 		(tail -n26 $$err; false)
 
+# These targets run with pwd of the test build dir
 _onlyrun-%:
 	LD_PRELOAD=$(PRELOAD) ./$*
 
 _onlygdbrun-%:
 	gdb --eval-command "set environment LD_PRELOAD=$(PRELOAD)" --args ./$* ./$*
 
+vpath %.c ..
+vpath %.cc ..
+vpath %.cpp ..
+
+# These are the main targets
 build-%:
-	$(MAKE) -C "$*" $(INCLUDE_MK_INC) -f ../Makefile "$*" 
+	mkdir -p "$*"/$(FRONTEND)
+	$(MAKE) -C "$*"/$(FRONTEND) $(INCLUDE_MK_INC) -f ../../Makefile "$*" 
 
 run-%:
-	$(MAKE) build-$* && ( $(MAKE) -C "$*" $(INCLUDE_MK_INC) -f ../Makefile _onlyrun-$* )
+	$(MAKE) build-$* && ( $(MAKE) -C "$*"/$(FRONTEND) $(INCLUDE_MK_INC) -f ../../Makefile _onlyrun-$* )
 
 cleanbuild-%:
-	$(MAKE) -C $* $(INCLUDE_MK_INC) -f ../Makefile clean && \
-	$(MAKE) build-$* 
+	$(MAKE) clean-$*
+	$(MAKE) build-$*
 
 cleanrun-%: 
-	$(MAKE) -C $* $(INCLUDE_MK_INC) -f ../Makefile clean && \
+	$(MAKE) clean-$*
 	$(MAKE) run-$*
 
 gdbrun-%: # run the test case with itself as input
-	$(MAKE) -C "$*" $(INCLUDE_MK_INC) "$*" && ( cd "$*" && $(MAKE) $(INCLUDE_MK_INC) -f ../Makefile _onlygdbrun-$* )
+	$(MAKE) -C "$*"/$(FRONTEND) $(INCLUDE_MK_INC) "$*"
+	$(MAKE) -C "$*"/$(FRONTEND) $(INCLUDE_MK_INC) -f ../../Makefile _onlygdbrun-$*
 
 gdbcleanrun-%:
-	$(MAKE) -C $* $(INCLUDE_MK_INC) -f ../Makefile clean && $(MAKE) gdbrun-$*
+	$(MAKE) clean-$*
+	$(MAKE) gdbrun-$*
 
 clean-%:
-	$(MAKE) -C "$*" $(INCLUDE_MK_INC) -f $(realpath $(THIS_MAKEFILE)) clean
+	if [ -d "$*"/$(FRONTEND) ]; then $(MAKE) -C "$*"/$(FRONTEND) $(INCLUDE_MK_INC) -f $(realpath $(THIS_MAKEFILE)) clean; fi
 
 # generic clean rule that we can run from test dirs too (with $(MAKE) -f ../Makefile)
 clean: # (delete anything whose name is a prefix of a .c file's and doesn't contain a dot)
 	rm -f $(filter-out .,$(patsubst %.c,%,$(shell find -name '*.c')))
 	rm -f $(filter-out .,$(patsubst %.cc,%,$(shell find -name '*.cc')))
 	find -name '*.cil.*'  -o -name '*.i' -o -name '*.o' -o -name '*.s' -o -name '*.allocs' | xargs rm -f
-	rm -f */check-stamp
+	find -name '*.ii' | xargs rm -f
+	rm -f */*/check-stamp
