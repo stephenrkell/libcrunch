@@ -1,4 +1,1 @@
-CRUNCHCC := $(LIBCRUNCH_BASE)/frontend/c/bin/crunchxcc
-export CRUNCHCC
-CC := $(CRUNCHCC)
-
+export CC := $(LIBCRUNCH_BASE)/frontend/c/bin/crunchxcc

@@ -1,6 +1,1 @@
-#CRUNCHCC := $(LIBCRUNCH_BASE)/frontend/c/bin/crunchAcc
-CRUNCHCC := $(LIBCRUNCH_BASE)/frontend/c/bin/crunchxcc
-export CRUNCHCC
-CC := $(CRUNCHCC)
-$(warning in mk.inc, CRUNCHCC is $(CRUNCHCC))
-$(warning in mk.inc, CC is $(CC))
+export CC := $(LIBCRUNCH_BASE)/frontend/c/bin/crunchxcc
