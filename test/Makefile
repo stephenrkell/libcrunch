@@ -11,11 +11,15 @@ export CFLAGS
 UNIQTYPES_BASE ?= /usr/lib/allocsites
 ALLOCSITES_BASE ?= /usr/lib/allocsites
 LIBALLOCS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../liballocs)
+LIBALLOCS_BASE ?= $(LIBALLOCS)
 
 export UNIQTYPES_BASE
 export ALLOCSITES_BASE
+export LIBALLOCS
+export LIBALLOCS_BASE
 
-export LIBCRUNCH_BASE := $(realpath $(dir $(THIS_MAKEFILE))/..)
+export LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/..)
+export LIBCRUNCH_BASE := $(LIBCRUNCH)
 export LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY := 1
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
