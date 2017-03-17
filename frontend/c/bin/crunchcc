@@ -20,7 +20,7 @@ from allocscc import AllocsCC
 class CrunchCC(AllocsCC):
     
     def getIncludeArgs(self, sourceFiles):
-        # PROBLEM: if we have a mixture of C and non-C, this will break.
+        # PROBLEM: if we have a mixture of C and preprocessed-but-non-C, this will break.
         return AllocsCC.getIncludeArgs(self, sourceFiles) + \
              (["-I" + self.getLibAllocsBaseDir() + "/include", \
                 "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \

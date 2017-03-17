@@ -45,7 +45,7 @@ class CrunchSBCC(CrunchCC):
                 os.path.dirname(__file__) + "/../../../include/stubgen_softbound.h" \
         ]
         
-    def getExtraLinkArgs(self, passedThroughArgs):
+    def getExtraLinkArgs(self):
         return [os.path.dirname(__file__) + "/../../../lib/libcrunch_wrappers.o", \
                 "-Wl,@" + os.path.dirname(__file__) + "/../../../lib/wrap.ldopts"]
 
