@@ -30,7 +30,7 @@ else
 LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
 endif
 
-cases := $(filter-out checks.sh,$(filter-out rename-case.sh,$(wildcard [-a-z]*)))
+cases := $(filter-out checks.sh,$(filter-out rename-case.sh,$(notdir $(wildcard $(TESTDIR)/[-a-z]*))))
 
 LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/../lib/libcrunch_preload.so)
 
