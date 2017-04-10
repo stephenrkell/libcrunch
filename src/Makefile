@@ -3,10 +3,12 @@ SRCROOT := $(dir $(THIS_MAKEFILE))../
 srcdir := $(dir $(THIS_MAKEFILE))
 
 include $(SRCROOT)/config.mk
-
+#$(warning meanwhile TRAP_SYSCALLS is $(TRAP_SYSCALLS))
 TRAP_SYSCALLS ?= $(realpath $(SRCROOT)/../trap-syscalls)
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
 LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
+
+#$(warning finally TRAP_SYSCALLS is $(TRAP_SYSCALLS))
 
 #CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS 
 CFLAGS += -DLIBCRUNCH_USING_TRAP_PTRS
