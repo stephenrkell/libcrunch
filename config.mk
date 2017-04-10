@@ -9,6 +9,7 @@ LIBDWARFPP ?= $(LIBALLOCS)/contrib/libdwarfpp
 LIBSRK31CXX ?= $(LIBALLOCS)/contrib/libsrk31cxx
 LIBCXXFILENO ?= $(LIBALLOCS)/contrib/libcxxfileno
 LIBDLBIND ?= $(LIBALLOCS)/contrib/libdlbind
+TRAP_SYSCALLS ?= $(LIBALLOCS)/contrib/trap-syscalls
 
 export CXXFLAGS += \
 -I$(LIBCXXGEN)/include \

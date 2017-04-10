@@ -1,6 +1,9 @@
 THIS_MAKEFILE := $(realpath $(lastword $(MAKEFILE_LIST)))
 SRCROOT := $(dir $(THIS_MAKEFILE))../
 srcdir := $(dir $(THIS_MAKEFILE))
+
+include $(SRCROOT)/config.mk
+
 TRAP_SYSCALLS ?= $(realpath $(SRCROOT)/../trap-syscalls)
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
 LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
