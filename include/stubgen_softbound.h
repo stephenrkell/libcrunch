@@ -3,7 +3,7 @@
 
 #ifdef LIBCRUNCH_VOID_POINTERS_HAVE_BOUNDS
 
-#define do_wrapper_init(name) \
+#define do_caller_wrapper_init(name) \
   _Bool __caller_is_inst = __tweak_argument_bounds_cookie(__wrap_## name); \
   int argi = 0; \
   int argpeek_off = 0; \
@@ -30,6 +30,9 @@ extern unsigned long __liballocs_get_alloc_size(const void *obj);
   
 #define do_ret_i(name) \
   __bounds_sp = saved_bsp; \
+  
+#define do_ret_void(name) \
+  __bounds_sp = saved_bsp;
 
 #define do_arginit_p(name) \
   __libcrunch_bounds_t argbound_ ## name = __peek_argument_bounds(__caller_is_inst, argpeek_off++, \
