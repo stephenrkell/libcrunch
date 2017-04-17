@@ -44,10 +44,15 @@ class CrunchSBCC(CrunchCC):
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/stubgen_softbound.h" \
         ]
-        
+    
+    # this one is for a final link
     def getExtraLinkArgs(self):
         return [os.path.dirname(__file__) + "/../../../lib/libcrunch_wrappers.o", \
                 "-Wl,@" + os.path.dirname(__file__) + "/../../../lib/wrap.ldopts"]
+    
+    # this one is for the *.linked.o big-object link step
+    def getExtraRelocLinkArgs(self):
+        return []
 
     def getCillyArgs(self, sourceFiles):
         # PROBLEM: we only want to -include if we're compiling a C file. 
@@ -82,7 +87,6 @@ class CrunchSBCC(CrunchCC):
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
         
-        # do dumpallocs et al *and* trumptr
         return AllocsCC.getCillyArgs(self, sourceFiles) + \
             ["--keepunused"] \
             + includeArgs + \
