@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#define LIBCRUNCH_TRACE_BOUNDS_STACK 1 /* for debugging */
 #include <stdio.h>
 #include <stdint.h>
 #include <dlfcn.h>
@@ -6,6 +7,7 @@
 #include <dirent.h>
 #include <ctype.h>
 #include "libcrunch_private.h"
+
 #include "libcrunch_cil_inlines.h"
 
 /* This is a rewrite of softboundcets-wrappers.c, by Santosh Nagarakatte 
@@ -563,7 +565,14 @@ DECLARE(char*, fgets, char *s, int size, FILE *stream)
 //   __softboundcets_strdup_handler(ret_ptr);
 //   return ret_ptr;
 //  }
-// 
+
+DECLARE(char*, strdup, const char *s)
+{
+	BEGIN(strdup);
+	char *ret_ptr = REAL(strdup)(s);
+	RETURN_PTR(ret_ptr, ret_ptr, ret_ptr + strlen(ret_ptr) + 1);
+}
+
 // __WEAK_INLINE char* softboundcets___strdup(const char* s){
 // 
 //   void* ret_ptr = strdup(s);
@@ -994,5 +1003,14 @@ static void init(void)
 	p = (void**) __ctype_tolower_loc();
 	*BASE_STORED(p) = *p;
 	*SIZE_STORED(p) = 384 * sizeof (int);
+	p = (void**) &stdin;
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = sizeof (FILE);
+	p = (void**) &stdout;
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = sizeof (FILE);
+	p = (void**) &stderr;
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = sizeof (FILE);
 }
 
