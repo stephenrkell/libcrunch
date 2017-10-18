@@ -1062,7 +1062,7 @@ static void report_failure(const void *site, long *p_repeat_suppression_count,
 	 \
 	if (__builtin_expect(err != NULL, 0)) goto out; /* liballocs has already counted this abort */ \
 	 \
-	signed target_offset_within_uniqtype = (char*) obj - (char*) alloc_start; \
+	unsigned target_offset_within_uniqtype = (char*) obj - (char*) alloc_start; \
 	 \
 	if (alloc_uniqtype->make_precise) \
 	{ \
@@ -1078,7 +1078,7 @@ static void report_failure(const void *site, long *p_repeat_suppression_count,
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype; \
 	struct uniqtype *cur_containing_uniqtype = NULL; \
 	struct uniqtype_rel_info *cur_contained_pos = NULL; \
-	signed cumulative_offset_searched = 0;
+	unsigned cumulative_offset_searched = 0;
 
 
 int __is_a_internal(const void *obj, const void *arg)
@@ -1276,7 +1276,7 @@ int __like_a_internal(const void *obj, const void *arg)
 					== pointer_to___uniqtype__unsigned_char), 0))
 		{
 			// we will skip this field in the test type
-			signed target_off =
+			unsigned target_off =
 				UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype) > i_test_subobj + 1
 			 ?  test_uniqtype->related[i_test_subobj + 1].un.memb.off
 			 :  test_uniqtype->related[i_test_subobj].un.memb.off
@@ -1336,13 +1336,13 @@ out:
 
 struct offset_and_name_args
 {
-	signed offset;
+	unsigned offset;
 	const char *name;
 };
 static int offset_and_name_match_cb(struct uniqtype *spans, 
-		signed span_start_offset, unsigned depth, 
+		unsigned span_start_offset, unsigned depth, 
 		struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-		signed containing_span_start_offset, void *arg)
+		unsigned containing_span_start_offset, void *arg)
 {
 	struct offset_and_name_args *args = arg;
 	
@@ -1357,7 +1357,7 @@ int __named_a_internal(const void *obj, const void *arg)
 	DO_QUERY(obj)
 
 	/* Look for a matching subobject. */
-	signed target_offset = (char*) obj - (char*) alloc_start;
+	unsigned target_offset = (char*) obj - (char*) alloc_start;
 	struct offset_and_name_args args = { target_offset, test_typestr };
 	int ret = __liballocs_walk_subobjects_spanning(target_offset,
 			alloc_uniqtype, 
@@ -1644,11 +1644,11 @@ static _Bool is_generic_ultimate_pointee(struct uniqtype *ultimate_pointee_type)
 		|| ultimate_pointee_type == pointer_to___uniqtype__unsigned_char;
 }
 
-static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d, signed target_offset)
+static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d, unsigned target_offset)
 {
 	struct uniqtype *cur_containing_uniqtype = NULL;
 	struct uniqtype_rel_info *cur_contained_pos = NULL;
-	signed target_offset_within_uniqtype = target_offset;
+	unsigned target_offset_within_uniqtype = target_offset;
 
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
 	 * are atomic. */
@@ -1819,7 +1819,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 					== pointer_to___uniqtype__unsigned_char), 0))
 		{
 			// we will skip this field in the test type
-			signed target_off =
+			unsigned target_off =
 				UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype) > i_test_subobj + 1
 			 ?  test_uniqtype->related[i_test_subobj + 1].un.memb.off
 			 :  test_uniqtype->related[i_test_subobj].un.memb.off
@@ -1956,11 +1956,11 @@ out:
 struct match_cb_args
 {
 	struct uniqtype *type_of_pointer_being_stored_to;
-	signed target_offset;
+	unsigned target_offset;
 };
-static int match_pointer_subobj_strict_cb(struct uniqtype *spans, signed span_start_offset, 
+static int match_pointer_subobj_strict_cb(struct uniqtype *spans, unsigned span_start_offset, 
 		unsigned depth, struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-		signed containing_span_start_offset, void *arg)
+		unsigned containing_span_start_offset, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
 	struct uniqtype *t = spans;
@@ -1973,9 +1973,9 @@ static int match_pointer_subobj_strict_cb(struct uniqtype *spans, signed span_st
 	}
 	return 0;
 }
-static int match_pointer_subobj_generic_cb(struct uniqtype *spans, signed span_start_offset, 
+static int match_pointer_subobj_generic_cb(struct uniqtype *spans, unsigned span_start_offset, 
 		unsigned depth, struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-		signed containing_span_start_offset, void *arg)
+		unsigned containing_span_start_offset, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
 	struct uniqtype *t = spans;
@@ -1996,7 +1996,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	size_t obj_alloc_size_bytes;
 	struct uniqtype *obj_alloc_uniqtype;
 	const void *obj_alloc_site;
-	signed obj_target_offset_within_uniqtype;
+	unsigned obj_target_offset_within_uniqtype;
 	struct uniqtype *cur_obj_within_alloc_uniqtype;
 	struct uniqtype *obj_cur_containing_uniqtype;
 	struct uniqtype_rel_info *obj_cur_contained_pos;
@@ -2029,7 +2029,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	unsigned long value_alloc_size_bytes = (unsigned long) -1;
 	struct uniqtype *value_alloc_uniqtype = (struct uniqtype *)0;
 	const void *value_alloc_site = NULL;
-	signed value_target_offset_within_uniqtype = 0;
+	unsigned value_target_offset_within_uniqtype = 0;
 	_Bool value_contract_is_specialisable = 0;
 	
 	/* Might we have a pointer? */
@@ -2214,19 +2214,19 @@ out:
 struct bounds_cb_arg
 {
 	struct uniqtype *passed_in_t;
-	signed target_offset;
+	unsigned target_offset;
 	_Bool success;
 	struct uniqtype *matched_t;
 	struct uniqtype *innermost_containing_array_t;
-	signed innermost_containing_array_type_span_start_offset;
+	unsigned innermost_containing_array_type_span_start_offset;
 	struct uniqtype *outermost_containing_array_t;
-	signed outermost_containing_array_type_span_start_offset;
+	unsigned outermost_containing_array_type_span_start_offset;
 	size_t accum_array_bounds;
 };
 
-static int bounds_cb(struct uniqtype *spans, signed span_start_offset, unsigned depth,
+static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigned depth,
 	struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-	signed containing_span_start_offset, void *arg_void)
+	unsigned containing_span_start_offset, void *arg_void)
 {
 	struct bounds_cb_arg *arg = (struct bounds_cb_arg *) arg_void;
 
@@ -2699,7 +2699,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 	{
 		/* descend containment until we get a pointer. */
 		_Bool success = 1;
-		signed target_offset = 0;
+		unsigned target_offset = 0;
 		struct uniqtype *cur_containing_uniqtype = NULL;
 		struct uniqtype_rel_info *cur_contained_pos = NULL;
 		while (success)
