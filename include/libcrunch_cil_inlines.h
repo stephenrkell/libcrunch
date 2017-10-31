@@ -134,11 +134,13 @@ extern unsigned long __libcrunch_aborted_typestr __attribute__((weak));
 extern unsigned long __libcrunch_succeeded __attribute__((weak));
 extern unsigned long __libcrunch_failed __attribute__((weak));
 extern unsigned long __libcrunch_is_a_hit_cache __attribute__((weak));
-extern unsigned long __libcrunch_checked_pointer_adjustments __attribute__((weak));
 extern unsigned long __libcrunch_created_invalid_pointer __attribute__((weak));
 extern unsigned long __libcrunch_fetch_bounds_called __attribute__((weak));
 extern unsigned long __libcrunch_fetch_bounds_missed_cache __attribute__((weak));
 extern unsigned long __libcrunch_primary_secondary_transitions __attribute__((weak));
+extern unsigned long __libcrunch_ptr_derivations __attribute__((weak));
+extern unsigned long __libcrunch_ptr_derefs __attribute__((weak));
+extern unsigned long __libcrunch_ptr_stores __attribute__((weak));
 
 /* tentative cache entry redesign to integrate bounds and types:
  * 
@@ -1131,6 +1133,9 @@ extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool_via_dladdr
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
 {
+#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+	++__libcrunch_ptr_derivations;
+#endif
 #ifndef LIBCRUNCH_NOOP_INLINES
 #ifndef LIBCRUNCH_USING_TRAP_PTRS
 	return 1;
@@ -1239,6 +1244,9 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
 {
+#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+	++__libcrunch_ptr_derefs;
+#endif
 #ifndef LIBCRUNCH_USING_TRAP_PTRS
 	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
 	unsigned long size = __libcrunch_get_size(ptr_bounds, ptr);
@@ -1445,6 +1453,9 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 			(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, 
 				struct uniqtype *val_pointee_type)
 {
+#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+	++__libcrunch_ptr_stores;
+#endif
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	unsigned long dest_addr __attribute__((unused)) = (unsigned long) dest;
 	unsigned long base_stored_addr __attribute__((unused)) = (unsigned long) BASE_STORED(dest);

@@ -356,7 +356,6 @@ unsigned long __libcrunch_begun;
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
 unsigned long __libcrunch_aborted_init;
 unsigned long __libcrunch_trivially_succeeded;
-unsigned long __libcrunch_checked_pointer_adjustments;
 #endif
 unsigned long __libcrunch_aborted_typestr;
 unsigned long __libcrunch_lazy_heap_type_assignment;
@@ -370,6 +369,9 @@ unsigned long __libcrunch_fetch_bounds_called;
 unsigned long __libcrunch_fetch_bounds_missed_cache;
 unsigned long __libcrunch_primary_secondary_transitions;
 unsigned long __libcrunch_fault_handler_fixups;
+unsigned long __libcrunch_ptr_derivations;
+unsigned long __libcrunch_ptr_derefs;
+unsigned long __libcrunch_ptr_stores;
 
 struct __libcrunch_cache /* __thread */ __libcrunch_is_a_cache = {
 	.size_plus_one = 1 + LIBCRUNCH_MAX_IS_A_CACHE_SIZE,
@@ -428,40 +430,46 @@ static void print_exit_summary(void)
 				repeat_suppression_count);
 	}
 	
-	fprintf(crunch_stream_err, "====================================================\n");
+	fprintf(crunch_stream_err, "======================================================\n");
 	fprintf(crunch_stream_err, "libcrunch summary: \n");
-	fprintf(crunch_stream_err, "----------------------------------------------------\n");
-	fprintf(crunch_stream_err, "type checks begun:                         % 9ld\n", __libcrunch_begun);
-	fprintf(crunch_stream_err, "----------------------------------------------------\n");
+	fprintf(crunch_stream_err, "------------------------------------------------------\n");
+	fprintf(crunch_stream_err, "type checks begun:                         % 11ld\n", __libcrunch_begun);
+	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(crunch_stream_err, "       aborted due to init failure:        % 9ld\n", __libcrunch_aborted_init);
+	fprintf(crunch_stream_err, "       aborted due to init failure:        % 11ld\n", __libcrunch_aborted_init);
 #endif
-	fprintf(crunch_stream_err, "       aborted for bad typename:           % 9ld\n", __libcrunch_aborted_typestr);
+	fprintf(crunch_stream_err, "       aborted for bad typename:           % 11ld\n", __libcrunch_aborted_typestr);
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(crunch_stream_err, "       trivially passed:                   % 9ld\n", __libcrunch_trivially_succeeded);
+	fprintf(crunch_stream_err, "       trivially passed:                   % 11ld\n", __libcrunch_trivially_succeeded);
 #endif
 #ifdef LIBCRUNCH_EXTENDED_COUNTS
-	fprintf(crunch_stream_err, "       remaining                           % 9ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr + __libcrunch_aborted_init));
+	fprintf(crunch_stream_err, "       remaining                           % 11ld\n", __libcrunch_begun - (__libcrunch_trivially_succeeded + __liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr + __libcrunch_aborted_init));
 #else
-	fprintf(crunch_stream_err, "       remaining                           % 9ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
+	fprintf(crunch_stream_err, "       remaining                           % 11ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
 #endif	
-	fprintf(crunch_stream_err, "----------------------------------------------------\n");
-	fprintf(crunch_stream_err, "   of which did lazy heap type assignment: % 9ld\n", __libcrunch_lazy_heap_type_assignment);
-	fprintf(crunch_stream_err, "----------------------------------------------------\n");
-	fprintf(crunch_stream_err, "       failed inside allocation functions: % 9ld\n", __libcrunch_failed_in_alloc);
-	fprintf(crunch_stream_err, "       failed otherwise:                   % 9ld\n", __libcrunch_failed);
-	fprintf(crunch_stream_err, "                 of which user suppressed: % 9ld\n", __libcrunch_failed_and_suppressed);
-	fprintf(crunch_stream_err, "       nontrivially passed:                % 9ld\n", __libcrunch_succeeded);
-	fprintf(crunch_stream_err, "----------------------------------------------------\n");
-	fprintf(crunch_stream_err, "   of which hit __is_a cache:              % 9ld\n", __libcrunch_is_a_hit_cache);
-	fprintf(crunch_stream_err, "----------------------------------------------------\n");
-	fprintf(crunch_stream_err, "out-of-bounds pointers created:            % 9ld\n", __libcrunch_created_invalid_pointer);
-	fprintf(crunch_stream_err, "accesses trapped and emulated:             % 9ld\n", 0ul /* FIXME */);
-	fprintf(crunch_stream_err, "calls to __fetch_bounds:                   % 9ld\n", __libcrunch_fetch_bounds_called /* FIXME: remove */);
-	fprintf(crunch_stream_err, "   of which missed cache:                  % 9ld\n", __libcrunch_fetch_bounds_missed_cache);
-	fprintf(crunch_stream_err, "calls requiring secondary checks           % 9ld\n", __libcrunch_primary_secondary_transitions);
-	fprintf(crunch_stream_err, "trap-pointer fixups in fault handler       % 9ld\n", __libcrunch_fault_handler_fixups);
-	fprintf(crunch_stream_err, "====================================================\n");
+	fprintf(crunch_stream_err, "------------------------------------------------------\n");
+	fprintf(crunch_stream_err, "   of which did lazy heap type assignment: % 11ld\n", __libcrunch_lazy_heap_type_assignment);
+	fprintf(crunch_stream_err, "------------------------------------------------------\n");
+	fprintf(crunch_stream_err, "       failed inside allocation functions: % 11ld\n", __libcrunch_failed_in_alloc);
+	fprintf(crunch_stream_err, "       failed otherwise:                   % 11ld\n", __libcrunch_failed);
+	fprintf(crunch_stream_err, "                 of which user suppressed: % 11ld\n", __libcrunch_failed_and_suppressed);
+	fprintf(crunch_stream_err, "       nontrivially passed:                % 11ld\n", __libcrunch_succeeded);
+	fprintf(crunch_stream_err, "------------------------------------------------------\n");
+	fprintf(crunch_stream_err, "   of which hit __is_a cache:              % 11ld\n", __libcrunch_is_a_hit_cache);
+#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+	fprintf(crunch_stream_err, "------------------------------------------------------\n");
+	fprintf(crunch_stream_err, "pointer dereferences:                      % 11ld\n", __libcrunch_ptr_derefs);
+	fprintf(crunch_stream_err, "pointer derivations:                       % 11ld\n", __libcrunch_ptr_derivations);
+	fprintf(crunch_stream_err, "   of which stored shadowed pointer values:% 11ld\n", __libcrunch_ptr_stores);
+#endif
+	fprintf(crunch_stream_err, "------------------------------------------------------\n");
+	fprintf(crunch_stream_err, "out-of-bounds pointers created:            % 11ld\n", __libcrunch_created_invalid_pointer);
+	fprintf(crunch_stream_err, "accesses trapped and emulated:             % 11ld\n", 0ul /* FIXME */);
+	fprintf(crunch_stream_err, "calls to __fetch_bounds:                   % 11ld\n", __libcrunch_fetch_bounds_called /* FIXME: remove */);
+	fprintf(crunch_stream_err, "   of which missed cache:                  % 11ld\n", __libcrunch_fetch_bounds_missed_cache);
+	fprintf(crunch_stream_err, "calls requiring secondary checks           % 11ld\n", __libcrunch_primary_secondary_transitions);
+	fprintf(crunch_stream_err, "trap-pointer fixups in fault handler       % 11ld\n", __libcrunch_fault_handler_fixups);
+	fprintf(crunch_stream_err, "======================================================\n");
 	if (!verbose)
 	{
 		fprintf(crunch_stream_err, "re-run with LIBCRUNCH_VERBOSE=1 for repeat failures\n");
@@ -2661,6 +2669,9 @@ __libcrunch_bounds_t
 void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type);
 void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type)
 {
+#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+	++__libcrunch_ptr_stores;
+#endif
 	/* This is like __store_pointer_nonlocal but the lvalue we're writing through has void* type.
 	 * To accommodate polymorphic code, it gets complicated.
 	 * We want to make a *fast* guess about the actual pointee type of the target storage.
