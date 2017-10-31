@@ -47,7 +47,7 @@ module E = Errormsg
 module H = Hashtbl
 
 let voidPtrHasBounds = ref false
-let noPointerTypeInfo = ref false
+let noObjectTypeInfo = ref false
 let skipSecondarySplit = ref false
 
 type helperFunctionsRecord = {
@@ -263,7 +263,7 @@ let exprNeedsBounds expr enclosingFile =
 
 let castNeedsFreshBounds sourceE targetT enclosingFile =
     let sourceT = Cil.typeOf sourceE in
-    if (!noPointerTypeInfo && isPointerType sourceT) then false else
+    if (!noObjectTypeInfo && isPointerType sourceT) then false else
     let (sourceTS, targetTS) = (Cil.typeSig sourceT, Cil.typeSig targetT) in
     let sourceConcrete = getConcreteType (decayArrayToCompatiblePointer sourceTS) in
     let targetConcrete = getConcreteType (decayArrayToCompatiblePointer targetTS) in
@@ -522,7 +522,7 @@ let rec getStoredPtrLvalForPtrExp ptrE enclosingFile =
              * refactoring; we just do nothing to check the adjustments. *)
         | (* casts? *)
             CastE(castT, subE) ->
-                if !noPointerTypeInfo && isPointerTypeNeedingBounds (Cil.typeOf subE) enclosingFile then
+                if !noObjectTypeInfo && isPointerTypeNeedingBounds (Cil.typeOf subE) enclosingFile then
                     (* strip the casts off *)
                     getStoredPtrLvalForPtrExp subE enclosingFile
                 else None
@@ -534,7 +534,7 @@ let ptrExpIsStoredPtrLval ptrE enclosingFile =
 let rec boundsDescrForExpr e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile = 
     if isStaticallyNullPtr e then BoundsBaseLimitRvals(zero, one)
     else
-    let simplifiedPtrExp = if !noPointerTypeInfo then uncastExpr (simplifyPtrExprs e) else (simplifyPtrExprs e) in
+    let simplifiedPtrExp = if !noObjectTypeInfo then uncastExpr (simplifyPtrExprs e) else (simplifyPtrExprs e) in
     debug_print 1 ("Getting bounds expr for expr " ^ (expToString simplifiedPtrExp) ^ "\n");
     match simplifiedPtrExp with 
         Lval(Var(vi), offs) when varinfoIsLocal vi currentFuncAddressTakenLocalNames -> 
@@ -1139,7 +1139,7 @@ let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ca
     in
     (* If we're emulating SoftBound, we still get called -- but only for casts that create 
      * pointers from integers. Get this case out of the way first. *)
-    if !noPointerTypeInfo then (exprTmpVar,
+    if !noObjectTypeInfo then (exprTmpVar,
         [makeCallToMakeBounds (Some(Var(exprTmpBoundsVar), NoOffset)) zero zero loc helperFunctions.makeBounds]
     )
     else
@@ -1359,7 +1359,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
   (* Will fill these in during initializer *) 
   val mutable helperFunctions = {
      fetchBoundsInl = emptyFunction "__fetch_bounds_inl";
-     fetchBoundsOol = emptyFunction (if !noPointerTypeInfo then "__fetch_bounds_ool_via_dladdr" else "__fetch_bounds_ool");
+     fetchBoundsOol = emptyFunction (if !noObjectTypeInfo then "__fetch_bounds_ool_via_dladdr" else "__fetch_bounds_ool");
      fetchBoundsFull = emptyFunction "__fetch_bounds_full";
      makeBounds = emptyFunction "__make_bounds";
      pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
@@ -1407,7 +1407,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             false, []))
     ;
     helperFunctions.fetchBoundsOol <- findOrCreateExternalFunctionInFile 
-                            enclosingFile (if !noPointerTypeInfo then "__fetch_bounds_ool_via_dladdr" 
+                            enclosingFile (if !noObjectTypeInfo then "__fetch_bounds_ool_via_dladdr" 
                                 else "__fetch_bounds_ool") (TFun(boundsType, 
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
@@ -3687,11 +3687,22 @@ let feature : Feature.t =
   { fd_name = "crunchbound";
     fd_enabled = false;
     fd_description = "dynamic bounds checking of pointer indexing and arithmetic";
-    fd_extraopt = [("--emulate-softbound", Arg.Unit (fun _ -> 
+    fd_extraopt = [
+    ("--emulate-softbound", Arg.Unit (fun _ -> 
         voidPtrHasBounds := true; 
-        noPointerTypeInfo := true;
+        noObjectTypeInfo := true;
         skipSecondarySplit := true
-    ), " emulate SoftBound (no type info, ignore casts, no secondary path)")];
+    ), " emulate SoftBound (void* has bounds; no type info / ignore casts; no secondary path)");
+    ("--void-ptr-has-bounds", Arg.Unit (fun _ -> 
+        voidPtrHasBounds := true
+    ), " void* carries bounds (SoftBound-like shadow-stack ABI)");
+    ("--no-object-type-info", Arg.Unit (fun _ -> 
+        noObjectTypeInfo := true
+    ), " do not use type information from liballocs (casts don't affect bounds)");
+    ("--skip-secondary-split", Arg.Unit (fun _ -> 
+        skipSecondarySplit := true
+    ), " abort on bounds check failure (do not create a secondary path)")
+    ];
     fd_doit = 
     (function (fl: file) -> 
       debug_print 1 ("command line args are:\n"
@@ -3699,9 +3710,9 @@ let feature : Feature.t =
       let _ = (if !voidPtrHasBounds then 
         debug_print 1 "void* has bounds (like SoftBound)"
       else debug_print 1 "void* does not have bounds\n";
-        if !noPointerTypeInfo then 
-        debug_print 1 "no pointer type info assumed (like SoftBound)"
-      else (debug_print 1 "using pointer type info\n");
+        if !noObjectTypeInfo then 
+        debug_print 1 "no object type info assumed (like SoftBound)"
+      else (debug_print 1 "using object type info\n");
         if !skipSecondarySplit then 
         debug_print 1 "skip secondary path (like SoftBound)"
       else (debug_print 1 "enabling secondary path\n"))
