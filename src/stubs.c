@@ -40,8 +40,8 @@ static void print_exit_summary(void)
 	fprintf(stderr, "libcrunch stub runtime summary: \n");
 	fprintf(stderr, "------------------------------------------------------\n");
 	fprintf(stderr, "pointer dereferences:                      % 11ld\n", __libcrunch_ptr_derefs);
-	fprintf(stderr, "pointer derivations:                       % 11ld\n", __libcrunch_ptr_derivations);
 	fprintf(stderr, "   of which stored shadowed pointer values:% 11ld\n", __libcrunch_ptr_stores);
+	fprintf(stderr, "pointer derivations instrumented:          % 11ld\n", __libcrunch_ptr_derivations);
 	fprintf(stderr, "------------------------------------------------------\n");
 	fprintf(stderr, "out-of-bounds pointers created:            % 11ld\n", __libcrunch_created_invalid_pointer);
 	fprintf(stderr, "accesses trapped and emulated:             % 11ld\n", 0ul /* FIXME */);

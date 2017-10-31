@@ -419,7 +419,7 @@ static _Bool should_report_failure_at(void *site)
 
 static void print_exit_summary(void)
 {
-	if (__libcrunch_begun == 0 
+	if (__libcrunch_begun == 0 && __libcrunch_ptr_derefs == 0
 		&& __libcrunch_fetch_bounds_called == 0 /* FIXME: replace with __fetch_bounds_internal failure counter */
 		&& __libcrunch_created_invalid_pointer == 0
 		&& !getenv("LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY")) return;
@@ -459,8 +459,8 @@ static void print_exit_summary(void)
 #ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
 	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 	fprintf(crunch_stream_err, "pointer dereferences:                      % 11ld\n", __libcrunch_ptr_derefs);
-	fprintf(crunch_stream_err, "pointer derivations:                       % 11ld\n", __libcrunch_ptr_derivations);
 	fprintf(crunch_stream_err, "   of which stored shadowed pointer values:% 11ld\n", __libcrunch_ptr_stores);
+	fprintf(crunch_stream_err, "pointer derivations instrumented:          % 11ld\n", __libcrunch_ptr_derivations);
 #endif
 	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 	fprintf(crunch_stream_err, "out-of-bounds pointers created:            % 11ld\n", __libcrunch_created_invalid_pointer);

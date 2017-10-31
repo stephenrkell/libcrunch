@@ -24,7 +24,7 @@ class CrunchSBCC(CrunchCC):
     
     def getDefines(self):
         #    "-DLIBCRUNCH_TRACE_BOUNDS_STACK", \
-        return ["-DLIBCRUNCH_EMULATE_SOFTBOUND", \
+        return ["-DLIBCRUNCH_SKIP_EXPENSIVE_COUNTS", \
             "-DLIBCRUNCH_VOID_POINTERS_HAVE_BOUNDS", \
             "-DLIBCRUNCH_ABORT_ON_OOB_DEREF", \
             "-DLIBCRUNCH_NO_POINTER_TYPE_INFO", \

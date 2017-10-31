@@ -43,6 +43,7 @@ class CrunchBCC(CrunchCC):
 #            "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH", \
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
+            "-DLIBCRUNCH_SKIP_EXPENSIVE_COUNTS", \
             "-DLIBCRUNCH_USING_TRAP_PTRS", \
             "-DLIBCRUNCH_LONG_SIZE", \
             "-DLIBCRUNCH_NO_DENORM_BOUNDS", \
