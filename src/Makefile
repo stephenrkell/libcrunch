@@ -18,6 +18,7 @@ LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
 
 #CFLAGS += -fkeep-inline-functions
 CFLAGS += -std=gnu99 -g -fPIC -I../include
+#CFLAGS += -Wall -Wextra -Wno-unused-parameter
 # debugging version
 ifneq ($(DEBUG),)
 CFLAGS += -O0 -flto
