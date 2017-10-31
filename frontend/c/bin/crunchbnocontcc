@@ -49,8 +49,8 @@ class CrunchBCC(CrunchCC):
             "-DLIBCRUNCH_NO_WARN_INVALID_BOUNDS", \
             "-DLIBCRUNCH_NO_WARN_BACK_IN", \
             "-DLIBCRUNCH_NO_WARN_ONE_PAST", \
-            "-DLIBCRUNCH_NO_SECONDARY_PATH", \
-            "-DLIBCRUNCH_ABORT_ON_OOB", \
+            "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH", \
+            "-DLIBCRUNCH_ABORT_ON_OOB_DEREF", \
             "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../ptrintarith/ptrintarith.cmxs"), "--doptrintarith", \
