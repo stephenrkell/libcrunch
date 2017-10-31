@@ -25,11 +25,10 @@ class CrunchSBCC(CrunchCC):
     def getDefines(self):
         #    "-DLIBCRUNCH_TRACE_BOUNDS_STACK", \
         return ["-DLIBCRUNCH_EMULATE_SOFTBOUND", \
-            "-DLIBCRUNCH_CHECK_DEREF", \
             "-DLIBCRUNCH_VOID_POINTERS_HAVE_BOUNDS", \
-            "-DLIBCRUNCH_ABORT_ON_OOB", \
+            "-DLIBCRUNCH_ABORT_ON_OOB_DEREF", \
             "-DLIBCRUNCH_NO_POINTER_TYPE_INFO", \
-            "-DLIBCRUNCH_NO_SECONDARY_PATH", \
+            "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH", \
             "-DLIBCRUNCH_LONG_SIZE", \
             "-DLIBCRUNCH_NO_DENORM_BOUNDS"]
     

@@ -98,7 +98,7 @@ int __libcrunch_global_init (void);
 #define _CLEAR_LOWER_32(i) \
 (((unsigned long) (i)) & ~((1ul<<32)-1ul))
 
-#ifdef LIBCRUNCH_CHECK_DEREF
+#ifndef LIBCRUNCH_USING_TRAP_PTRS
 void __libcrunch_soft_deref_error_at(const void *ptr, struct __libcrunch_bounds_s ptr_bounds, 
 	const void *pc);
 #endif
@@ -1162,7 +1162,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
 	_Bool success;
-#if defined(LIBCRUNCH_NO_SECONDARY_PATH) && defined(LIBCRUNCH_USING_TRAP_PTRS)
+#if defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH) && defined(LIBCRUNCH_USING_TRAP_PTRS)
 	/* No secondary path, so have to handle traps here too -- both "one past" (trap)
 	 * and "back in" (detrap) cases.
 	 *
@@ -1211,11 +1211,11 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 	success = addr - base < size;
 #endif
 #endif
-#if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_PATH)
+#if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH)
 	if (!success) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
 #endif
-#ifdef LIBCRUNCH_NO_SECONDARY_PATH
+#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 	if (!success)
 	{
 		__libcrunch_bounds_error(*p_derived, derivedfrom, derivedfrom_bounds);
@@ -1233,7 +1233,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
 {
-#ifdef LIBCRUNCH_CHECK_DEREF
+#ifndef LIBCRUNCH_USING_TRAP_PTRS
 	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
 	unsigned long size = __libcrunch_get_size(ptr_bounds, ptr);
 	if (likely((unsigned long) ptr - base < size))
@@ -1242,7 +1242,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref
 	} else
 	{
 		__libcrunch_soft_deref_error_at(ptr, ptr_bounds, __libcrunch_get_pc());
-#ifdef LIBCRUNCH_ABORT_ON_OOB
+#ifdef LIBCRUNCH_ABORT_ON_OOB_DEREF
 		abort();
 #endif
 	}
@@ -1253,7 +1253,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifdef LIBCRUNCH_NO_SECONDARY_PATH
+#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 	abort();     // <-- this makes things go much faster!
 #endif
 	/* We're a secondary check. We assume the primary check has already happened, and failed. */
@@ -1278,7 +1278,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	unsigned long base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
 	unsigned long size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
 	if (!(pre_detrap_addr - naive_base >= size)) __builtin_unreachable();
-#ifndef LIBCRUNCH_NO_SECONDARY_PATH
+#ifndef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH /* FIXME: seems broken -- never true? we abort()ed above */
 	// ensure valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom))
 	{
@@ -1969,7 +1969,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_bou
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(void);
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(void)
 {
-#ifdef LIBCRUNCH_NO_SECONDARY_PATH
+#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 	abort();
 #else
 	++__libcrunch_primary_secondary_transitions;
