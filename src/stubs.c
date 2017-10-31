@@ -39,16 +39,16 @@ static void print_exit_summary(void)
 	fprintf(stderr, "======================================================\n");
 	fprintf(stderr, "libcrunch stub runtime summary: \n");
 	fprintf(stderr, "------------------------------------------------------\n");
-	fprintf(stderr, "pointer dereferences:                      % 11l d\n", __libcrunch_ptr_derefs);
-	fprintf(stderr, "pointer derivations:                       % 11l d\n", __libcrunch_ptr_derivations);
-	fprintf(stderr, "   of which stored shadowed pointer values:%  11ld\n",  __libcrunch_ptr_stores);
+	fprintf(stderr, "pointer dereferences:                      % 11ld\n", __libcrunch_ptr_derefs);
+	fprintf(stderr, "pointer derivations:                       % 11ld\n", __libcrunch_ptr_derivations);
+	fprintf(stderr, "   of which stored shadowed pointer values:% 11ld\n", __libcrunch_ptr_stores);
 	fprintf(stderr, "------------------------------------------------------\n");
-	fprintf(stderr, "out-of-bounds pointers created:            % 11ld\n" , __libcrunch_created_invalid_pointer);
-	fprintf(stderr, "accesses trapped and emulated:             % 11l d\n", 0ul /* FIXME */);
-	fprintf(stderr, "calls to __fetch_bounds:                   % 11l d\n", __libcrunch_fetch_bounds_called /* FIXME: remove */);
-	fprintf(stderr, "   of which missed cache:                  % 11l d\n", __libcrunch_fetch_bounds_missed_cache);
-	fprintf(stderr, "calls requiring secondary checks           % 11l d\n", __libcrunch_primary_secondary_transitions);
-	fprintf(stderr, "trap-pointer fixups in fault handler       % 11l d\n", __libcrunch_fault_handler_fixups);
+	fprintf(stderr, "out-of-bounds pointers created:            % 11ld\n", __libcrunch_created_invalid_pointer);
+	fprintf(stderr, "accesses trapped and emulated:             % 11ld\n", 0ul /* FIXME */);
+	fprintf(stderr, "calls to __fetch_bounds:                   % 11ld\n", __libcrunch_fetch_bounds_called /* FIXME: remove */);
+	fprintf(stderr, "   of which missed cache:                  % 11ld\n", __libcrunch_fetch_bounds_missed_cache);
+	fprintf(stderr, "calls requiring secondary checks           % 11ld\n", __libcrunch_primary_secondary_transitions);
+	fprintf(stderr, "trap-pointer fixups in fault handler       % 11ld\n", __libcrunch_fault_handler_fixups);
 	fprintf(stderr, "======================================================\n");
 }
 
