@@ -16,11 +16,13 @@ unsigned long int __libcrunch_succeeded = 0;
 unsigned long int __libcrunch_aborted_typestr = 0;
 unsigned long int __libcrunch_is_a_hit_cache = 0;
 unsigned long int __libcrunch_created_invalid_pointer = 0;
-unsigned long int __libcrunch_checked_pointer_adjustments = 0;
 unsigned long int __libcrunch_fetch_bounds_called = 0;
 unsigned long int __libcrunch_fetch_bounds_missed_cache = 0;
 unsigned long int __libcrunch_primary_secondary_transitions = 0;
 unsigned long int __libcrunch_fault_handler_fixups = 0;
+unsigned long int __libcrunch_ptr_derivations = 0;
+unsigned long int __libcrunch_ptr_derefs = 0;
+unsigned long int __libcrunch_ptr_stores = 0;
 
 void **__libcrunch_bounds_bases_region_00;
 void **__libcrunch_bounds_bases_region_2a;
