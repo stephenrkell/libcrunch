@@ -32,7 +32,7 @@ unsigned long *__libcrunch_bounds_sizes_region_7a;
 static void *first_2a_free;
 static void *first_30_free = (void*) 0x300000000000ul;
 
-static int check_maps_cb(struct proc_entry *ent, char *linebuf, void *arg)
+static int check_maps_cb(struct maps_entry *ent, char *linebuf, void *arg)
 {
 	/* Does this mapping fall within our shadowed ranges? This means
 	 *     0000..0555
@@ -162,7 +162,7 @@ static void init_shadow_space(void) // constructor (declared above)
 	__bounds_sp = (unsigned long *) ((char*) __bounds_sp + BOUNDS_STACK_SIZE - 
 		sizeof (unsigned long));
 
-	struct proc_entry entry;
+	struct maps_entry entry;
 	char proc_buf[4096];
 	int ret;
 	ret = snprintf(proc_buf, sizeof proc_buf, "/proc/%d/maps", getpid());
@@ -180,7 +180,8 @@ static void init_shadow_space(void) // constructor (declared above)
 	 * 
 	 * First, CHECK this from /proc/maps at startup, and at mmap() calls.
 	 */
-	for_each_maps_entry(fd, linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
+	for_each_maps_entry(fd, get_a_line_from_maps_fd,
+		linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
 	if (!first_2a_free) first_2a_free = (void*) 0x2aaaaaaab000ul;
 	if (!first_30_free) first_30_free = (void*) 0x300000000000ul;
 	close(fd);
