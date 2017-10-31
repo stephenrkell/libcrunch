@@ -1162,6 +1162,11 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 	unsigned long size = __libcrunch_get_size(derivedfrom_bounds, derivedfrom);
 	_Bool success;
+	
+	/* FIXME: we should be configurable about the "no misaligned bounds" assumption
+	 * that we usually have. In the case of SoftBound we should probably assume the bounds
+	 * might in fact be misaligned. */
+	
 #if defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH) && defined(LIBCRUNCH_USING_TRAP_PTRS)
 	/* No secondary path, so have to handle traps here too -- both "one past" (trap)
 	 * and "back in" (detrap) cases.
@@ -1190,16 +1195,17 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 		}
 		success = 1;
 	} else success = 0;
-	/* We seem to be out-of-bounds. What we do now is subtle.
-	 * 1. Put the bad pointer in a register and do a one-byte read from it.
+	/* Possible trick for splitting cases here without bloating the code.
+	 * 1. Put the possibly-bad pointer in a register and do a one-byte read from it.
 	 * 2. If the register has changed, it means we took a trap, decided it was
 	 *    a trap pointer that had moved back in bounds, and detrapped it. Success.
-	 * 3. Else abort. It might be a trap pointer that we had moved, but *not*
+	 * 3. Else it's something else, maybe a trap pointer that we had moved, but *not*
 	 *    back into bounds and not by zero.
-	 * Can the trap handler decide these things by itself? It can get the bounds
-	 * for the *new* pointer by fetching them, but how does it know that's a valid
-	 * adjustment of the old pointer? It depends how much we're adjusting it by.
-	 * FIXME: fill this in. */
+	 * Problem: not all memory is readable.
+	 *
+	 * Anyway, some trick of this form might shorten our 
+	 * warnx() and __libcrunch_bounds_error paths below, since
+	 * the diagnostic messages can be handled in the fault handler. */
 #else
 #if defined(LIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK)
 	success = addr - base <= size;
