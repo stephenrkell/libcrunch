@@ -40,8 +40,8 @@ class CrunchBCC(CrunchCC):
             # temporary HACK to strip line numbers after preprocess
             #"--commPrintLn",
 #            "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
-#            "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH", \
 #            "-DLIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK", \
+#            "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH", \
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
             "-DLIBCRUNCH_SKIP_EXPENSIVE_COUNTS", \
