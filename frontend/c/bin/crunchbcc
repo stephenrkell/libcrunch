@@ -17,7 +17,55 @@ sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../lib"))
 from crunchcc import CrunchCC
 
 class CrunchBCC(CrunchCC):
-        
+    
+    def getBoundsConfigLetter(self):
+        basename = os.path.basename(sys.argv[0])
+        result = re.match("crunch(.)bcc", basename)
+        if result:
+            return result.groups()[0][0]
+        else:
+            return 'p'
+    
+    def getDefines(self):
+        letter = self.getBoundsConfigLetter()
+        self.debugMsg("Bounds config: " + letter + "\n")
+        filename = os.path.dirname(__file__) + "/../lib/bounds-config-" + letter
+        try:
+            with open(filename, 'r') as f:
+                to_return = [l.strip() for l in f]
+                self.debugMsg("Defines are: " + str(to_return) + "\n")
+                return to_return
+        except IOError, e:
+            sys.stderr.write("Error: no bounds config file: " + filename + "\n")
+            exit(2)
+    
+    def doPostLinkMetadataBuild(self, outputFile):
+        # SoftBound doesn't need metadata (er, hopefully)
+        return 0 if "-DLIBCRUNCH_NO_POINTER_TYPE_INFO" in self.getDefines() else \
+            CrunchCC.doPostLinkMetadataBuild(self, outputFile)
+
+    def getStubGenCompileArgs(self):
+        # We have to include the CIL inlines with the appropriate flags
+        # and then define the init, fini and argwise hooks
+        # so that they do the shadow bounds stack stuff
+        return ["-include", self.getLibAllocsBaseDir() + "/include/uniqtype.h"] \
+            + self.getDefines() \
+            + ["-include", \
+                os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h"] \
+            + (["-include", \
+                os.path.dirname(__file__) + "/../../../include/stubgen_softbound.h"] \
+                if "-DLIBCRUNCH_NO_POINTER_TYPE_INFO" in self.getDefines() else [])
+    
+    # this one is for a final link
+    def getExtraLinkArgs(self):
+        return [os.path.dirname(__file__) + "/../../../lib/libcrunch_wrappers.o", \
+                "-Wl,@" + os.path.dirname(__file__) + "/../../../lib/wrap.ldopts"] \
+                if "-DLIBCRUNCH_NO_POINTER_TYPE_INFO" in self.getDefines() else []
+    
+    # this one is for the *.linked.o big-object link step
+    def getExtraRelocLinkArgs(self):
+        return []
+
     def getCillyArgs(self, sourceFiles):
         # PROBLEM: we only want to -include if we're compiling a C file. 
         # Note that normally cilly will figure out when we're compiling
@@ -30,45 +78,27 @@ class CrunchBCC(CrunchCC):
                 allSourceFilesAreC = False
         
         includeArgs = []
-#            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
-#            "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimpleaddr/vsimpleaddr.cmxs"), "--dovsimpleAddr", \
+        defines = self.getDefines()
 
         if len(sourceFiles) > 0 and allSourceFilesAreC:
-            #"-DLIBCRUNCH_TRACE_BOUNDS_STACK", \
             # We can only do trumptr, and anything else that involves -include, 
             # if we're compiling only C files.
             # temporary HACK to strip line numbers after preprocess
             #"--commPrintLn",
-#            "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
-#            "-DLIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK", \
-#            "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH", \
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
-            "-DLIBCRUNCH_SKIP_EXPENSIVE_COUNTS", \
-            "-DLIBCRUNCH_USING_TRAP_PTRS", \
-            "-DLIBCRUNCH_LONG_SIZE", \
-            "-DLIBCRUNCH_NO_DENORM_BOUNDS", \
-            "-DLIBCRUNCH_NO_WARN_INVALID_BOUNDS", \
-            "-DLIBCRUNCH_NO_WARN_BACK_IN", \
-            "-DLIBCRUNCH_NO_WARN_ONE_PAST", \
-            "-DLIBCRUNCH_NO_WARN_INVALID_BOUNDS_RETURN", \
-            "-DLIBCRUNCH_ABORT_ON_OOB_DEREF", \
-            "-include", \
-                os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
+            "-include", os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../ptrintarith/ptrintarith.cmxs"), "--doptrintarith", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
-            ]
-            #"--skip-secondary-split"   ]
-            # temporary HACK: disable trumptr (pure bounds)
-            #"--load=%s" % (os.path.dirname(sys.argv[0]) + "/../trumptr/trumptr.cmxs"), "--dotrumptr" \
-            #"--load=%s" % (os.path.dirname(sys.argv[0]) + "/../vsimplemem/vsimplemem.cmxs"), "--dovsimpleMem", \
+            ] + (["--void-ptr-has-bounds"] if "-DLIBCRUNCH_VOID_POINTERS_HAVE_BOUNDS" in defines else []) \
+              + (["--no-object-type-info"] if "-DLIBCRUNCH_NO_POINTER_TYPE_INFO" in defines else []) \
+              + (["--skip-secondary-split"] if "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH" in defines else [])
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
         
-        # do dumpallocs et al *and* trumptr
         return AllocsCC.getCillyArgs(self, sourceFiles) + \
             ["--keepunused"] \
-            + includeArgs + \
+            + defines + includeArgs + \
             ["-Wno-unused-variable", "-Wno-unused-label"]
             # We need the above -Wno-unused-... because CIL creates
             # some unused stuff (unavoidably, I believe) which will

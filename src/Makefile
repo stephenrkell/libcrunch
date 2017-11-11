@@ -9,16 +9,18 @@ LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
 LIBALLOCS := $(LIBALLOCS)
 LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
 
+default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o \
+    libcrunch_wrappers.o
+
+ifeq ($(LIBCRUNCH_BOUNDS_CONFIG),)
+LIBCRUNCH_BOUNDS_CONFIG := p
+$(warning Defaulting to bounds config $(LIBCRUNCH_BOUNDS_CONFIG))
+endif
 #CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS 
 # -DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH
-CFLAGS += -DLIBCRUNCH_SKIP_EXPENSIVE_COUNTS \
- -DLIBCRUNCH_USING_TRAP_PTRS \
- -DLIBCRUNCH_LONG_SIZE \
- -DLIBCRUNCH_NO_DENORM_BOUNDS \
- -DLIBCRUNCH_NO_WARN_INVALID_BOUNDS \
- -DLIBCRUNCH_NO_WARN_BACK_IN \
- -DLIBCRUNCH_NO_WARN_ONE_PAST \
- -DLIBCRUNCH_NO_WARN_INVALID_BOUNDS_RETURN
+CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-config-$(LIBCRUNCH_BOUNDS_CONFIG) | \
+  tr -s '[:space:]' ' ')
+libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_config=0x$(shell /bin/echo -n $(LIBCRUNCH_BOUNDS_CONFIG) | hexdump -v -e '1/1 "%02x"')
 
 CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBDLBIND)/include
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
@@ -48,9 +50,6 @@ CC_SRC := $(wildcard *.cc)
 ifeq ($(notdir $(CC)),crunchcc)
 export CC := cc
 endif
-
-default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o \
-    libcrunch_wrappers.o
 
 ifeq ($(USE_REAL_LIBUNWIND),)
 CFLAGS += -fno-omit-frame-pointer

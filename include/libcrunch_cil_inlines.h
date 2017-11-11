@@ -1230,7 +1230,12 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 	if (!success)
 	{
 		__libcrunch_bounds_error(*p_derived, derivedfrom, derivedfrom_bounds);
-		abort();
+#ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
+		/* There's no need to abort here. Either way, the secondary path
+		 * will be triggered and will abort us if it has to. Remember that a
+		 * full check does a primary check first, so this code runs even
+		 * if we don't have a separate secondary path.*/
+#endif
 	}
 #endif
 	return success;
@@ -1360,7 +1365,11 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	// warnx("Got to 5, deriving %p", *p_derived);
 	/* Handle the error. */
 	__libcrunch_bounds_error(*p_derived, derivedfrom, *p_derivedfrom_bounds);
+#ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
+	abort();
+#else
 	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
+#endif
 	return 0;
 #else
 	return 1;
