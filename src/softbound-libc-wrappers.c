@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#define LIBCRUNCH_TRACE_BOUNDS_STACK 1 /* for debugging */
+// #define LIBCRUNCH_TRACE_BOUNDS_STACK 1 /* for debugging */
 #include <stdio.h>
 #include <stdint.h>
 #include <dlfcn.h>
@@ -15,7 +15,7 @@
  * used by SoftBound, but using libcrunch's internal APIs, for use by the
  * SoftBound emulation mode of crunchcc (crunchsbcc). 
  *
- * Copyright 2016, Stephen Kell
+ * Copyright 2016--17, Stephen Kell
  */
 
 #define MANGLE(sym) __wrap_ ## sym
