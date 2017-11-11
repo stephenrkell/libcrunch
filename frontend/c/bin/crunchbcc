@@ -41,6 +41,7 @@ class CrunchBCC(CrunchCC):
             #"--commPrintLn",
 #            "-DLIBCRUNCH_WORDSIZE_BOUNDS", \
 #            "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH", \
+#            "-DLIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK", \
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
             "-DLIBCRUNCH_SKIP_EXPENSIVE_COUNTS", \

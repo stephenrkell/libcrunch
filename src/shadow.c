@@ -152,6 +152,9 @@ __thread unsigned long *volatile __bounds_sp;
 // 	void **out_addr, size_t *out_len) __attribute__((weak));
 
 extern char **environ;
+
+static void init_shadow_entries(void);
+
 static void init_shadow_space(void) // constructor (declared above)
 {
 	#define BOUNDS_STACK_SIZE 8192
@@ -265,10 +268,19 @@ static void init_shadow_space(void) // constructor (declared above)
 	 * We need to walk /proc ourselves.
 	 */
 	
+	/* Do the init of the auxv and libc stuff. */
+	init_shadow_entries();
+}
+
+static void init_shadow_entries(void)
+{
+	/* It's not just about wrapping functions. Initialise the globals.
+	 * FIXME: not sure why SoftBound doesn't do this. */
 	/* Now walk the auxv to write bounds for the argv and envp vectors. This is
 	 * a bit of a HACK since we duplicate code from liballocs (which need not be 
-	 * linked in right here). We can't easily do it in libcrunch.c because we need to
-	 * know that the shadow space has been init'd. */
+	 * linked in right here), specifically the auxv allocator. We can't easily do
+	 * this in libcrunch.c because we need to know that the shadow space has been
+	 * init'd. */
 	Elf64_auxv_t *auxv_array_start = get_auxv((const char **) environ, environ[0]);
 	if (!auxv_array_start) return;
 	
@@ -286,7 +298,7 @@ static void init_shadow_space(void) // constructor (declared above)
 	assert(!*argv_vector_terminator);
 	const char **argv_vector_start = argv_vector_terminator;
 	unsigned nargs = 0;
-	/* To search for the start of the array, we look for an integer that is
+	/* HACK: to search for the start of the array, we look for an integer that is
 	 * a plausible argument count... which won't look like any pointer we're seeing. */
 	#define MAX_POSSIBLE_ARGS 4194304
 	while (*((uintptr_t*) argv_vector_start - 1) > MAX_POSSIBLE_ARGS)
@@ -320,22 +332,37 @@ static void init_shadow_space(void) // constructor (declared above)
 		*BASE_STORED(envi) = (void*) *envi;
 		*SIZE_STORED(envi) = strlen(*envi) + 1;
 	}
-	
-	/* Also store for environ. And HACK, for some glibc stuff, for now. */
-	__shadow_store_bounds_for((void**) environ, __make_bounds((unsigned long) env_vector_start, 
-			(unsigned long) (env_vector_terminator + 1)), /* ignored */ NULL);
-	unsigned **toupper_loc = (unsigned **) __ctype_toupper_loc();
-	*BASE_STORED(toupper_loc) = (void*) *toupper_loc;
-	*SIZE_STORED(toupper_loc) = 384 * sizeof (int);
-	
+	/* Leave argv's bounds there on the shadow stack for main() to pick up. */
 	__push_argument_bounds_base_limit(argv_vector_start, 
 			(unsigned long) argv_vector_start, (unsigned long) (argv_vector_terminator + 1));
 	
 	struct link_map *exe_handle = get_exe_handle();
 	void *main_addr = fake_dlsym(exe_handle, "main");
-	if (!main_addr) warnx("Could not get address of main; expect invalid bounds for argv");
-	
+	if (!main_addr) warnx("Could not get address of main; initial cookie will be invalid");
+	// FIXME: also look at static alloc records
 	__push_argument_bounds_cookie(main_addr);
-out:
-	return;
+	
+	void **p = (void**) environ;
+	*BASE_STORED(p) = env_vector_start;
+	*SIZE_STORED(p) = (env_vector_terminator + 1 - env_vector_start) * sizeof (char*);
+	p = (void**) &stdin;
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = sizeof (FILE);
+	p = (void**) &stdout;
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = sizeof (FILE);
+	p = (void**) &stderr;
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = sizeof (FILE);
+	
+	/* HACK: stuff below here is glibc-specific.  */
+	p = (void**) __ctype_b_loc();
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = 768;
+	p = (void**) __ctype_toupper_loc();
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = 384 * sizeof (int);
+	p = (void**) __ctype_tolower_loc();
+	*BASE_STORED(p) = *p;
+	*SIZE_STORED(p) = 384 * sizeof (int);
 }

@@ -989,28 +989,4 @@ DECLARE(char*, strdup, const char *s)
 // 
 // 
 
-static void init(void) __attribute__((constructor));
-static void init(void)
-{
-	/* It's not just about wrapping functions. Initialise the globals.
-	 * FIXME: not sure why SoftBound doesn't do this. */
-	void **p = (void**) __ctype_b_loc();
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = 768;
-	p = (void**) __ctype_toupper_loc();
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = 384 * sizeof (int);
-	p = (void**) __ctype_tolower_loc();
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = 384 * sizeof (int);
-	p = (void**) &stdin;
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = sizeof (FILE);
-	p = (void**) &stdout;
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = sizeof (FILE);
-	p = (void**) &stderr;
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = sizeof (FILE);
-}
-
+// we don't need to init the libc/auxv shadow space here -- shadow.c does it
