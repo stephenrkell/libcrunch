@@ -16,6 +16,7 @@ ifeq ($(LIBCRUNCH_BOUNDS_CONFIG),)
 LIBCRUNCH_BOUNDS_CONFIG := p
 $(warning Defaulting to bounds config $(LIBCRUNCH_BOUNDS_CONFIG))
 endif
+
 #CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS 
 # -DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-config-$(LIBCRUNCH_BOUNDS_CONFIG) | \
