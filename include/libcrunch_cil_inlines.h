@@ -1131,6 +1131,11 @@ extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const voi
  * works on static objects -- it is unaffected by changes in the global state. 
  * FIXME: this isn't really true if we get into loading/unloading shared objs! */
 extern __libcrunch_bounds_t (__attribute__((pure,__const__)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
+#ifdef LIBCRUNCH_NO_POINTER_TYPE_INFO
+#define __fetch_bounds_ool_to_use __fetch_bounds_ool_via_dladdr
+#else
+#define __fetch_bounds_ool_to_use __fetch_bounds_ool
+#endif
 /* Both in libcrunch.c. */
 
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
@@ -1312,11 +1317,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		 * PROBLEM: one of these pointers might currently be trapped.
 		 * -- AH, fetch_bounds deals with this.
 		 */
-#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
-		*p_derivedfrom_bounds = __fetch_bounds_ool(derivedfrom, *p_derived, t);
-#else
-		*p_derivedfrom_bounds = __fetch_bounds_ool_via_dladdr(derivedfrom, *p_derived, t);
-#endif
+		*p_derivedfrom_bounds = __fetch_bounds_ool_to_use(derivedfrom, *p_derived, t);
 	}
 	// tell the compiler that we always get back valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
@@ -1622,11 +1623,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from, t);
 	if (unlikely(__libcrunch_bounds_invalid(bounds, ptr)))
 	{
-#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
-		bounds = __fetch_bounds_ool(ptr, derived, t);
-#else
-		bounds = __fetch_bounds_ool_via_dladdr(ptr, derived, t);
-#endif
+		bounds = __fetch_bounds_ool_to_use(ptr, derived, t);
 		if (__libcrunch_bounds_invalid(bounds, ptr)) __builtin_unreachable();
 	}
 	return bounds;
@@ -1769,7 +1766,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_p
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	unsigned long *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
 	//*b = __fetch_bounds_inl(ptr, loaded_from, t);
-	__libcrunch_bounds_t tmp = __fetch_bounds_inl(ptr, loaded_from, t);
+	__libcrunch_bounds_t tmp = loaded_from ? __fetch_bounds_inl(ptr, loaded_from, t) : __fetch_bounds_ool_to_use(ptr, loaded_from, t);
 	__builtin_memcpy(b, &tmp, sizeof (__libcrunch_bounds_t));
 #ifdef LIBCRUNCH_TRACE_BOUNDS_S
 	DECLARE_BOUNDS_TMPS
@@ -1935,7 +1932,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_p
 	{
 		unsigned long *b = __alloc_bounds_stack_space(sizeof (__libcrunch_bounds_t));
 		//*b = __fetch_bounds_inl(ptr, loaded_from, t);
-		__libcrunch_bounds_t tmp = __fetch_bounds_inl(ptr, loaded_from, t);
+		__libcrunch_bounds_t tmp = loaded_from ? __fetch_bounds_inl(ptr, loaded_from, t) : __fetch_bounds_ool_to_use(ptr, loaded_from, t);
 		__builtin_memcpy(b, &tmp, sizeof (__libcrunch_bounds_t));
 #ifdef LIBCRUNCH_TRACE_BOUNDS_STACK
 		DECLARE_BOUNDS_TMPS
@@ -2021,6 +2018,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_sec
 #ifdef __libcrunch_defined_assert
 #undef assert
 #endif
+
+#undef __libcrunch_fetch_bounds_ool_to_use
 
 #undef _CLEAR_LOWER_32
 #undef _CLEAR_UPPER_32

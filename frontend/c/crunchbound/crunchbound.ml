@@ -935,9 +935,9 @@ let boundsUpdateInstrs blv ptrExp boundsDescr
                    ],
                    loc
             )]
-      | MustFetch(_) -> 
+      | MustFetch(_) -> (* No point doing an inl fetch -- do an ool, like we usually do. *)
             [Call( Some(blv),
-                   (Lval(Var(helperFunctions.fetchBoundsInl.svar),NoOffset)),
+                   (Lval(Var(helperFunctions.fetchBoundsOol.svar),NoOffset)),
                    [
                        (*  const void *ptr *)
                        ptrExp; 
