@@ -1,4 +1,4 @@
-default: src lib frontend test kernel
+default: src lib frontend test #kernel
 
 .PHONY: src
 src:
