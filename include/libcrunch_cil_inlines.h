@@ -1127,7 +1127,10 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 }
 
 extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
-extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
+/* __fetch_bounds_ool_via_dladdr is not only pure, but also const since it only
+ * works on static objects -- it is unaffected by changes in the global state. 
+ * FIXME: this isn't really true if we get into loading/unloading shared objs! */
+extern __libcrunch_bounds_t (__attribute__((pure,__const__)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
 /* Both in libcrunch.c. */
 
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
@@ -1309,7 +1312,11 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		 * PROBLEM: one of these pointers might currently be trapped.
 		 * -- AH, fetch_bounds deals with this.
 		 */
+#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
 		*p_derivedfrom_bounds = __fetch_bounds_ool(derivedfrom, *p_derived, t);
+#else
+		*p_derivedfrom_bounds = __fetch_bounds_ool_via_dladdr(derivedfrom, *p_derived, t);
+#endif
 	}
 	// tell the compiler that we always get back valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
@@ -1501,7 +1508,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 		else val_bounds = __make_bounds(0, 1);
 		if (__libcrunch_bounds_invalid(val_bounds, val)) __builtin_unreachable();
 #else
-		/* Do nothing -- can't do any better in SoftBound mode */
+		/* Do nothing -- can't do any better in SoftBound mode (if we could get bounds
+		 * via dladdr, we would have fetched them just now... I think. FIXME) */
 		warnx("Storing pointer with no bounds");
 #endif
 	}
@@ -1612,13 +1620,15 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	if (!ptr) return __libcrunch_make_invalid_bounds(derived);
 	if (!t) return __libcrunch_make_invalid_bounds(derived);
 	__libcrunch_bounds_t bounds = __fetch_bounds_inl(ptr, loaded_from, t);
-#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
 	if (unlikely(__libcrunch_bounds_invalid(bounds, ptr)))
 	{
+#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
 		bounds = __fetch_bounds_ool(ptr, derived, t);
+#else
+		bounds = __fetch_bounds_ool_via_dladdr(ptr, derived, t);
+#endif
 		if (__libcrunch_bounds_invalid(bounds, ptr)) __builtin_unreachable();
 	}
-#endif
 	return bounds;
 }
 

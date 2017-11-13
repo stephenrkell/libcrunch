@@ -2644,7 +2644,7 @@ __libcrunch_bounds_t
 
 /* Use this naive libdl-based version */
 __libcrunch_bounds_t 
-(__attribute__((pure)) __fetch_bounds_ool_via_dladdr)
+(__attribute__((pure,__const__)) __fetch_bounds_ool_via_dladdr)
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
 	Dl_info i = dladdr_with_cache(ptr);

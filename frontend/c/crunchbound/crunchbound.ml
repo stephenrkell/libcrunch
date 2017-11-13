@@ -484,12 +484,17 @@ let rec multiplyAccumulateArrayBounds acc t =
       | TNamed(ti, attrs) -> multiplyAccumulateArrayBounds acc ti.ttype
       | _ -> (acc, t)
 
+type bounds_fetch_origin =
+    UnknownOrigin
+  | LoadedFrom of Cil.lval (* the loaded-from address of the pointer whose bounds
+                                 * we're getting, *or* of another pointer which necessarily
+                                 * has the same bounds (i.e. in the same object). *)
+  | ExternArray of Cil.varinfo (* the varinfo for an extern array *)
+
 type bounds_expr = 
     BoundsLval of lval
   | BoundsBaseLimitRvals of (Cil.exp * Cil.exp)
-  | MustFetch of Cil.lval option (* the loaded-from address of the pointer whose bounds
-                                 * we're getting, *or* of another pointer which necessarily
-                                 * has the same bounds (i.e. in the same object). *)
+  | MustFetch of bounds_fetch_origin
 
 (* Tell whether a pointer expression has a stored pointer behind it, i.e. does a "pointer load".
  * It's the caller's job to handle local versus non-local lvalues specially. *)
@@ -629,7 +634,7 @@ let rec boundsDescrForExpr e currentFuncAddressTakenLocalNames localLvalToBounds
       | AddrOf(Var(someVi), someOffset)  -> (
         debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 1)\n");
         try handleAddrOfVarOrField (Var(someVi)) someOffset
-        with Not_found -> MustFetch(None)
+        with Not_found -> MustFetch(UnknownOrigin)
         )
         (* - we're taking the address of a local variable, global variable or subobject.
                 => bounds are implied by the address value and the type of the object.
@@ -650,6 +655,17 @@ let rec boundsDescrForExpr e currentFuncAddressTakenLocalNames localLvalToBounds
           the bounds we make will reflect that. HMM, but will the *pointer* we make
           be trapped?
         *)
+      | StartOf(Var(someVi), someOffset) when someVi.vstorage = Extern &&
+        (* is it an extern array of unknown dimensions? *)
+             (match Cil.unrollType someVi.vtype with
+                TArray(_, None, _) -> true | _ -> false)
+            -> (
+            debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 2a -- extern []\n");
+            try handleAddrOfVarOrField (Var(someVi)) (offsetFromList (
+               (offsetToList someOffset) @ [Index(zero, NoOffset)]
+            ))
+            with Not_found -> MustFetch(ExternArray(someVi))
+        )
       | StartOf(Var(someVi), someOffset) -> (
             (* This is similar but not identical to the above. 
              * In particular, since the variable is an array, 
@@ -689,11 +705,11 @@ let rec boundsDescrForExpr e currentFuncAddressTakenLocalNames localLvalToBounds
              * "no array bound available" case. We handle untrustworthy bounds by
              * other means (CHECK).
              *)
-            debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 2)\n");
+            debug_print 1 ("Expr " ^ (expToString e) ^ " takes addr of var or field (case 2b)\n");
             try handleAddrOfVarOrField (Var(someVi)) (offsetFromList (
                (offsetToList someOffset) @ [Index(zero, NoOffset)]
             ))
-            with Not_found -> MustFetch(None)
+            with Not_found -> MustFetch(UnknownOrigin)
         )
       | AddrOf(Mem(memExp), someOffset) 
         when offsetContainsField someOffset ->
@@ -798,9 +814,12 @@ let rec boundsDescrForExpr e currentFuncAddressTakenLocalNames localLvalToBounds
              * we do the write. PROBLEM: we've split this across a function call,
              * __check_derive_ptr. HMM. Perhaps this transformation hasn't happened yet?
              *)
-      | _ -> (debug_print 1 ("Expr " ^ (expToString e) ^ " hit default MustFetch case, " ^
-                (match maybeLoadedFromLv with None -> "without" | _ -> "with") ^ " a loaded-from lvalue\n");
-                MustFetch(maybeLoadedFromLv))
+      | _ -> 
+        match maybeLoadedFromLv with 
+            None -> (debug_print 1 ("Expr " ^ (expToString e) ^ " hit default MustFetch case without a loaded-from lvalue\n"));
+                MustFetch(UnknownOrigin)
+          | Some(loadedFromLv) -> (debug_print 1 ("Expr " ^ (expToString e) ^ " hit default MustFetch case with a loaded-from lvalue\n"));
+                MustFetch(LoadedFrom(loadedFromLv))
 
 let checkInLocalBounds enclosingFile enclosingFunction helperFunctions uniqtypeGlobals localHost (prevOffsets : Cil.offset list) intExp currentInst = 
     debug_print 1 ("Making local bounds check for indexing expression " ^ 
@@ -903,16 +922,27 @@ let boundsUpdateInstrs blv ptrExp boundsDescr
               | _ -> blv == otherBlv
             in
             if sameVi then [] else [Set( blv, Lval(otherBlv), loc )]
-      | MustFetch(maybeLoadedFromLv) -> 
+      | MustFetch(LoadedFrom(lh,lo)) -> 
             [Call( Some(blv),
                    (Lval(Var(helperFunctions.fetchBoundsInl.svar),NoOffset)),
                    [
                        (*  const void *ptr *)
                        ptrExp; 
                        (* where did we load it from? *)
-                       (match maybeLoadedFromLv with
-                           Some(lh, lo) -> CastE(voidPtrPtrType, mkAddrOf (lh,lo))
-                         | None -> CastE(voidPtrPtrType, nullPtr));
+                       CastE(voidPtrPtrType, mkAddrOf (lh,lo));
+                       (* what's the pointee type? *)
+                       pointeeUniqtypeExpr
+                   ],
+                   loc
+            )]
+      | MustFetch(_) -> 
+            [Call( Some(blv),
+                   (Lval(Var(helperFunctions.fetchBoundsInl.svar),NoOffset)),
+                   [
+                       (*  const void *ptr *)
+                       ptrExp; 
+                       (* where did we load it from? *)
+                       CastE(voidPtrPtrType, nullPtr);
                        (* what's the pointee type? *)
                        pointeeUniqtypeExpr
                    ],
@@ -1017,7 +1047,7 @@ let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction help
     let boundsDescrForAdjustedExpr = boundsDescrForExpr ptrExp currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
     in
     let _ = match boundsDescrForAdjustedExpr with 
-        MustFetch(Some(loadedFromLv)) -> 
+        MustFetch(LoadedFrom(loadedFromLv)) -> 
             tempLoadExprs := VarinfoMap.add exprTmpVar (Some(loadedFromLv)) !tempLoadExprs
        | _ -> ()
     in
@@ -1148,11 +1178,11 @@ let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ca
     let boundsForCastExpr = boundsDescrForExpr castExp currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
     in
     let _ = match boundsForCastExpr with 
-        MustFetch(None) -> ()
+        MustFetch(UnknownOrigin) -> ()
       | _ -> failwith ("internal error: boundsDescrForExpr on type-changing cast `" ^ 
         (expToString castExp) ^ 
         "', CIL form `" ^ (expToCilString castExp) ^
-        "' did not say MustFetch(None)")
+        "' did not say MustFetch(UnknownOrigin)")
     in
     let res = (exprTmpVar, 
             (* We've just created local bounds for the temporary, so initialise them.
@@ -1185,7 +1215,7 @@ let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ca
 
 (* We're writing some pointer value to a *local* pointer, hence also 
  * to a local bounds var. *)
-let makeBoundsWriteInstruction ~doFetchOol enclosingFile enclosingFunction currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (writtenToLval : lval) writtenE derivedFromE (localLvalToBoundsFun : lval -> lval) currentInst tempLoadExprs =
+let makeBoundsWriteInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (writtenToLval : lval) writtenE derivedFromE (localLvalToBoundsFun : lval -> lval) currentInst tempLoadExprs =
     let loc = instrLoc currentInst in
     (* Here we do the case analysis: 
      * do we copy bounds, 
@@ -1208,36 +1238,34 @@ let makeBoundsWriteInstruction ~doFetchOol enclosingFile enclosingFunction curre
             Set(destBoundsLval, Lval(sourceBoundsLval), loc)
       | BoundsBaseLimitRvals(baseExpr, limitExpr) ->
             makeCallToMakeBounds (Some(destBoundsLval)) baseExpr limitExpr loc helperFunctions.makeBounds
-      | MustFetch(maybeLoadedFromLv) -> 
-            if maybeLoadedFromLv = None && doFetchOol then
-                Call( Some(localLvalToBoundsFun writtenToLval),
-                        (Lval(Var(helperFunctions.fetchBoundsOol.svar),NoOffset)),
-                        [
-                            (* const void *ptr *)
-                            writtenE     (* i..e the *value* of the pointer we just wrote *)
-                        ;   (* const void *derived_ptr *)
-                            writtenE     (* i..e the *value* of the pointer we just wrote *)
-                        ;   (* struct uniqtype *t *)
-                            pointeeUniqtypeGlobalPtr (Lval(writtenToLval)) enclosingFile uniqtypeGlobals
-                        (* ; *)  (* what's the size of that thing? *)
-                            (* makeSizeOfPointeeType (Lval(writtenToLval)) *)
-                        ],
-                        loc
-                    )
-            else Call( Some(localLvalToBoundsFun writtenToLval),
-                   (Lval(Var(helperFunctions.fetchBoundsInl.svar),NoOffset)),
-                   [
-                       (*  const void *ptr *)
-                       writtenE;
-                       (* where did we load it from? *)
-                       (match maybeLoadedFromLv with
-                           Some(lh,lo) -> CastE(voidPtrPtrType, mkAddrOf (lh,lo))
-                         | None -> CastE(voidPtrPtrType, nullPtr));
-                        (* what's the pointee type? *)
-                        pointeeUniqtypeGlobalPtr (Lval(writtenToLval)) enclosingFile uniqtypeGlobals
-                   ],
-                   loc
+      | MustFetch(LoadedFrom(lh,lo)) -> 
+            Call( Some(localLvalToBoundsFun writtenToLval),
+               (Lval(Var(helperFunctions.fetchBoundsInl.svar),NoOffset)),
+               [
+                   (*  const void *ptr *)
+                   writtenE;
+                   (* where did we load it from? *)
+                   CastE(voidPtrPtrType, mkAddrOf (lh,lo));
+                    (* what's the pointee type? *)
+                    pointeeUniqtypeGlobalPtr (Lval(writtenToLval)) enclosingFile uniqtypeGlobals
+               ],
+               loc
             )
+      | MustFetch(_) -> 
+            Call( Some(localLvalToBoundsFun writtenToLval),
+                    (Lval(Var(helperFunctions.fetchBoundsOol.svar),NoOffset)),
+                    [
+                        (* const void *ptr *)
+                        writtenE     (* i..e the *value* of the pointer we just wrote *)
+                    ;   (* const void *derived_ptr *)
+                        writtenE     (* i..e the *value* of the pointer we just wrote *)
+                    ;   (* struct uniqtype *t *)
+                        pointeeUniqtypeGlobalPtr (Lval(writtenToLval)) enclosingFile uniqtypeGlobals
+                    (* ; *)  (* what's the size of that thing? *)
+                        (* makeSizeOfPointeeType (Lval(writtenToLval)) *)
+                    ],
+                    loc
+                )
     end
 
 (* How do we deal with Stephen D's "unspecified values" problem?
@@ -1412,8 +1440,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             Some [ 
                                    ("ptr", voidConstPtrType, []);
                                    ("derived_ptr", voidConstPtrType, []);
-                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), []) (* ;
-                                   ("t_sz", ulongType, []) *)
+                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), [])
                                  ], 
                             false, []))
     ;
@@ -1423,8 +1450,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                    ("ptr", voidConstPtrType, []);
                                    ("derived_ptr", voidConstPtrType, []);
                                    ("maybe_loaded_from", voidPtrPtrType, []);
-                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), []) (* ;
-                                   ("t_sz", ulongType, []) *)
+                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), [])
                                  ], 
                             false, []))
     ;
@@ -1781,7 +1807,7 @@ let makeShadowBoundsInitializerCalls helperFunctions enclosingFunc initializerLo
                 (Lval(blv), 
                  [makeCallToMakeBounds (Some(blv)) eb el initializerLocation (helperFunctions.makeBounds)]
                 )
-          | MustFetch(maybeLoadedFromLv) -> 
+          | MustFetch(_) -> (* we're only run at init time, so just to the OOL fetch in all cases *)
                 let bTemp = Cil.makeTempVar enclosingFunc ~name:"__cil_boundsfetched_" boundsType
                 in
                 (Lval(Var(bTemp), NoOffset), 
@@ -2047,15 +2073,24 @@ class crunchBoundVisitor = fun enclosingFile ->
                             ],
                             loc
                             )
-                      | MustFetch(maybeLoadedFromLv) ->
+                      | MustFetch(LoadedFrom(lh,lo)) ->
                             Call( None,
                             (Lval(Var(helperFunctions.fetchAndPushResultBounds.svar),NoOffset)),
                             [
                                 Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
                                 ptrExp;
-                                (match maybeLoadedFromLv with
-                                  Some(lh,lo) -> CastE(voidPtrPtrType, mkAddrOf (lh,lo))
-                                | None -> CastE(voidPtrPtrType, nullPtr));
+                                CastE(voidPtrPtrType, mkAddrOf (lh,lo));
+                                pointeeUniqtypeGlobalPtr ptrExp enclosingFile uniqtypeGlobals
+                            ],
+                            loc
+                            )
+                      | MustFetch(_) ->
+                            Call( None,
+                            (Lval(Var(helperFunctions.fetchAndPushResultBounds.svar),NoOffset)),
+                            [
+                                Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
+                                ptrExp;
+                                CastE(voidPtrPtrType, nullPtr);
                                 pointeeUniqtypeGlobalPtr ptrExp enclosingFile uniqtypeGlobals
                             ],
                             loc
@@ -2417,7 +2452,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 lvalToString (lhost, loff)
                             ) ^ ", so updating its bounds\n")
                             ;
-                            ([makeBoundsWriteInstruction ~doFetchOol:false enclosingFile f !currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) localLvalToBoundsFun !currentInst !tempLoadExprs],
+                            ([makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) localLvalToBoundsFun !currentInst !tempLoadExprs],
                             [])
                         )
                         else if isPointerTypeNeedingBounds (Cil.typeOf (Lval(lhost, loff))) enclosingFile
@@ -2543,7 +2578,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 (lhost, loff)
                                 (if uncastDoesGood
                                     then 
-                                        let loadedFromLv = (
+                                        let maybeLoadedFromLv = (
                                             debug_print 1 ("Getting loaded-from addr for ptr expr: " ^ (expToCilString uncastedSrcExpr) ^ "\n");
                                             match (getStoredPtrLvalForPtrExp (simplifyPtrExprs uncastedSrcExpr) enclosingFile) with
                                             |   Some(Var(vi), loadOffs)
@@ -2569,7 +2604,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                                             |  x -> x
                                         )
                                         in 
-                                        (MustFetch(loadedFromLv))
+                                        (MustFetch(match maybeLoadedFromLv with
+                                                Some(lv) -> LoadedFrom(lv)
+                                              | None -> UnknownOrigin))
                                     else (BoundsBaseLimitRvals(zero, zero))
                                 )
                                 l enclosingFile f uniqtypeGlobals helperFunctions
@@ -2699,14 +2736,22 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         ],
                                         instrLoc !currentInst
                                         )
-                                  | MustFetch(maybeLoadedFromLv) ->
+                                  | MustFetch(LoadedFrom(lh,lo)) ->
                                         Call( None,
                                         (Lval(Var(helperFunctions.fetchAndPushArgumentBounds.svar),NoOffset)),
                                         [
                                             ptrExpr;
-                                            (match maybeLoadedFromLv with
-                                              Some(lh,lo) -> CastE(voidPtrPtrType, mkAddrOf (lh,lo))
-                                            | None -> CastE(voidPtrPtrType, nullPtr));
+                                            CastE(voidPtrPtrType, mkAddrOf (lh,lo));
+                                            pointeeUniqtypeGlobalPtr ptrExpr enclosingFile uniqtypeGlobals
+                                        ],
+                                        instrLoc !currentInst
+                                        )
+                                  | MustFetch(_) ->
+                                        Call( None,
+                                        (Lval(Var(helperFunctions.fetchAndPushArgumentBounds.svar),NoOffset)),
+                                        [
+                                            ptrExpr;
+                                            CastE(voidPtrPtrType, nullPtr);
                                             pointeeUniqtypeGlobalPtr ptrExpr enclosingFile uniqtypeGlobals
                                         ],
                                         instrLoc !currentInst
