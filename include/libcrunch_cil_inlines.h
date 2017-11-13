@@ -1511,7 +1511,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 #else
 		/* Do nothing -- can't do any better in SoftBound mode (if we could get bounds
 		 * via dladdr, we would have fetched them just now... I think. FIXME) */
-		warnx("Storing pointer with no bounds");
+		warnx("Storing pointer with no bounds (storing to %p, value %p)", dest, val);
 #endif
 	}
 
