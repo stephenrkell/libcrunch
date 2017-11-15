@@ -1667,14 +1667,16 @@ let isCompOrArray t = match Cil.typeSig t with
   | TSComp(_, _, _) -> true
   | _ -> false
 
-let containedPointerExprsForExpr e = 
+let containedPointerExprsForExpr ?forceIncludeVoidPointers:(forceIncludeVoidPointers=false) e = 
+    let includingVoids = !voidPtrHasBounds || forceIncludeVoidPointers
+    in
     let rec enumeratePointerYieldingOffsetsForT t = match t with
         TVoid(attrs) -> []
       | TInt(ik, attrs) -> []
       | TFloat(fk, attrs) -> []
       | TPtr(pt, attrs) -> 
         (match (Cil.typeSig pt) with 
-            TSBase(TVoid(_)) -> if !voidPtrHasBounds then [NoOffset] else []
+            TSBase(TVoid(_)) -> if includingVoids then [NoOffset] else []
             | _ -> [NoOffset]
         )
       | TArray(at, None, attrs) -> failwith "asked to enumerate ptroffs for unbounded array type"
@@ -1736,9 +1738,13 @@ let containedPointerExprsForExpr e =
             failwith ("internal error: did not expect array or struct type: " ^ 
                 (typToString (Cil.typeOf e)))
      |  _ when (
-            ((not !voidPtrHasBounds) && isNonVoidPointerType (Cil.typeOf e))
-        || (!voidPtrHasBounds && isPointerType (Cil.typeOf e))) -> [e]
+            ((not includingVoids) && isNonVoidPointerType (Cil.typeOf e))
+        || (includingVoids && isPointerType (Cil.typeOf e))) -> [e]
      |  _ -> []
+     
+let containedVoidPointerExprsForExpr e = 
+    List.filter (fun ptrE -> isVoidPtrType (Cil.typeOf e))
+        (containedPointerExprsForExpr ~forceIncludeVoidPointers:true e)
 
 let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 'a) (outerE : Cil.exp) currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs (* : 'a list *) wholeFile = 
     List.mapi (fun i -> fun ptrExp -> 
@@ -2461,25 +2467,24 @@ class crunchBoundVisitor = fun enclosingFile ->
                 Some(af) -> af
               | None -> failwith "instruction outside function"
             in
-            (* 
-                INITIALIZATION OF A LOCAL WITH-BOUNDS POINTER MUST INITIALIZE ITS BOUNDS.
-                If we're initializing from something non-local, 
-                for an initial load from the heap, say, 
-                we use an invalid bounds value.
-                But if we're taking the address of a local array,
-                we should write its bounds precisely and immediately.
-                If we're taking the address of a field within some object, 
-                perhaps across a deref'd pointer, we must also write its bounds.
-
+            (*  INITIALIZATION OF A LOCAL WITH-BOUNDS POINTER MUST INITIALIZE ITS BOUNDS.
                 WRITES TO A LOCAL WITH-BOUNDS POINTER MUST COPY ITS BOUNDS.
-                The same as above applies.
              *)
             let localLvalToBoundsFun = boundsLvalForLocalLval boundsLocals f enclosingFile
             in 
             match finalI with
                 Set((lhost, loff), e, l) ->
-                    let instrsToPrepend, instrsToAppend =
-                        (* We might be writing a non-void pointer on the lhs. 
+                    let containedPointerLvsL = List.map (fun e -> match e with
+                        Lval(lh, lo) -> (lh, lo)
+                      | _ -> failwith "impossible: lval yielded non-lv"
+                    ) (containedPointerExprsForExpr (Lval(lhost, loff)))
+                    in
+                    let containedPointerExprsR = containedPointerExprsForExpr e
+                    in
+                    let pointerAssignments = List.combine containedPointerLvsL containedPointerExprsR
+                    in
+                    let getInstrsToPrepend ((writtenToLh, writtenToLo), writtenE) = (
+                        (* We might be writing one or more non-void pointers on the lhs. 
                          *      If we're keeping bounds for that pointer, we need to write some bounds.
                          *      Sometimes we have to fetch those bounds;
                          *      Sometimes we can copy them;
@@ -2488,176 +2493,92 @@ class crunchBoundVisitor = fun enclosingFile ->
                          *          -- if it's selecting a subobject from a variable
                          *          -- if it's selecting a subobject via a pointer we have bounds for.
                          *)
-                        (* FIXME: handle struct assignments *)
-                        if isPointerTypeNeedingBounds (Cil.typeOf (Lval(lhost, loff))) enclosingFile
-                            && hostIsLocal lhost !currentFuncAddressTakenLocalNames
+                        if hostIsLocal writtenToLh !currentFuncAddressTakenLocalNames
                         then (
                             debug_print 1 ("Saw write to a local non-void pointer lval: " ^ (
-                                lvalToString (lhost, loff)
+                                lvalToString (writtenToLh, writtenToLo)
                             ) ^ ", so updating its bounds\n")
                             ;
-                            ([makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (lhost, loff) e e (* <-- derivedFrom *) localLvalToBoundsFun !currentInst !tempLoadExprs],
-                            [])
+                            [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames
+                                helperFunctions uniqtypeGlobals (writtenToLh, writtenToLo) writtenE writtenE (* <-- derivedFrom *) 
+                                localLvalToBoundsFun !currentInst !tempLoadExprs]
                         )
-                        else if isPointerTypeNeedingBounds (Cil.typeOf (Lval(lhost, loff))) enclosingFile
-                            && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames)
-                        then (
+                        else (
                             debug_print 1 ("Saw write to a non-local pointer lval: " ^ (
-                                lvalToString (lhost, loff)
+                                lvalToString (writtenToLh, writtenToLo)
                             ) ^ ", so calling out the bounds-store hook\n")
                             ;
-                            (* Again, depending on the written expression, 
-                             * we can fetch, copy or create the bounds. 
-                             * If it's fetch, 
-                             * we don't actually do the fetch -- we pass invalid bounds,
-                             * and we let the inline function do the fetch. In
-                             * most configurations, we actually won't do the fetch
-                             * in that case.
-                             * PERHAPS we can optimise: if the dest already stores
-                             * bounds that contain the overwritten value, we assume
-                             * that those bounds are good for the new value?
-                             * YES, I think this is sane. It might break if we're changing the
-                             * type of the pointer stored at the target location.
-                             * This means that storage allocations should clear the
-                             * relevant bounds areas. Hmm. If we succeed in this being
-                             * unnecessary for most allocations (only the hot ones), this
-                             * will be very reasonable.
-                             * HMM. Might be too clever; "just fetch" is sane if fetches
-                             * are cheap.
-                             *)
-                            let boundsExpr = boundsDescrForExpr e !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
+                            let boundsExpr = boundsDescrForExpr writtenE !currentFuncAddressTakenLocalNames
+                                localLvalToBoundsFun !tempLoadExprs enclosingFile
                             in
-                            (doNonLocalPointerStoreInstr ~useVoidPP:false e (pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals) 
-                                  (lhost, loff) (boundsExpr) l enclosingFile f uniqtypeGlobals helperFunctions, 
-                            [])
+                            doNonLocalPointerStoreInstr ~useVoidPP:false writtenE
+                                  (pointeeUniqtypeGlobalPtr writtenE enclosingFile uniqtypeGlobals)
+                                  (writtenToLh, writtenToLo) (boundsExpr) l enclosingFile f uniqtypeGlobals helperFunctions
                         )
-                        else if isPointerType (Cil.typeOf (Lval(lhost, loff)))
-                            && not (hostIsLocal lhost !currentFuncAddressTakenLocalNames) then (
-                            (* We're storing to a void* lvalue, i.e. some pointer type that
-                             * does *not* need bounds.
-                             * 
-                             * But PROBLEM: if it's polymorphic code, the actual pointer might be 
-                             * alive elsewhere with a different type, e.g. int*.
-                             * So 
-                             * (1) we need to store something; doing nothing risks leaving stale
-                             *        bounds behind;
-                             * (2) we'd like to store the bounds appropriate for the type it
-                             *        *will* be used at, but can't predict this;
-                             * (3) as a "safe" default, we can store invalid bounds;
-                             * (4) we could grub around in the cache to "guess" the typed
-                             *        bounds and store those;
-                             * (5) that's *only* safe to do if we also instrument the shadow-load
-                             *        code with a type-check, which we could do with
-                             *        pointer-XORing. 
-                             *
-                             * We *could* look up the declared type of the stored-to object,
-                             * via liballocs, but that would be slow.
-                             *
-                             * Can we assume that the stored-to object is in the cache?
-                             * We might expect that (void** ) &obj has been done recently,
-                             * meaning the allocation "obj" perhaps ought to be cached.
-                             * In fact YES:
-                             * we currently do __fetch_bounds_full for cast expressions,
-                             * and this will only be optimised away if we don't pass the
-                             * cast expressions via the shadow stack or store them.
-                             * 
-                             * (1) these casts-to-void** don't generate a check in trumptr,
-                             * (2) argument pushes do only inline fetches,
-                             *    which don't help since the pointer was not loaded from anywhere;
-                             * (3) no arithmetic/indexing was done on the void** value
-                             * 
-                             * ... we *still* seem to eagerly fetch bounds. This is a bit
-                             * disconcerting, but it helps us here.
-                             * 
-
-                             * So if I do   f((void** ) &p), 
-                             * what happens
-                             * and what should happen?
-                             * We immediately calculate bounds for (void** ) &p and push them.
-                             * What are they?
-                             * They are the same as for (int* ) &p since
-                             * bounds care only about sizes, not types.
-                             * However, a side-effect is that the actual type of the storage of p,
-                             * i.e. the allocation whose address we're writing,
-                             * should be in the cache,
-                             * *if* it was obtained by void**-casting some other address.
-                             * 
-                             * PROBLEM though: if I'm just doing
-                             *   *destLoc = somePtrToVoid;
-                             * I will *not* have bounds for somePtrToVoid!
-                             * i.e. if the cast happened outside our procedure....
-                             *
-                             * What about the allocation we're writing *to*?
-                             * That is actually the best authority, consistent with 
-                             * __can_hold_pointer() checking.
-                             * We should check the cache for that too.
-                             * 
-                             * FIXME: add the XOR-based load safeguard.
-                             *)
-                            (*let grubbedUniqtypeExpr = (Lval(Var(grubbedTemp), NoOffset)) in
-                            [
-                                Call((Var(grubbedTemp), NoOffset),
-                                    Lval(Var(helperFunctions.getCachedPointeeType.svar), NoOffset),
-                                    [
-                                        e
-                                    ],
-                                    l
-                                )
-                            ] @ *)
-                            (* How do we want it to generate the bounds? 
-                             * If uncasting has done some good, we can use that to generate
-                             * the bounds.
-                             * If it hasn't, we want to use cache-grubbing for that too.
-                             * There's no way to say "fetch from cache only" as a boundsExpr value,
-                             * so pass invalid bounds and live with it.
-                             * NOTE that all of this is not a problem in SoftBound mode, because
-                             * even a void* has bounds then.
-                             *)
-                            ( let uncastedSrcExpr = uncastExpr e in
-                              let uncastDoesGood = typeNeedsBounds (Cil.typeOf uncastedSrcExpr) enclosingFile
-                              in
-                            (doNonLocalPointerStoreInstr ~useVoidPP:true e 
-                                (if uncastDoesGood then pointeeUniqtypeGlobalPtr uncastedSrcExpr enclosingFile uniqtypeGlobals
-                                else (CastE(TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), nullPtr)))
-                                (lhost, loff)
-                                (if uncastDoesGood
-                                    then 
-                                        let maybeLoadedFromLv = (
-                                            debug_print 1 ("Getting loaded-from addr for ptr expr: " ^ (expToCilString uncastedSrcExpr) ^ "\n");
-                                            match (getStoredPtrLvalForPtrExp (simplifyPtrExprs uncastedSrcExpr) enclosingFile) with
-                                            |   Some(Var(vi), loadOffs)
-                                                    when (hostIsLocal (Var(vi)) !currentFuncAddressTakenLocalNames) ->
-                                                    (* It's given us back a local lvalue
-                                                     * as a "loaded from" lvalue.
-                                                     * This is normally begging the question,
-                                                     * i.e. we don't know where the local was
-                                                     * loaded from, so make it None.
-                                                     * But it might be a temporary 
-                                                     * whose original loaded-from expression
-                                                     * was saved. *)
-                                                    (try
-                                                         let (foundLv : lval option) = VarinfoMap.find vi !tempLoadExprs
-                                                         in
-                                                         debug_print 1 ("Found a saved loaded-from expr: " ^ (
-                                                             match foundLv with Some(lv) -> lvalToString lv | None -> "(saved None)") ^ "\n");
-                                                         foundLv
-                                                    with Not_found -> 
-                                                          debug_print 1 ("Didn't find a saved loaded-from expr\n");
-                                                          None
-                                                    )
-                                            |  x -> x
-                                        )
-                                        in 
-                                        (MustFetch(match maybeLoadedFromLv with
-                                                Some(lv) -> LoadedFrom(lv)
-                                              | None -> UnknownOrigin))
-                                    else (BoundsBaseLimitRvals(zero, zero))
-                                )
-                                l enclosingFile f uniqtypeGlobals helperFunctions
-                            , [])
-                            )
-                        )
-                        else ([], [])
+                    )
+                    in
+                    let instrsToPrepend = List.flatten (List.map getInstrsToPrepend pointerAssignments)
+                    @
+                    (if !voidPtrHasBounds then []
+                    else let containedVoidPointerLvsL = List.map (fun e -> match e with
+                        Lval(lh, lo) -> (lh, lo)
+                      | _ -> failwith "impossible: lval yielded non-lv"
+                    ) (containedVoidPointerExprsForExpr (Lval(lhost, loff)))
+                    in
+                    let containedVoidPointerExprsR = containedVoidPointerExprsForExpr e
+                    in
+                    let voidPtrAssignments = List.combine containedVoidPointerLvsL containedVoidPointerExprsR
+                    in
+                    List.flatten (List.map (fun ((writtenToVoidPtrLh, writtenToVoidPtrLo), writtenVoidPtrE) -> 
+                    (* This is a non-local write of a void* value. Problem: it may actually
+                     * be storing to a non-void*-holding lvalue, i.e. one that should have
+                     * bounds. We need to store something; doing nothing risks leaving stale
+                     * bounds behind. We'd like to store the bounds appropriate for the type it
+                     * *will* be used at, but can't predict this; as a "safe" default, we can
+                     * store invalid bounds. *)
+                    (* Our simple approach is to try "uncasting", i.e. seeing through the
+                     * written expression to see if we got it from a cast to void*. *)
+                    ( let uncastedSrcExpr = uncastExpr writtenVoidPtrE in
+                      let uncastDoesGood = typeNeedsBounds (Cil.typeOf uncastedSrcExpr) enclosingFile
+                      in
+                      let typeOfStore = (if uncastDoesGood then pointeeUniqtypeGlobalPtr uncastedSrcExpr enclosingFile uniqtypeGlobals
+                        else (CastE(TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), nullPtr)))
+                      in 
+                      let boundsOfStoredVal = if uncastDoesGood then
+                        let maybeLoadedFromLv = (
+                            debug_print 1 ("Getting loaded-from addr for ptr expr: " ^
+                             (expToCilString uncastedSrcExpr) ^ "\n");
+                            match (getStoredPtrLvalForPtrExp (simplifyPtrExprs uncastedSrcExpr) enclosingFile) with
+                            | Some(Var(vi), loadOffs) when (hostIsLocal (Var(vi)) !currentFuncAddressTakenLocalNames) ->
+                              (* It's given us back a local lvalue as a "loaded from" lvalue.
+                               * This is normally begging the question, i.e. we don't know
+                               * where the local was loaded from, so sa None. But it might be
+                               * a temp whose original loaded-from expression was saved. *)
+                                (try let (foundLv : lval option) = VarinfoMap.find vi !tempLoadExprs
+                                     in (debug_print 1 ("Found a saved loaded-from expr: " ^ (
+                                         match foundLv with Some(lv) -> lvalToString lv
+                                         | None -> "(saved None)") ^ "\n");
+                                 foundLv)
+                                with Not_found -> 
+                                      debug_print 1 ("Didn't find a saved loaded-from expr\n");
+                                      None)
+                            |  x -> x
+                        ) in (MustFetch(match maybeLoadedFromLv with
+                                Some(lv) -> LoadedFrom(lv)
+                              | None -> UnknownOrigin))
+                      else (* uncast didn't work *) (BoundsBaseLimitRvals(zero, zero))
+                      in
+                      (doNonLocalPointerStoreInstr ~useVoidPP:true writtenVoidPtrE
+                        typeOfStore
+                        (writtenToVoidPtrLh, writtenToVoidPtrLo)
+                        boundsOfStoredVal
+                        l enclosingFile f uniqtypeGlobals helperFunctions
+                      ))
+                      ) voidPtrAssignments
+                    ) (* end flatten *)
+                    ) (* end big append *)
+                    in
+                    let instrsToAppend = [] (* when did we use this? *)
                     in begin
                     debug_print 1 "Queueing some instructions\n";
                     instrsToPrepend @ changedInstrs @ instrsToAppend
@@ -2829,80 +2750,69 @@ class crunchBoundVisitor = fun enclosingFile ->
                         in
                         let returnBoundsPeekOrStoreInstructions = 
                           if needCallViaNoinlinePureHelper then []
-                          else
+                          else (
                           match olv with
                             None -> []
-                          | Some(lhost, loff) -> 
-                                let destT = Cil.typeOf (Lval(lhost, loff))
+                          | Some(lhost, loff) -> (
+                                let writeOneLocal boundsLval ptrExpr _ offsetExpr = 
+                                [Call(
+                                    Some(boundsLval),
+                                    (Lval(Var(helperFunctions.peekResultBounds.svar),NoOffset)),
+                                    [
+                                        (* really? only if *)
+                                        (match !cookieStackAddrVar with
+                                            Some(vi) ->
+                                                BinOp(Ne, Lval(Mem(Lval(Var(vi), NoOffset)), NoOffset),
+                                                    CastE(ulongType, mkAddrOf calleeLval), boolType)
+                                          | None -> failwith "error: no saved bounds stack pointer for cookie"
+                                        )
+                                          ;
+                                        (* offset? *)
+                                        offsetExpr; 
+                                        (*  const void *ptr *)
+                                        ptrExpr (* Lval(lhost, loff) *);
+                                        Const(CStr("call to " ^ (expToString calledE)))
+                                    ],
+                                    instrLoc !currentInst
+                                )]
+                                in
+                                let callsForOneLocal ptrExpr blah offsetExpr = 
+                                    writeOneLocal (localLvalToBoundsFun (lhost, loff)) ptrExpr blah offsetExpr
+                                in
+                                let callsForOneNonLocal ptrExpr blah offsetExpr =
+                                    let bvi = Cil.makeTempVar f ~name:"__bounds_return_" boundsType
+                                    in
+                                    let lvExpr = (Lval(lhost, loff)) in
+                                    (* write to a local temp, then do the shadow-space store *)
+                                    (writeOneLocal (Var(bvi), NoOffset) ptrExpr blah offsetExpr) @ (
+                                     doNonLocalPointerStoreInstr ~useVoidPP:false
+                                        (* pointer value *) lvExpr
+                                        (pointeeUniqtypeGlobalPtr lvExpr enclosingFile uniqtypeGlobals)
+                                        (* where it's been/being stored *) (lhost, loff)
+                                        (* its bounds *) (BoundsLval(Var(bvi), NoOffset))
+                                        l enclosingFile f uniqtypeGlobals helperFunctions
+                                    )
                                 in
                                 if not (list_empty (containedPointerExprsForExpr (Lval(lhost, loff))))
                                 then (
-                                    debug_print 1 ("Saw call writing to a non-void pointer lval: " ^ (
+                                    debug_print 1 ("Saw call writing to [one or more] non-void pointer lval: " ^ (
                                         lvalToString (lhost, loff)
-                                    ) ^ "\n");
-                                    let writeOne boundsLval ptrExpr _ offsetExpr = 
-                                        Call(
-                                            Some(boundsLval),
-                                            (Lval(Var(helperFunctions.peekResultBounds.svar),NoOffset)),
-                                            [
-                                                (* really? only if *)
-                                                (match !cookieStackAddrVar with
-                                                    Some(vi) ->
-                                                        BinOp(Ne, Lval(Mem(Lval(Var(vi), NoOffset)), NoOffset),
-                                                            CastE(ulongType, mkAddrOf calleeLval), boolType)
-                                                  | None -> failwith "error: no saved bounds stack pointer for cookie"
-                                                )
-                                                  ;
-                                                (* offset? *)
-                                                (* makeIntegerConstant (Int64.of_int 1); *)
-                                                offsetExpr; 
-                                                (* match boundsTForT destT enclosingFile.globals with
-                                                    Some(TArray(at, maybeArrayBoundExpr, _)) -> 
-                                                        (match maybeArrayBoundExpr with
-                                                            Some(arrayBoundExpr) -> 
-                                                              (match constInt64ValueOfExpr arrayBoundExpr with
-                                                                Some n -> makeIntegerConstant n
-                                                              | None -> failwith "getting bounds type for non-constant array bounds"
-                                                              )
-                                                            | None -> failwith "no array bound when one expected"
-                                                        )
-                                                    | Some(_) -> makeIntegerConstant (Int64.of_int 1)
-                                                    | None -> failwith "no bounds type when one expected"
-                                                *)
-                                                (*  const void *ptr *)
-                                                ptrExpr (* Lval(lhost, loff) *);
-                                                Const(CStr("call to " ^ (expToString calledE)))
-                                            ],
-                                            instrLoc !currentInst
-                                        )
-                                    in
-                                    let callsForOneLocal ptrExpr blah offsetExpr = 
-                                        [writeOne (localLvalToBoundsFun (lhost, loff)) ptrExpr blah offsetExpr]
-                                    in
-                                    let callsForOneNonLocal ptrExpr blah offsetExpr =
-                                        let bvi = Cil.makeTempVar f ~name:"__bounds_return_" boundsType
-                                        in
-                                        let lvExpr = (Lval(lhost, loff)) in
-                                        (writeOne (Var(bvi), NoOffset) ptrExpr blah offsetExpr) :: (
-                                         doNonLocalPointerStoreInstr ~useVoidPP:false
-                                            (* pointer value *) lvExpr
-                                            (pointeeUniqtypeGlobalPtr lvExpr enclosingFile uniqtypeGlobals)
-                                            (* where it's been/being stored *) (lhost, loff)
-                                            (* its bounds *) (BoundsLval(Var(bvi), NoOffset))
-                                            l enclosingFile f uniqtypeGlobals helperFunctions
-                                        )
-                                    in
-                                    if hostIsLocal lhost !currentFuncAddressTakenLocalNames then (
+                                    ) ^ "\n")) else ();
+                                let instrFunc = if hostIsLocal lhost !currentFuncAddressTakenLocalNames
+                                    then (
                                         debug_print 1 "Local, so updating/invalidating its bounds.\n";
-                                        (* we're popping/peeking, so reverse *)
-                                        List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
-                                    ) else ( (* non-local -- writing into the "heap"! *)
-                                    debug_print 1 "Host is not local\n";
-                                    List.flatten (List.rev (mapForAllPointerBoundsInExpr callsForOneNonLocal (Lval(lhost, loff)) !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
+                                        callsForOneLocal
+                                    ) else (
+                                        debug_print 1 "Host is not local\n";
+                                        callsForOneNonLocal
                                     )
-                                ) (* end if pointer list non-empty *)
-                                else (* no pointers *) []
-                        in
+                                in
+                                (* we're popping/peeking, so reverse *)
+                                List.flatten (List.rev (mapForAllPointerBoundsInExpr instrFunc (Lval(lhost, loff))
+                                    !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
+                            )
+                        )
+                     in
                         let boundsCleanupInstructions = (
                             if passesBounds || returnsBounds then (
                               match maybeSavedBoundsStackPtr with
