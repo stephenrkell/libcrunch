@@ -1,9 +1,10 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 static int is[] = { 1, 4, 9, 16 };
-int f(int *p)
+int f(int *dummy, int *p)
 {
-	printf("Somewhere in the array %p is %p\n", &p, p + 3);
+	printf("Somewhere in the array %p (dummy is %p) is %p\n", &p, dummy, p + 3);
 	/* [The compiler thinks] printf might have modified p! */
 	return p[3];
 }
@@ -11,6 +12,8 @@ int f(int *p)
 int main(void)
 {
 	int *local = is;
-	printf("It says: %d\n", f(local));
+	int *dummy = calloc(1, sizeof (int));
+	printf("It says: %d\n", f(dummy, local));
+	free(dummy);
 	return 0;
 }
