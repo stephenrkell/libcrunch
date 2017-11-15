@@ -2319,7 +2319,7 @@ class crunchBoundVisitor = fun enclosingFile ->
              in the case where the address doesn't actually escape.
            *)
           (
-            let varNeedsBounds = (fun v -> varinfoIsLocal v !currentFuncAddressTakenLocalNames)
+            let varNeedsLocalBounds = (fun v -> varinfoIsLocal v !currentFuncAddressTakenLocalNames)
             in
             let maybeCreateBounds = fun vi -> 
                 let boundsT = boundsTForT vi.vtype enclosingFile.globals
@@ -2333,11 +2333,15 @@ class crunchBoundVisitor = fun enclosingFile ->
                         Some(boundsT, created)
                   | None -> None
             in
-            let localBoundsTsToCreate = List.map maybeCreateBounds (List.filter varNeedsBounds f.slocals)
+            let localBoundsTsToCreate = List.map maybeCreateBounds (List.filter varNeedsLocalBounds f.slocals)
             in
-            let formalsNeedingLocalBounds =  (List.filter varNeedsBounds f.sformals)
+            let formalsNeedingBounds =  (List.filter (fun fvi -> 
+                match boundsTForT fvi.vtype enclosingFile.globals
+                    with Some(_) -> true
+                  | _ -> false
+            ) f.sformals)
             in
-            let formalBoundsTsToCreate = List.map maybeCreateBounds formalsNeedingLocalBounds
+            let formalBoundsTsToCreate = List.map maybeCreateBounds (List.filter varNeedsLocalBounds f.sformals)
             in
             (* The boundsTs were added by side-effect. 
              * What we haven't done is initialise the ones that correspond to formals.
@@ -2352,7 +2356,7 @@ class crunchBoundVisitor = fun enclosingFile ->
              * The concatMapBlahBlah function doesn't give us what we want because it
              * only does offsets within a single argument. Instead, abstract over the 
              * offset and then assign when we have the whole list. *)
-            let formalLocalBoundsInitFunReverseList = concatMapForAllPointerBoundsInExprList
+            let formalBoundsInitFunReverseList = concatMapForAllPointerBoundsInExprList
             (fun ptrExp -> fun boundExp -> fun offsetExp ->
                 match boundExp with
                     BoundsLval(Var(bvar), boffset) ->
@@ -2371,19 +2375,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                         ],
                         bvar.vdecl (* loc *)
                     )
-              | _ -> failwith "internal error: formal parameter lacks local bounds when expected"
-            ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingLocalBounds))
-                !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
-            in
-            let formalsNeedingShadowBounds =  (List.filter (fun x -> not (varNeedsBounds x)) f.sformals)
-            in
-            let formalLocalBoundsInitList = List.mapi (fun i -> fun f -> f i) 
-                (List.rev formalLocalBoundsInitFunReverseList)
-            in
-            let formalShadowBoundsInitFunReverseList = concatMapForAllPointerBoundsInExprList
-            (fun ptrExp -> fun boundExp -> fun offsetExp ->
-                match boundExp with
-                    MustFetch(LoadedFrom(lh,lo)) ->
+                 | MustFetch(LoadedFrom(lh,lo)) ->
                     fun idx -> Call(None,
                         (Lval(Var(helperFunctions.peekAndShadowStoreArgumentBounds.svar),NoOffset)),
                         [
@@ -2407,12 +2399,12 @@ class crunchBoundVisitor = fun enclosingFile ->
                           | _ -> failwith "address-taken formal but a Mem lvalue"
                         )
                     )
-              | _ -> failwith "internal error: formal parameter lacks shadow bounds when expected"
-            ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingShadowBounds))
+              | _ -> failwith "internal error: formal parameter lacks local or shadow-space bounds"
+            ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingBounds))
                 !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
             in
-            let formalShadowBoundsInitList = List.mapi (fun i -> fun f -> f i) 
-                (List.rev formalShadowBoundsInitFunReverseList)
+            let formalBoundsInitList = List.mapi (fun i -> fun f -> f i) 
+                (List.rev formalBoundsInitFunReverseList)
             in
             let writeCallerInstFlag
              = [Call(Some(Var(currentFuncCallerIsInstFlagVar), NoOffset), 
@@ -2423,7 +2415,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 battrs = f.sbody.battrs; 
                 bstmts = {
                     labels = [];
-                    skind = Instr(writeCallerInstFlag @ formalLocalBoundsInitList @ formalShadowBoundsInitList);
+                    skind = Instr(writeCallerInstFlag @ formalBoundsInitList);
                     sid = 0;
                     succs = [];
                     preds = [] 
