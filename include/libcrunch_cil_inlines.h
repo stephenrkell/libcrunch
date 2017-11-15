@@ -1872,6 +1872,17 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	return __libcrunch_make_invalid_bounds(ptr);
 #endif
 }
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __peek_and_shadow_store_argument_bounds)(_Bool really, void **loaded_from, unsigned long offset, const void *ptr, struct uniqtype *t, const char *debugstr __attribute__((unused)));
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __peek_and_shadow_store_argument_bounds)(_Bool really, void **loaded_from, unsigned long offset, const void *ptr, struct uniqtype *t, const char *debugstr __attribute__((unused)))
+{
+#ifndef LIBCRUNCH_NO_BOUNDS_STACK
+	if (really)
+	{
+		__libcrunch_bounds_t b = __peek_argument_bounds(really, offset, ptr, debugstr);
+		__shadow_store_bounds_for(loaded_from, b, t);
+	}
+#endif
+}
 
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_result_bounds)(_Bool really, __libcrunch_bounds_t bounds);
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_result_bounds)(_Bool really, __libcrunch_bounds_t bounds)

@@ -61,6 +61,7 @@ type helperFunctionsRecord = {
  mutable pushArgumentBoundsCookie : fundec; 
  mutable tweakArgumentBoundsCookie : fundec;
  mutable peekArgumentBounds : fundec; 
+ mutable peekAndShadowStoreArgumentBounds : fundec; 
  mutable pushLocalResultBounds : fundec; 
  mutable pushResultBoundsBaseLimit : fundec; 
  mutable fetchAndPushResultBounds : fundec;
@@ -1396,6 +1397,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      pushArgumentBoundsCookie = emptyFunction "__push_argument_bounds_cookie";
      tweakArgumentBoundsCookie = emptyFunction "__tweak_argument_bounds_cookie";
      peekArgumentBounds = emptyFunction "__peek_argument_bounds";
+     peekAndShadowStoreArgumentBounds = emptyFunction "__peek_and_shadow_store_argument_bounds";
      pushLocalResultBounds = emptyFunction "__push_local_result_bounds";
      pushResultBoundsBaseLimit = emptyFunction "__push_result_bounds_base_limit";
      fetchAndPushResultBounds = emptyFunction "__fetch_and_push_result_bounds";
@@ -1514,6 +1516,19 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                    ("really", boolType, []);
                                    ("offset", ulongType, []);
                                    ("ptr", voidConstPtrType, []);
+                                   ("debugstr", charConstPtrType, [])
+                                ], 
+                            false, []))
+    ;
+    
+    helperFunctions.peekAndShadowStoreArgumentBounds <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__peek_and_shadow_store_argument_bounds" (TFun(boundsType, 
+                            Some [ 
+                                   ("really", boolType, []);
+                                   ("loaded_from", voidPtrPtrType, []);
+                                   ("offset", ulongType, []);
+                                   ("ptr", voidConstPtrType, []);
+                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), []);
                                    ("debugstr", charConstPtrType, [])
                                 ], 
                             false, []))
@@ -2320,9 +2335,9 @@ class crunchBoundVisitor = fun enclosingFile ->
             in
             let localBoundsTsToCreate = List.map maybeCreateBounds (List.filter varNeedsBounds f.slocals)
             in
-            let formalsNeedingBounds =  (List.filter varNeedsBounds f.sformals)
+            let formalsNeedingLocalBounds =  (List.filter varNeedsBounds f.sformals)
             in
-            let formalBoundsTsToCreate = List.map maybeCreateBounds formalsNeedingBounds
+            let formalBoundsTsToCreate = List.map maybeCreateBounds formalsNeedingLocalBounds
             in
             (* The boundsTs were added by side-effect. 
              * What we haven't done is initialise the ones that correspond to formals.
@@ -2337,7 +2352,8 @@ class crunchBoundVisitor = fun enclosingFile ->
              * The concatMapBlahBlah function doesn't give us what we want because it
              * only does offsets within a single argument. Instead, abstract over the 
              * offset and then assign when we have the whole list. *)
-            let formalBoundsInitFunReverseList = concatMapForAllPointerBoundsInExprList (fun ptrExp -> fun boundExp -> fun offsetExp ->
+            let formalLocalBoundsInitFunReverseList = concatMapForAllPointerBoundsInExprList
+            (fun ptrExp -> fun boundExp -> fun offsetExp ->
                 match boundExp with
                     BoundsLval(Var(bvar), boffset) ->
                     fun idx -> Call(Some(Var(bvar), boffset),
@@ -2355,12 +2371,48 @@ class crunchBoundVisitor = fun enclosingFile ->
                         ],
                         bvar.vdecl (* loc *)
                     )
-              | _ -> failwith "internal error: formal parameter lacks bounds"
-            ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingBounds))
+              | _ -> failwith "internal error: formal parameter lacks local bounds when expected"
+            ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingLocalBounds))
                 !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
             in
-            let formalBoundsInitList = List.mapi (fun i -> fun f -> f i) 
-                (List.rev formalBoundsInitFunReverseList)
+            let formalsNeedingShadowBounds =  (List.filter (fun x -> not (varNeedsBounds x)) f.sformals)
+            in
+            let formalLocalBoundsInitList = List.mapi (fun i -> fun f -> f i) 
+                (List.rev formalLocalBoundsInitFunReverseList)
+            in
+            let formalShadowBoundsInitFunReverseList = concatMapForAllPointerBoundsInExprList
+            (fun ptrExp -> fun boundExp -> fun offsetExp ->
+                match boundExp with
+                    MustFetch(LoadedFrom(lh,lo)) ->
+                    fun idx -> Call(None,
+                        (Lval(Var(helperFunctions.peekAndShadowStoreArgumentBounds.svar),NoOffset)),
+                        [
+                            (* really do it? only if cookie was okay *)
+                            Lval(Var(currentFuncCallerIsInstFlagVar), NoOffset);
+                            (* address of the stored pointer *)
+                            CastE(voidPtrPtrType, mkAddrOf (lh,lo));
+                            (* offset on stack of the bounds that were passed *)
+                            makeIntegerConstant (Int64.of_int (idx)) (* DON'T adjust for the 
+                              cookie -- the inline function has to do it, because
+                              bounds are not necessarily single words in size. *);
+                            (*  const void *ptr, the pointer value (for makeInvalidBounds) *)
+                            ptrExp;
+                            (* the uniqtype of the shadowed pointer value's pointee *)
+                            pointeeUniqtypeGlobalPtr (Lval(lh,lo)) enclosingFile uniqtypeGlobals;
+                            (* the debugging string for the shadow stack tracer *)
+                            Const(CStr((expToString ptrExp) ^ ", offset " ^ (expToCilString offsetExp)))
+                        ],
+                        (match lh with
+                            (Var(vi)) -> vi.vdecl (* loc *)
+                          | _ -> failwith "address-taken formal but a Mem lvalue"
+                        )
+                    )
+              | _ -> failwith "internal error: formal parameter lacks shadow bounds when expected"
+            ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingShadowBounds))
+                !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
+            in
+            let formalShadowBoundsInitList = List.mapi (fun i -> fun f -> f i) 
+                (List.rev formalShadowBoundsInitFunReverseList)
             in
             let writeCallerInstFlag
              = [Call(Some(Var(currentFuncCallerIsInstFlagVar), NoOffset), 
@@ -2371,7 +2423,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 battrs = f.sbody.battrs; 
                 bstmts = {
                     labels = [];
-                    skind = Instr(writeCallerInstFlag @ formalBoundsInitList);
+                    skind = Instr(writeCallerInstFlag @ formalLocalBoundsInitList @ formalShadowBoundsInitList);
                     sid = 0;
                     succs = [];
                     preds = [] 
