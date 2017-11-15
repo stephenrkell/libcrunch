@@ -157,8 +157,8 @@ static void init_shadow_entries(void);
 
 static void init_shadow_space(void) // constructor (declared above)
 {
-	#define BOUNDS_STACK_SIZE 8192
-	__bounds_sp = mmap(NULL, 8192, PROT_READ|PROT_WRITE, 
+	#define BOUNDS_STACK_SIZE 65536
+	__bounds_sp = mmap(NULL, BOUNDS_STACK_SIZE, PROT_READ|PROT_WRITE,
 		MAP_ANONYMOUS|MAP_PRIVATE|MAP_GROWSDOWN, -1, 0);
 
 	/* Actually point bounds_sp to the highest address in the mapping. */

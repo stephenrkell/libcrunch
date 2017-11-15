@@ -718,23 +718,17 @@ DECLARE(char*, strdup, const char *s)
 //   return ret_ptr;
 // 
 // }
-// 
-// __WEAK_INLINE char* softboundcets_getenv(const char* name){
-//    
-//   char* ret_ptr = getenv(name);
-//    
-//   if(ret_ptr != NULL){
-//     __softboundcets_store_return_metadata(ret_ptr, 
-//                                           ret_ptr + strlen(ret_ptr) + 1, 
-//                                           1, __softboundcets_global_lock);
-//   }
-//   else {
-//     __softboundcets_store_null_return_metadata();
-//   }
-// 
-//   return ret_ptr;
-// }
-// 
+//
+
+DECLARE(char*, getenv, const char *s)
+{
+	BEGIN(getenv);
+	char *ret_ptr = REAL(getenv)(s);
+	if (ret_ptr) { RETURN_PTR(ret_ptr, ret_ptr, ret_ptr + strlen(ret_ptr) + 1); }
+	else RETURN_NULL;
+	
+}
+
 // #ifdef _GNU_SOURCE
 // __WEAK_INLINE char* softboundcets_strerror_r(int errnum, char* buf, 
 //                                              size_t buf_len) {

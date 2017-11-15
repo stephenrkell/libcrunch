@@ -2195,8 +2195,8 @@ void *__wrap___notify_copy(void *dest, const void *src, size_t n)
 	 * HACK around this with an "out" label for now. */
 	if (!__libcrunch_bounds_bases_region_00) goto out;
 	
-	// HACK: a bit stronger
-	if (!__libcrunch_is_initialized) goto out;
+	// HACK: a bit stronger -- WHY? this breaks Softbound emulation unless we do the init here
+	// if (!__libcrunch_is_initialized) goto out;
 	/* A realloc, memcpy, memmove or similar operation is moving some data. 
 	 * Make sure we
 	 * -- move its metadata;

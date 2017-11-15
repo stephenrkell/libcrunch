@@ -2672,7 +2672,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                     end
               | Call(olv, calledE, es, l) -> 
                   (* Don't instrument calls to our own (liballocs/libcrunch) functions that get -include'd. *)
-                  if (match calledE with Lval(Var(fvi), NoOffset) when varIsOurs fvi -> true
+                  (* Also don't instrument calls to __builtin_va_arg. *)
+                  if (match calledE with Lval(Var(fvi), NoOffset)
+			when (varIsOurs fvi || fvi.vname = "__builtin_va_arg") -> true
                     | _ -> false)
                   then changedInstrs
                   else
