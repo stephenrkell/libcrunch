@@ -991,6 +991,21 @@ static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const
 	__libcrunch_cache_bump_victim(&__libcrunch_fake_bounds_cache, pos);
 	assert((check_cache_sanity(&__libcrunch_fake_bounds_cache), 1));
 }
+
+void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
+void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t)
+{
+	/* We ensure in crunchbound.ml that ptr is never trapped.
+	 * It follows that it might be pointing one-past-the-end... FIXME: do we deal with that? */
+	const void *ptr = (const void *) ptrval;
+	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(ptr, ptr, t, t->pos_maxoff);
+	if (__libcrunch_bounds_invalid(from_cache, ptr))
+	{
+		cache_bounds(__libcrunch_get_base(ptr_bounds, ptr), __libcrunch_get_limit(ptr_bounds, ptr),
+				t, 1, t->pos_maxoff, NULL);
+	}
+}
+
 /* FIXME: rewrite these */
 void __libcrunch_uncache_all(const void *allocptr, size_t size)
 {
@@ -2343,12 +2358,12 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	if (t == pointer_to___uniqtype__signed_char
 			|| t == pointer_to___uniqtype__unsigned_char)
 	{
-		goto return_alloc_bounds; // FIXME: this is C-specific
+		goto return_alloc_bounds; // FIXME: this is C-specific -- belongs in front-end instrumentation (__fetch_alloc_bounds?)
 	}
 	if (__builtin_expect( t->pos_maxoff == UNIQTYPE_POS_MAXOFF_UNBOUNDED, 0))
 	{
-		goto return_min_bounds;
-	}
+		goto return_min_bounds; // FIXME: also belongs in instrumentation -- can test for an incomplete type
+	}	                        // -- bounds are no use if the caller thinks it's incomplete, even if does have bounded size
 	
 	/* For bounds checking, 
 	 * what we're really asking about is the regularity of the memory around obj,
@@ -2448,6 +2463,7 @@ abort_returning_max_bounds:
 	return __libcrunch_max_bounds(obj);
 }
 
+#if 0 /* I believe this is dead... */
 void * __check_derive_ptr_internal(
 		const void *derived, 
 		const void *derivedfrom, 
@@ -2582,6 +2598,7 @@ out_fail:
 		__builtin_return_address(0));
 	return __libcrunch_trap(derived, LIBCRUNCH_TRAP_INVALID);
 }
+#endif
 
 void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds, const void *addr)

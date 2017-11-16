@@ -139,15 +139,6 @@ void __libcrunch_soft_deref_error_at(const void *codeptr, __libcrunch_bounds_t b
 struct uniqtype;
 struct __libcrunch_bounds_s;
 typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
-void * __check_derive_ptr_internal(
-		const void *derived, 
-		const void *derivedfrom, 
-		__libcrunch_bounds_t *opt_derivedfrom_bounds, 
-		struct uniqtype *t
-)
-{
-	return (void*) derived;
-}
 
 __libcrunch_bounds_t __fetch_bounds_ool(const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
@@ -163,3 +154,6 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 {
 	/* do nothing */
 }
+
+void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t)
+{}

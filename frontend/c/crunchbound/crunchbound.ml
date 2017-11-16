@@ -51,9 +51,10 @@ let noObjectTypeInfo = ref false
 let skipSecondarySplit = ref false
 
 type helperFunctionsRecord = {
- mutable fetchBoundsInl : fundec; 
- mutable fetchBoundsOol : fundec; 
- mutable fetchBoundsFull : fundec; 
+ mutable fetchBoundsInl : fundec;
+ mutable fetchBoundsOol : fundec;
+ mutable fetchBoundsFull : fundec;
+ mutable ensureBoundsInCache : fundec;
  mutable makeBounds : fundec; 
  mutable pushLocalArgumentBounds : fundec; 
  mutable pushArgumentBoundsBaseLimit : fundec; 
@@ -282,6 +283,32 @@ let castNeedsFreshBounds sourceE targetT enclosingFile =
         )
         || (not (typeNeedsBounds sourceT enclosingFile))
     )
+
+let castWantsCachePrefill sourceE targetT enclosingFile =
+    (* We do cache prefill if we're casting from a with-bounds pointer-to-not-incomplete
+     * to an integer or generic pointer. *)
+    let sourceT = Cil.typeOf sourceE in
+    if (!noObjectTypeInfo && isPointerType sourceT) then false else
+    let (sourceTS, targetTS) = (Cil.typeSig sourceT, Cil.typeSig targetT) in
+    let sourceConcrete = getConcreteType (decayArrayToCompatiblePointer sourceTS) in
+    let targetConcrete = getConcreteType (decayArrayToCompatiblePointer targetTS) in
+    typeNeedsBounds sourceT enclosingFile
+    (* And the bounds are not trivial... *)
+    && (not (isStaticallyNullPtr sourceE))
+    && (not (isStaticallyZero sourceE))
+    (* AND the source pointee type is complete *)
+    && (not (tsIsFunctionPointer sourceTS))
+    && isCompleteType (match unrollType sourceT with TPtr(sourceTPointerTarget, _) -> sourceTPointerTarget | _ -> failwith "impossible")
+    (* AND the cast-to type is somehow "generic", i.e. a hint that we'll soon want the old bounds back. *)
+    && ( 
+        (* FIXME: if we include non-pointers here, then a bunch of the 
+         * casts to unsigned logn that we create ourselves
+         * end up getting instrumented by the prefill code. GAH. 
+         * Not sure how to avoid this. We do seem to avoid self-instrmentation
+         * in the case of CastE(voidPtrPtrType, _).
+         * Control flow here is a mess....  *)
+    
+    (*  (not (isPointerType targetT))  || *) isGenericPointerType targetT )
 
 let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (host : Cil.lhost) (prevOffsets : Cil.offset) gs = 
     debug_print 1 ("Hello from boundsIndexExprForOffset\n");
@@ -907,8 +934,7 @@ let ensureBoundsLocalLval ptrExpr boundsDescrForPtrExpr enclosingFunction bounds
             in
             (Var(bTemp), NoOffset)
 
-let boundsUpdateInstrs blv ptrExp boundsDescr
-    helperFunctions loc enclosingFile pointeeUniqtypeExpr = 
+let boundsUpdateInstrs ?doFetchOol:(doFetchOol=true) blv ptrE boundsDescr helperFunctions loc enclosingFile pointeeUniqtypeExpr = 
     match boundsDescr with
         BoundsBaseLimitRvals(baseExpr, limitExpr) ->
             [makeCallToMakeBounds (Some(blv))
@@ -928,7 +954,7 @@ let boundsUpdateInstrs blv ptrExp boundsDescr
                    (Lval(Var(helperFunctions.fetchBoundsInl.svar),NoOffset)),
                    [
                        (*  const void *ptr *)
-                       ptrExp; 
+                       ptrE; 
                        (* where did we load it from? *)
                        CastE(voidPtrPtrType, mkAddrOf (lh,lo));
                        (* what's the pointee type? *)
@@ -936,17 +962,27 @@ let boundsUpdateInstrs blv ptrExp boundsDescr
                    ],
                    loc
             )]
-      | MustFetch(_) -> (* No point doing an inl fetch -- do an ool, like we usually do. *)
+      | MustFetch(_) -> 
+            if doFetchOol then
             [Call( Some(blv),
                    (Lval(Var(helperFunctions.fetchBoundsOol.svar),NoOffset)),
                    [
                        (*  const void *ptr *)
-                       ptrExp; 
+                       ptrE; 
                        (* where did we load it from? *)
                        CastE(voidPtrPtrType, nullPtr);
                        (* what's the pointee type? *)
                        pointeeUniqtypeExpr
                    ],
+                   loc
+            )]
+            else
+            [Call( Some(blv),
+                   (Lval(Var(helperFunctions.makeInvalidBounds.svar),NoOffset)),
+                   [
+                       (*  const void *ptr *)
+                       ptrE
+                    ],
                    loc
             )]
 
@@ -1158,9 +1194,8 @@ let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction help
         ( List.fold_left (fun s -> fun xi -> s ^ (instToString xi) ^ ",") "" resInstrs )^ "]\n") in let _ = flush stderr in
     res
 
-let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals castFromExp castExp castToTS localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
+let hoistCast exprTmpVar enclosingFile enclosingFunction helperFunctions uniqtypeGlobals castFromExp castExp castToTS localLvalToBoundsFun currentFuncAddressTakenLocalNames currentInst tempLoadExprs = 
     let loc = instrLoc currentInst in
-    let exprTmpVar = Cil.makeTempVar ~name:"__cil_castexpr_" enclosingFunction (typeOf castExp) in
     (* Since exprTmpVar is a non-address-taken local pointer, we expect it to have 
      * local bounds. *)
     let exprTmpBoundsVar = begin match localLvalToBoundsFun (Var(exprTmpVar), NoOffset) with
@@ -1188,7 +1223,12 @@ let hoistCast enclosingFile enclosingFunction helperFunctions uniqtypeGlobals ca
     let res = (exprTmpVar, 
             (* We've just created local bounds for the temporary, so initialise them.
              * But do it after we assign to the temporary, so that we pick up
-             * what trumptr left behind in the cache, hopefully. *)
+             * what trumptr left behind in the cache, hopefully. In other words,
+             * we want the trumptr cast check instruction to go between
+             * the Set(exprTmpVar, castExp)
+             * and the Call(fetchBoundsFull)
+             * so that the latter can profit from the cache state after a cast check.
+             *)
             [
                 Set( (Var(exprTmpVar), NoOffset), castExp, loc );
                 Call( Some(Var(exprTmpBoundsVar), NoOffset),
@@ -1390,6 +1430,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      fetchBoundsInl = emptyFunction "__fetch_bounds_inl";
      fetchBoundsOol = emptyFunction (if !noObjectTypeInfo then "__fetch_bounds_ool_via_dladdr" else "__fetch_bounds_ool");
      fetchBoundsFull = emptyFunction "__fetch_bounds_full";
+     ensureBoundsInCache = emptyFunction "__ensure_bounds_in_cache";
      makeBounds = emptyFunction "__make_bounds";
      pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
      pushArgumentBoundsBaseLimit = emptyFunction "__push_argument_bounds_base_limit";
@@ -1456,7 +1497,15 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                  ], 
                             false, []))
     ;
-
+    helperFunctions.ensureBoundsInCache <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__ensure_bounds_in_cache" (TFun(voidType,
+                            Some [
+                                   ("ptrval", ulongType, []);
+                                   ("bounds", boundsType, []);
+                                   ("t", TPtr(findStructTypeByName enclosingFile.globals "uniqtype", []), [])
+                                 ],
+                            false, []))
+    ;
     helperFunctions.makeBounds <- findOrCreateExternalFunctionInFile 
                             enclosingFile "__make_bounds" (TFun(boundsType, 
                             Some [ 
@@ -3115,6 +3164,9 @@ class crunchBoundVisitor = fun enclosingFile ->
     match !currentFunc with
         None -> (* expression outside function *) SkipChildren
       | Some(f) -> 
+          let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
+            with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+          in
           (* Need to remember parent lval *)
           let initialSimplifiedE = simplifyPtrExprs outerE in
           let simplifiedE = match initialSimplifiedE with
@@ -3190,50 +3242,112 @@ class crunchBoundVisitor = fun enclosingFile ->
                 BinOp(Div, BinOp(MinusA, e1ToUse, e2ToUse, ulongType), 
                     SizeOf (unifyPointerTargetTypes (Cil.typeOf e1) (Cil.typeOf e2)),
                     (* ptrdiff_t *) longType)
-          | CastE(targetT, subex) ->
+          | CastE(targetT, subex) -> (
               let subexT = Cil.typeOf subex in 
               let subexTs = getConcreteType(Cil.typeSig(subexT)) in
-              let targetTs = getConcreteType(Cil.typeSig(targetT))
-              in
-              if (tsIsPointer subexTs) && (not (tsIsPointer targetTs)) 
-                && (mightBeTrappedPointer subex)
-                (* Making an integer from a pointer: need to de-trap.
-                 * Go via a helper -- also handy for tracing this?
-                 * ACTUALLY will make life more difficult for tracing
-                 * escape of pointerness, but do it anyway. *)
-                then
-                let tmpVar = Cil.makeTempVar ~name:"__cil_detrap_" f ulongType in
-                    self#queueInstr [
-                        Call( Some(Var(tmpVar), NoOffset), 
-                              Lval(Var(helperFunctions.detrap.svar), NoOffset), 
-                              [ subex ],
-                              instrLoc !currentInst
-                        )
-                    ]
-                    ;
-                    CastE(targetT, Lval(Var(tmpVar), NoOffset))
-                else if castNeedsFreshBounds subex targetT enclosingFile
-                    then begin
-                    debug_print 1 ("Cast may change bounds: source `" ^ 
-                        (typsigToString (decayArrayToCompatiblePointer subexTs)) ^ 
-                        "', dest `" ^ 
-                        (typsigToString (decayArrayToCompatiblePointer targetTs)) ^ "'\n");
-                    flush stderr;
-                    let tempVar, checkInstrs = hoistCast enclosingFile f
-                                    helperFunctions uniqtypeGlobals 
-                                    (* castFromExp *) subex
-                                    (* castExp *) e
-                                    (* castToTS *) targetTs
-                                    (* localLvalToBoundsFun *) (boundsLvalForLocalLval boundsLocals f enclosingFile)
-                                    !currentFuncAddressTakenLocalNames
-                                    !currentInst
-                                    tempLoadExprs
+              let targetTs = getConcreteType(Cil.typeSig(targetT)) in
+              (* Casts not involving pointers are not interesting to us *)
+              if (not (isPointerType subexT) && not (isPointerType targetT)) then e
+              else
+              let maybeDetrappedSubex = 
+                  if (tsIsPointer subexTs) && (not (tsIsPointer targetTs)) 
+                    && (mightBeTrappedPointer subex)
+                    (* Making an integer from a pointer: need to de-trap.
+                     * Go via a helper -- also handy for tracing this?
+                     * ACTUALLY will make life more difficult for tracing
+                     * escape of pointerness, but do it anyway. *)
+                    then
+                    let tmpVar = Cil.makeTempVar ~name:"__cil_detrap_" f ulongType in
+                        self#queueInstr [
+                            Call( Some(Var(tmpVar), NoOffset), 
+                                  Lval(Var(helperFunctions.detrap.svar), NoOffset), 
+                                  [ subex ],
+                                  instrLoc !currentInst
+                            )
+                        ]
+                        ;
+                        CastE(targetT, Lval(Var(tmpVar), NoOffset))
+                  else subex
+                in
+                    let localLvalToBoundsFun = boundsLvalForLocalLval boundsLocals f enclosingFile
                     in
-                    (
-                        self#queueInstr checkInstrs;
-                        (Lval(Var(tempVar), NoOffset))
-                    )
-                end else e
+                    (* HACK required by CIL: if we're in a call to __builtin_va_arg, then the third
+                     * argument is really supposed to be CastE(sometype, AddrOf(destLvalue)).
+                     * If we split the cast into a temp var and then pass the temp var as the address-of,
+                     * CIL will get upset. Since it's not a "real" cast, for now we just detect that case 
+                     * and handle it specially. FIXME: proper treatment of doing va_arg that yields
+                     * a bounds-needing pointer. *)
+                    match !currentInst with
+                        Some(Call(_, Lval(Var(f), NoOffset), [_; _; _], _)) when f.vname = "__builtin_va_arg" ->
+                            e
+                      | _ ->
+                    let exprTmpVar = Cil.makeTempVar ~name:"__cil_castexpr_" f (typeOf e)
+                    in
+                    (if castNeedsFreshBounds subex targetT enclosingFile
+                    then 
+                        begin
+                        debug_print 1 ("Cast may change bounds: source `" ^ 
+                            (typsigToString (decayArrayToCompatiblePointer subexTs)) ^ 
+                            "', dest `" ^ 
+                            (typsigToString (decayArrayToCompatiblePointer targetTs)) ^ "'\n");
+                        flush stderr;
+                        let _, checkInstrs = hoistCast exprTmpVar enclosingFile f
+                                        helperFunctions uniqtypeGlobals 
+                                        (* castFromExp *) subex (* no need to use detrap because target is a ptr here *)
+                                        (* castExp *) e
+                                        (* castToTS *) targetTs
+                                        localLvalToBoundsFun
+                                        !currentFuncAddressTakenLocalNames
+                                        !currentInst
+                                        tempLoadExprs
+                        in
+                        self#queueInstr checkInstrs
+                        end
+                   (* Remember: maybeDetrappedSubex and exprTmpVar both have the same type as the overall cast expression *)
+                   else (self#queueInstr [Set((Var(exprTmpVar),NoOffset), maybeDetrappedSubex, instrLoc !currentInst)]));
+                   (* Now exprTmpVar is the result of the cast expression... I hope you're keeping up *)
+                   (if castWantsCachePrefill subex targetT enclosingFile then
+                       begin
+                       debug_print 1 ("Cast wants cache prefill: source `" ^
+                            (typsigToString (decayArrayToCompatiblePointer subexTs)) ^ 
+                            "', dest `" ^ 
+                            (typsigToString (decayArrayToCompatiblePointer targetTs)) ^ "'\n");
+                        flush stderr;
+                       let be = boundsDescrForExpr subex !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
+                       in
+                       (* Obviously, since the point of cache prefill is to avoid a full fetch,
+                        * only do cache prefill if we can get the bounds cheaper than that. *)
+                       match be with 
+                        BoundsLval(_) | BoundsBaseLimitRvals(_, _) | MustFetch(LoadedFrom(_)) ->
+                            (* It's worth doing the cache prefill. *)
+                            let blv = ensureBoundsLocalLval subex be f boundsType
+                            in
+                            let pointeeUniqtypeExpr = pointeeUniqtypeGlobalPtrGivenPtrT (Cil.typeSig (Cil.typeOf subex)) enclosingFile uniqtypeGlobals
+                            in
+                            let boundsExpr = (Lval(blv)) in
+                            let preInstrs = boundsUpdateInstrs ~doFetchOol:false blv subex be 
+                                  helperFunctions (instrLoc !currentInst) enclosingFile pointeeUniqtypeExpr
+                            in
+                            (* Cache prefill: the cast-from pointer *)
+                            (self#queueInstr (preInstrs @ [Call(None,
+                            Lval(Var(helperFunctions.ensureBoundsInCache.svar), NoOffset),
+                            [
+                                (* the pointer -- hmm, what if it's trapped? That's okay, it's void* and we barely use it.
+                                 * Here, maybeDetrappedSubex could have either integer or ptr type, so cast to integer. *)
+                                CastE(ulongType, maybeDetrappedSubex);
+                                (* its bounds *)
+                                boundsExpr;
+                                (* its pointee type *)
+                                pointeeUniqtypeExpr
+                            ],
+                            instrLoc !currentInst)]))
+                        | _ -> (
+                           debug_print 1 ("Couldn't do cache prefill because we lack bounds for " ^ (expToString subex) ^ "\n");
+                           flush stderr)
+                       end (* if cache wants prefill *)
+                   else ());
+                   (Lval(Var(exprTmpVar), NoOffset))
+          )
           (* Now we just need to handle pointer arithmetic that appears in code as such.
            * We let it stand if we're at top level; otherwise we hoist it
            * to another temporary. *)
@@ -3567,7 +3681,7 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
           match !copiedBlock with
               Some(b) -> b
             | None -> failwith "couldn't copy function body"
-      )  
+      )
       in
       (* debug_print 1 ("Labelling primary checks in function " ^ f.svar.vname ^ " original body\n"); *)
       f.sbody <- visitCilBlock (new checkStatementLabelVisitor "primary_check" helperFunctions.checkDerivePtr.svar) f.sbody;
@@ -3595,11 +3709,24 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
       debug_print 1 ("Finished with function " ^ f.svar.vname ^ "\n"); *)
       (* Our new body is a Block containing both *)
+      let mkSimpleAsm str isVolatile = (Asm(
+        (* attributes*) (if isVolatile then [Attr("volatile",[])] else []),
+        (* templates*)  [str],
+        (* output constraints *) [],
+        (* input constraints *) [],
+        (* clobbers *) [],
+        (* location *) f.svar.vdecl
+      )) in
+      let secondarySectionDescr = ".text.ZZsecondary." ^ f.svar.vname ^ ", \"ax\", @progbits" in
+      let pushsectInstrs = [mkSimpleAsm (".pushsection " ^ secondarySectionDescr ^ "\n") true] in
+      let popsectInstrs = [mkSimpleAsm (".popsection" ^ "\n") true] in
       f.sbody <- {
         battrs = f.sbody.battrs;
         bstmts = [
             { labels = []; skind = Block(f.sbody);       sid = 0; succs = []; preds = [] };
-            { labels = []; skind = Block(labelledSecondaryBody); sid = 0; succs = []; preds = [] }
+            { labels = []; skind = Instr(pushsectInstrs); sid = 0; succs = []; preds = [] };
+            { labels = []; skind = Block(labelledSecondaryBody); sid = 0; succs = []; preds = [] };
+            { labels = []; skind = Instr(popsectInstrs); sid = 0; succs = []; preds = [] }
         ]
       };
       DoChildren

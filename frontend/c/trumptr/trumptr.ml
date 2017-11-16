@@ -197,13 +197,6 @@ let mkCheckInstrsForTargetType
       mkCheckInstrs e enclosingFunction testFunVar inlineAssertFun (instrLoc !currentInst) ourCheckArgs uniqtypeS uniqtypeGlobals currentInst
  end
 
-let isGenericPointerType (t : Cil.typ) = 
-    indirectionLevel (Cil.typeSig t) >= 1 &&
-    let upts = ultimatePointeeTs (getConcreteType(Cil.typeSig t))
-    in
-    upts = Cil.typeSig(voidType)
-     || upts = Cil.typeSig(charType)
-
 let rec isGPCOT t = (* generic-pointer-containing object type *)
 isGenericPointerType t
 ||

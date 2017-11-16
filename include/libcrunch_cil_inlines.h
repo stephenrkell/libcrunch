@@ -117,8 +117,6 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derive
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds);
 void __libcrunch_soft_bounds_error_at(const void *ptr, __libcrunch_bounds_t bounds, const void *addr);
-void * __check_derive_ptr_internal(const void *derived, const void *derivedfrom, 
-		__libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t)/* PURE -- fixme */;
 
 /* Utilities */
 // FIXME: is it okay that this is weak? I think we don't use it anyway
@@ -1076,6 +1074,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __libcrunch_
 	return bounds1.base == bounds2.base && bounds1.size == bounds2.size;
 #endif
 }
+
+extern void __ensure_bounds_in_cache(unsigned long ptr, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz)
