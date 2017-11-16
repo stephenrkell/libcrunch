@@ -1078,9 +1078,10 @@ static void report_failure(const void *site, long *p_repeat_suppression_count,
 		/* returning a fresh uniqtype into a buffer, and (even) passing mcontext. */ \
 		alloc_uniqtype = alloc_uniqtype->make_precise(alloc_uniqtype, \
 			NULL, 0, \
-			(void*) obj, (void*) alloc_start, alloc_size_bytes, __builtin_return_address(0), \
+			(void*) alloc_start, (void*) alloc_start, alloc_size_bytes, __builtin_return_address(0), \
 			NULL); \
-		/* FIXME: now ask the meta-alloc protocol to update that object's metadata to this type. */ \
+		/* Now ask the meta-alloc protocol to update that object's metadata to this type. */ \
+		if (a && a->set_type) a->set_type((void*) alloc_start, alloc_uniqtype); \
 	} \
 	 \
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype; \
