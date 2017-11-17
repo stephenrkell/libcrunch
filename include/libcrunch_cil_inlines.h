@@ -47,9 +47,15 @@ typedef struct __libcrunch_bounds_s __libcrunch_bounds_t;
 struct __libcrunch_ptr_with_bounds_s
 {
 	unsigned long ptr;
-	__libcrunch_bounds_t bounds;
+	unsigned int size;
+	unsigned int base_lowerbits;
 };
-typedef struct __libcrunch_ptr_with_bounds_s __libcrunch_ptr_with_bounds_t;
+union __libcrunch_ptr_with_bounds_u
+{
+	struct __libcrunch_ptr_with_bounds_s s;
+	__int128 raw;
+};
+//typedef struct __libcrunch_ptr_with_bounds_s __libcrunch_ptr_with_bounds_t;
 
 /// / HACKs to get us going
 // #define LIBCRUNCH_BOUNDS_REGION_BASE ((void*) 0x300000000000ul)

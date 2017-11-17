@@ -49,6 +49,7 @@ module H = Hashtbl
 let voidPtrHasBounds = ref false
 let noObjectTypeInfo = ref false
 let skipSecondarySplit = ref false
+let int128Type = TInt(IInt128, [])
 
 type helperFunctionsRecord = {
  mutable fetchBoundsInl : fundec;
@@ -254,11 +255,47 @@ let typeNeedsBounds t enclosingFile =
         Some(_) -> true
       | None -> false
 
+let rec findFiNamed name (cfs: fieldinfo list) =
+    match cfs with
+        [] -> raise Not_found
+      | f :: fs -> if f.fname = name then f else findFiNamed name fs
+
+let findBoundsType globals = try (
+    let boundsType = findStructTypeByName globals "__libcrunch_bounds_s"
+    in
+    let boundsCompinfo = match boundsType with TComp(ci, _) -> ci
+      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
+    in
+    let boundsBaseFi = findFiNamed "base" boundsCompinfo.cfields
+    in
+    let boundsSizeFi = findFiNamed "size" boundsCompinfo.cfields
+    in
+    (boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi)
+  )
+  with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+
+let findFatPtrTypes globals =
+    let fatPtrStructType = try findStructTypeByName globals "__libcrunch_ptr_with_bounds_s"
+      with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_s not defined"
+    in
+    let fatPtrStructCompinfo = (match fatPtrStructType with TComp(ci, _) -> ci
+      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
+    )
+    in
+    let fatPtrUnionType = try findUnionTypeByName globals "__libcrunch_ptr_with_bounds_u"
+      with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_u not defined"
+    in
+    let fatPtrUnionCompinfo = (match fatPtrUnionType with TComp(ci, _) -> ci
+      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_u not a composite type"
+    )
+    in
+    (fatPtrStructType, fatPtrStructCompinfo, fatPtrUnionType, fatPtrUnionCompinfo)
+
 let isPointerTypeNeedingBounds t enclosingFile = 
     isPointerType t &&
-    match boundsTForT t enclosingFile.globals with
+    (match boundsTForT t enclosingFile.globals with
         Some(_) -> true
-      | None -> false
+      | None -> false)
 
 let exprNeedsBounds expr enclosingFile =
     typeNeedsBounds (Cil.typeOf expr) enclosingFile
@@ -996,23 +1033,20 @@ let getNoinlinePureHelper fvi enclosingFile =
       | None -> failwith ("internal error: did not find noinline pure helper for " ^
             fvi.vname)
        
-let createNoinlinePureHelper fvi enclosingFile createdHelpers callingFunction =
-    let name = "__crunchbound_pure_helper_" ^ fvi.vname in
-    let found = maybeGetNoinlinePureHelper fvi enclosingFile in
+let createNoinlinePureHelper helpedFunction enclosingFile createdHelpers callingFunction =
+    let name = "__crunchbound_pure_helper_" ^ helpedFunction.vname in
+    let found = maybeGetNoinlinePureHelper helpedFunction enclosingFile in
     match found with Some(x) -> (debug_print 1 ("Already found helper: " ^ name ^ "\n"); x)
       | None ->
-        let fatPtrType = try findStructTypeByName enclosingFile.globals "__libcrunch_ptr_with_bounds_s"
-          with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_s not defined"
-        in
-        let fatPtrCompinfo = match fatPtrType with TComp(ci, _) -> ci
-          | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
-        in
-        let (origRetT, origArgsT, origIsVa, origTattrs) = match fvi.vtype with
+        let fatPtrStructType, fatPtrStructCompinfo, fatPtrUnionType, fatPtrUnionCompinfo
+         = findFatPtrTypes enclosingFile.globals
+        in 
+        let (origRetT, origArgsT, origIsVa, origTattrs) = match helpedFunction.vtype with
             TFun(retT, argsT, isVa, tAttrs) -> (retT, argsT, isVa, tAttrs)
           | _ -> failwith "creating helper for something not of function type"
         in
         let f = findOrCreateNewFunctionInFile 
-                enclosingFile name (TFun(fatPtrType, origArgsT, origIsVa, origTattrs)) fvi.vdecl
+                enclosingFile name (TFun(int128Type, origArgsT, origIsVa, origTattrs)) helpedFunction.vdecl
                 (* insert before the function that called us *)
                 (fun g -> match g with GFun(dec, loc) when dec == callingFunction -> true
                         | _ -> false);
@@ -1035,37 +1069,39 @@ let createNoinlinePureHelper fvi enclosingFile createdHelpers callingFunction =
                     List.mapi (fun idx -> fun (_, t, _) -> makeFormalVar f ("arg" ^ (string_of_int idx)) t) argTriples
                 );
                 (* We keep the "pure" attribute, but make us noinline. FIXME: why? It just feels right. *)
-                f.svar.vattr <- addAttribute (Attr("noinline", [])) fvi.vattr;
-                let _ = debug_print 1 ("pure callee has attributes " ^ (attrsToString fvi.vattr) ^ "\n") in
+                f.svar.vattr <- addAttribute (Attr("noinline", [])) helpedFunction.vattr;
+                let _ = debug_print 1 ("pure callee has attributes " ^ (attrsToString helpedFunction.vattr) ^ "\n") in
                 let _ = debug_print 1 ("wrapper now has attributes " ^ (attrsToString f.svar.vattr) ^ "\n") in
                 (* We create a simple wrapper body
-                   which populates a temporary
-                   instrument that;
-                   and then fix up the return site
-                   to pass the bounds in-band.
-                   Since the pointer is an unsigned long,
-                   this won't be treated as a bounds-returning call.
-                   We still pass bounds as usaul.
-                   We can't fix up the return quite yet. *)
+                   which populates a temporary by calling the real underlying function;
+                   (that is no longer pure). We instrument the wrapper like we do any other function;
+                   and then also fix up its return site to pass the bounds in-band as a fat pointer.
+                   This won't be treated as a bounds-returning call.
+                   We still pass bounds to the function arguments using the shadow stack, as usual.
+                   We can't fix up the return quite yet; we do it later in the shadow-stack logic. *)
                 let tmpVi = Cil.makeTempVar ~name:"__ptr_retval_" f origRetT in
                 let instrs = [
                     Call(Some(Var(tmpVi), NoOffset),
-                         Lval(Var(fvi), NoOffset),
+                         Lval(Var(helpedFunction), NoOffset),
                          List.map (fun x -> Lval(Var(x), NoOffset)) f.sformals,
-                         fvi.vdecl
+                         helpedFunction.vdecl
                         )
                 ] in
                 (* When we actually instrument this call, we will need 
                  * the varinfo of the pointer temporary, so we can get its bounds.
                  * We can create the fat pointer ourselves, and do the two Sets.
                  * So just try to return tmpVi for now. *)
-                let retStmt = (Return(Some(Lval(Var(tmpVi), NoOffset)), fvi.vdecl))
+                let retStmt = (Return(Some(Lval(Var(tmpVi), NoOffset)), helpedFunction.vdecl))
                 in
                 f.sbody <- mkBlock [{ labels = []; skind = Instr(instrs); sid = 0; succs = []; preds = [] };
                                     { labels = []; skind = retStmt; sid = 0; succs = []; preds = [] }]
                 ;
-                createdHelpers := (f, callingFunction) :: !createdHelpers;
-                debug_print 1 ("Created noinline helper " ^ name ^ "\n");
+                createdHelpers := (f, helpedFunction) :: !createdHelpers;
+                debug_print 1 ("Created noinline pure helper " ^ name ^ "; we now have " ^ 
+                    (string_of_int (List.length !createdHelpers)) ^ ", names: [" ^
+                    (List.fold_left (fun acc -> fun (helper, callee) -> 
+                        acc ^ ((if acc = "" then "" else ", ") ^ (lvalToString (Var(callee),NoOffset)))) "" !createdHelpers) 
+                    ^ "]\n");
                 f
 
 
@@ -1464,7 +1500,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      * then build a new list. *)
     let uniqtypePtrType = TPtr(findStructTypeByName enclosingFile.globals "uniqtype", [])
     in
-    let boundsType = findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
+    let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
     in
     let boundsPtrType = TPtr(boundsType, [])
     in
@@ -1807,8 +1843,7 @@ let concatMapForAllPointerBoundsInExprList f es currentFuncAddressTakenLocalName
 
 let doNonLocalPointerStoreInstr ~useVoidPP ptrE pointeeUniqtypeExpr storeLv be l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions = 
     (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
-    let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
-      with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+    let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
     in
     (* What do we do if we have to fetch the bounds of the stored value?
      * This means that we don't *locally* know the bounds of the stored
@@ -1848,8 +1883,7 @@ let makeShadowBoundsInitializerCalls helperFunctions enclosingFunc initializerLo
     (* The instructions we need to generate are like doNonLocalPointerStoreInstr,
      * except that we always do a slow fetch. *)
     (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
-    let boundsType = try findStructTypeByName wholeFile.globals "__libcrunch_bounds_s"
-      with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+    let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType wholeFile.globals
     in
     (* What do we do if we have to fetch the bounds of the stored value?
      * This means that we don't *locally* know the bounds of the stored
@@ -2038,11 +2072,8 @@ class crunchBoundVisitor = fun enclosingFile ->
       DoChildren
       
   method vstmt (outerS : stmt) : stmt visitAction = 
-      let fatPtrType = try findStructTypeByName enclosingFile.globals "__libcrunch_ptr_with_bounds_s"
-        with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_s not defined"
-      in
-      let fatPtrCompinfo = match fatPtrType with TComp(ci, _) -> ci
-        | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
+      let fatPtrStructType, fatPtrStructCompinfo, fatPtrUnionType, fatPtrUnionCompinfo
+       = findFatPtrTypes enclosingFile.globals
       in
       match !currentFunc with
           None -> (* statement outside function? *) DoChildren
@@ -2084,13 +2115,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 in
                 let mkReturnNoBoundsBlock rs instrs = {
                     battrs = [];
-                    bstmts = let justReturn = {
-                        labels = [];
-                        skind = rs;
-                        sid = 0;
-                        succs = [];
-                        preds = []
-                    } in
+                    bstmts = let justReturn = { labels = []; skind = rs; sid = 0; succs = []; preds = [] } in
                     if instrs = [] then [justReturn] else [{
                         labels = [];
                         skind = Instr(instrs);
@@ -2102,20 +2127,41 @@ class crunchBoundVisitor = fun enclosingFile ->
                 in
                 let (rs, boundsReturnInstrList) =
                 if List.mem f helperFns then
-                    let tmpFatPointerVi = Cil.makeTempVar ~name:"__fatptr_retval_" f fatPtrType in
-                    let returnBoundsInstrs = match returnExp with Lval(Var(tmpPointerVar), NoOffset) ->
-                        [
-                            (* set the pointer one *)
-                            Set((Var(tmpFatPointerVi), Field(List.hd fatPtrCompinfo.cfields, NoOffset)),
-                                CastE(ulongType, returnExp), loc);
-                            (* set the bounds one *)
-                            Set((Var(tmpFatPointerVi), Field(List.hd (List.tl fatPtrCompinfo.cfields), NoOffset)),
-                                Lval(localLvalToBoundsFun (Var(tmpPointerVar), NoOffset)), loc)
-                        ]
-                        | _ -> failwith "noinline helper has returnExp not a simple lvalue"
+                    let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
+                    in
+                    let tmpFatPointerVi = Cil.makeTempVar ~name:"__fatptr_retval_" f fatPtrUnionType in
+                    (* let boundsCompinfo = match boundsType with TComp(ci, _) -> ci | _ -> failwith "strange: bounds not what we expected"
+                    in *)
+                    let returnBoundsInstrs = (match returnExp with Lval(Var(tmpPointerVar), NoOffset) ->
+                        let boundsLval = localLvalToBoundsFun (Var(tmpPointerVar), NoOffset) in
+                        (match boundsLval with
+                            (Var(boundsVar), NoOffset) ->
+                            [
+                                (* set the pointer one, from the pointer var itself *)
+                                Set((Var(tmpFatPointerVi), 
+                                        Field(findFiNamed "s" fatPtrUnionCompinfo.cfields,
+                                            Field(findFiNamed "ptr" fatPtrStructCompinfo.cfields, NoOffset))),
+                                    CastE(ulongType, returnExp), loc);
+                                (* set the bounds size one *)
+                                Set((Var(tmpFatPointerVi), Field(findFiNamed "s" fatPtrUnionCompinfo.cfields,
+                                            Field(findFiNamed "size" fatPtrStructCompinfo.cfields, NoOffset))),
+                                    (* size expression *)
+                                    (Lval(Var(boundsVar), Field(boundsSizeFi, NoOffset))),
+                                    loc);
+                                (* set the bounds base-loworder one *)
+                                Set((Var(tmpFatPointerVi),  Field(findFiNamed "s" fatPtrUnionCompinfo.cfields,
+                                            Field(findFiNamed "base_lowerbits" fatPtrStructCompinfo.cfields, NoOffset))),
+                                    (* base lowbits expression *)
+                                    (CastE(ulongType, (Lval(Var(boundsVar), Field(boundsBaseFi, NoOffset))))),
+                                    loc)
+                            ]
+                            | _ -> failwith "noinline helper has returnExp bounds var not a simple lvalue"
+                            )
+                      | _ -> failwith "noinline helper has returnExp not a simple lvalue"
+                    )
                     in
                     (* return the fat pointer, not the original one *)
-                    let rs = Return(Some(Lval(Var(tmpFatPointerVi), NoOffset)), loc)
+                    let rs = Return(Some(Lval(Var(tmpFatPointerVi), Field(findFiNamed "raw" fatPtrUnionCompinfo.cfields, NoOffset))), loc)
                     in
                     (* we always return bounds *)
                     (rs, returnBoundsInstrs)
@@ -2237,8 +2283,7 @@ class crunchBoundVisitor = fun enclosingFile ->
       tempLoadExprs := VarinfoMap.empty;
       let localLvalToBoundsFun = boundsLvalForLocalLval boundsLocals f enclosingFile
       in 
-      let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
-        with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+      let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
       in
       (* (debug_print 1 ("CIL dump of function `" ^ f.svar.vname ^ "': ");
        Cil.dumpBlock (new plainCilPrinterClass) stderr 0 f.sbody;
@@ -2483,14 +2528,9 @@ class crunchBoundVisitor = fun enclosingFile ->
   
   method vinst (outerI: instr) : instr list visitAction = begin
     currentInst := Some(outerI); (* used from vexpr *)
-    let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
-      with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+    let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
     in
-    let fatPtrType = try findStructTypeByName enclosingFile.globals "__libcrunch_ptr_with_bounds_s"
-      with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_s not defined"
-    in
-    let fatPtrCompinfo = match fatPtrType with TComp(ci, _) -> ci
-      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
+    let fatPtrStructType, fatPtrStructCompinfo, fatPtrUnionType, fatPtrUnionCompinfo = findFatPtrTypes enclosingFile.globals
     in
     ChangeDoChildrenPost([outerI], fun changedInstrs ->
         (* At this point, hoistAndCheck has done its thing on the expressions.
@@ -2654,6 +2694,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     else (match calledE with
                         (Lval(Var(fvi), NoOffset)) ->
                             (filterAttributes "aconst" fvi.vattr <> [] (* HACK: why "aconst"? very CILly *)||
+                            filterAttributes "const" fvi.vattr <> [] (* HACK: why "aconst"? very CILly *)||
                             filterAttributes "pure" fvi.vattr <> []) &&
                             (* don't call the helpers from within the helpers *)
                             (let (helperFundecs, _) = unzip noinlineHelpers in
@@ -2679,30 +2720,49 @@ class crunchBoundVisitor = fun enclosingFile ->
                                  *     so that we assign fatptr.p to olv
                                  *     and fatptr.bounds to wherever we would put the returned bounds.
                                  *)
-                                let tmpRet = Cil.makeTempVar f ~name:"__fatptr_ret" fatPtrType in
+                                let tmpRet = Cil.makeTempVar f ~name:"__fatptr_ret" fatPtrUnionType in
                                 let noinlineHelper = getNoinlinePureHelper fvi enclosingFile in
                                 match olv with
                                     None -> failwith "internal error: noinline helper but no return value or return value ignored"
                                   | Some(olhost, oloff) -> (
-                                    let ptrFieldLv = Var(tmpRet), Field(List.hd fatPtrCompinfo.cfields, NoOffset) in
-                                    let boundsFieldLv = Var(tmpRet), Field(List.hd (List.tl fatPtrCompinfo.cfields), NoOffset) in
-                                    let actualCalledE = Lval(Var(noinlineHelper.svar), NoOffset)
+                                    let ptrFieldLv = (Var(tmpRet), Field(findFiNamed "s" fatPtrUnionCompinfo.cfields, Field(findFiNamed "ptr" fatPtrStructCompinfo.cfields, NoOffset))) in
+                                    let boundsSizeFieldExpr = Lval(Var(tmpRet), Field(findFiNamed "s" fatPtrUnionCompinfo.cfields, Field(findFiNamed "size" fatPtrStructCompinfo.cfields, NoOffset))) in
+                                    let boundsBaseFieldExpr = 
+                                        let lowerBitsExpr = Lval(Var(tmpRet), Field(findFiNamed "s" fatPtrUnionCompinfo.cfields, Field(findFiNamed "base_lowerbits" fatPtrStructCompinfo.cfields, NoOffset))) in
+                                        BinOp(BOr,
+                                            (* we OR together 
+                                             *   (1) the AND of the ptr value with 0xffffffff00000000... except we can't
+                                                     express that in OCaml very easily. So shift right 32 and then left 32. *)
+                                            (BinOp(Shiftlt, (BinOp(Shiftrt, (Lval(ptrFieldLv)), integer 32, ulongType)), integer 32, ulongType)),
+                                            (* ..(2) the base lowerbits values *)
+                                            lowerBitsExpr,
+                                            ulongType
+                                        )
                                     in
+                                    let actualCalledE = Lval(Var(noinlineHelper.svar), NoOffset) in
+                                    (* The helper is returning an int128, so set to that member of the union *)
                                     (actualCalledE,
-                                    [Call(Some(Var(tmpRet), NoOffset), actualCalledE, es, l);
+                                    [Call(Some(Var(tmpRet), Field(findFiNamed "raw" fatPtrUnionCompinfo.cfields, NoOffset)), actualCalledE, es, l);
                                      Set((olhost, oloff), CastE(voidPtrType, Lval(ptrFieldLv)), l)
-                                     ] @ 
-                                    let boundsRval = Lval(boundsFieldLv) in
+                                    ] @ 
+                                    (* Set the bounds, using the struct view of the fat pointer *)
+                                    let boundsLocalLv = localLvalToBoundsFun (olhost, oloff) in
+                                    let boundsDestLvSize, boundsDestLvBase = match boundsLocalLv with
+                                        (Var(boundsVar), NoOffset) -> ((Var(boundsVar), Field(boundsSizeFi, NoOffset)), (Var(boundsVar), Field(boundsBaseFi, NoOffset)))
+                                      | _ -> failwith "bounds at pure noinline helper return site were not what we expected"
+                                    in
                                     if hostIsLocal olhost !currentFuncAddressTakenLocalNames then (
-                                        [Set(localLvalToBoundsFun (olhost, oloff), boundsRval, l)]
+                                        [Set(boundsDestLvBase, boundsBaseFieldExpr, l);
+                                         Set(boundsDestLvSize, boundsSizeFieldExpr, l)]
                                     ) else (
-                                        [Set(localLvalToBoundsFun (olhost, oloff), boundsRval, l)] @ (
+                                        [Set(boundsDestLvBase, boundsBaseFieldExpr, l);
+                                         Set(boundsDestLvSize, boundsSizeFieldExpr, l)] @ (
                                          doNonLocalPointerStoreInstr ~useVoidPP:false
                                             (* pointer value *) (CastE(voidPtrType, Lval(ptrFieldLv)))
                                             (* type of where it's being stored? *)
                                             (pointeeUniqtypeGlobalPtr (Lval(olhost, oloff)) enclosingFile uniqtypeGlobals)
                                             (* where it's been/being stored *) (olhost, oloff)
-                                            (* its bounds *) (BoundsLval(boundsFieldLv))
+                                            (* its bounds *) (BoundsLval(boundsLocalLv))
                                             l enclosingFile f uniqtypeGlobals helperFunctions
                                         )
                                     )
@@ -2904,8 +2964,7 @@ class crunchBoundVisitor = fun enclosingFile ->
         in
         let localLvalToBoundsFun = boundsLvalForLocalLval boundsLocals theFunc enclosingFile
         in
-        let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
-          with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+        let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
         in
         (* latch underAddrOf on the way down, so that we remember 
          * on the way back up (ChangeDoChildrenPost) *)
@@ -3164,8 +3223,7 @@ class crunchBoundVisitor = fun enclosingFile ->
     match !currentFunc with
         None -> (* expression outside function *) SkipChildren
       | Some(f) -> 
-          let boundsType = try findStructTypeByName enclosingFile.globals "__libcrunch_bounds_s"
-            with Not_found -> failwith "strange: __libcrunch_bounds_s not defined"
+          let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
           in
           (* Need to remember parent lval *)
           let initialSimplifiedE = simplifyPtrExprs outerE in
@@ -3739,7 +3797,7 @@ class helperizePureCalleesVisitor = fun enclosingFile ->
   
   val createdHelpers = ref []
 
-  method getCreatedHelpers () : (fundec * fundec) list = !createdHelpers (* helper function, first caller function *)
+  method getCreatedHelpers () : (fundec * varinfo) list = !createdHelpers (* helper function, first caller function *)
 
   method vfunc (f: fundec) : fundec visitAction = 
       currentFunc := Some(f);
@@ -3748,27 +3806,36 @@ class helperizePureCalleesVisitor = fun enclosingFile ->
   method vinst (i: instr) : instr list visitAction = 
       let f = match !currentFunc with Some(x) -> x | None -> failwith "Instr outside function"
       in
-      let fatPtrType = try findStructTypeByName enclosingFile.globals "__libcrunch_ptr_with_bounds_s"
-        with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_s not defined"
-      in
-      let fatPtrCompinfo = match fatPtrType with TComp(ci, _) -> ci
-        | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
+      let fatPtrStructType, fatPtrStructCompinfo, fatPtrUnionType, fatPtrUnionCompinfo = findFatPtrTypes enclosingFile.globals
       in
       match i with
           Call(maybeOlv, calledE, args, l) -> (
+            debug_print 1 ("helperizePureCallees considering call instr: " ^ (instToString i) ^ "\n");
             match calledE with
                 (Lval(Var(fvi), NoOffset)) when (
                         match maybeOlv with Some(lv) -> 
                            not (list_empty (containedPointerExprsForExpr (Lval(lv))))
                          | None -> false
                     ) (* returnsBounds *)
-                    && maybeOlv <> None && (
-                    filterAttributes "aconst" fvi.vattr <> [] (* HACK: why "aconst"? very CILly *)||
+                    && (let _ = debug_print 1 ("It has attributes: " ^ (List.fold_left (fun accum -> (function Attr(astr, aargs) -> (if accum = "" then "" else (accum ^ ", ")) ^ astr)) "" fvi.vattr) ^ "\n") in
+                    filterAttributes "const" fvi.vattr <> [] (* HACK: why does "const" become "aconst"? very CILly *)||
+                    filterAttributes "aconst" fvi.vattr <> [] (* HACK: why does "const" become "aconst"? very CILly *)||
                     filterAttributes "pure" fvi.vattr <> [])
-                    && not (let (helpers, callees) = unzip !createdHelpers in List.mem fvi (List.map (fun x -> x.svar) callees))
+                    (* Check we haven't already helper'd this function var *)
+                    && (let _ = debug_print 1 ("Okay, seems pure/const...\n") in true)
                     -> (
                         debug_print 1 ("helperizePureCallees saw call to pure/const bounds-returning function called: " ^ 
                         expToString calledE ^ "\n");
+                        let alreadyPresent = 
+                                let (helpers, calleeVarinfos) = unzip !createdHelpers in 
+                                match List.filter (fun x -> x = fvi.vname) (List.map (fun x -> x.vname) calleeVarinfos) with
+                                    [] -> false
+                                  | x :: more -> (debug_print 1 ("helperizePureCallees found one already existing (total " 
+                                        ^ (string_of_int (List.length (x::more)))
+                                        ^ "): " ^ x ^ "\n"); true)
+                        in
+                        if not alreadyPresent
+                        then
                         match Cil.typeSig fvi.vtype with
                             TSFun(TSPtr(_, _), _, _, _) -> (
                                 (* Okay. What we need to do is
@@ -3780,7 +3847,7 @@ class helperizePureCalleesVisitor = fun enclosingFile ->
                                  *     so that we assign fatptr.p to olv
                                  *     and fatptr.bounds to wherever we would put the returned bounds.
                                  *)
-                                let tmpRet = Cil.makeTempVar f ~name:"__fatptr_ret" fatPtrType in
+                                let tmpRet = Cil.makeTempVar f ~name:"__fatptr_ret" int128Type in
                                 let noinlineHelper = createNoinlinePureHelper fvi enclosingFile createdHelpers f in
                                 (* Now we've created the helper, it will get instrumented by crunchbound.
                                  * What to do about our call? Nothing, for now; that's the main
@@ -3789,8 +3856,13 @@ class helperizePureCalleesVisitor = fun enclosingFile ->
                             )
                             | _ ->
                                 debug_print 1 ("helperizePureCallees: return type is too complex, so just de-consting.\n");
-                                fvi.vattr <- dropAttributes ["aconst"; "pure"] fvi.vattr;
+                                fvi.vattr <- dropAttributes ["aconst"; "pure"; "const"] fvi.vattr;
                                 DoChildren
+                        else (
+                            debug_print 1 ("helperizePureCallees thinks we've already got this one (total: "
+                                ^ (string_of_int (List.length !createdHelpers)) ^ ")\n");
+                            DoChildren
+                        )
                        )
                   | _ -> DoChildren
                 )
@@ -3805,8 +3877,8 @@ class fixupPureCalleesVisitor = fun enclosingFile ->
   method vfunc (f: fundec) : fundec visitAction = 
       currentFunc := Some(f);
       let (helpers, callees) = unzip createdHelpers in
-      if List.mem f callees then (
-          f.svar.vattr <- dropAttributes ["pure"; "aconst"] f.svar.vattr;
+      if List.mem f.svar callees then (
+          f.svar.vattr <- dropAttributes ["pure"; "aconst"; "const"] f.svar.vattr;
           SkipChildren)
         else SkipChildren
 end

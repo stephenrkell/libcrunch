@@ -2459,7 +2459,7 @@ abort_returning_max_bounds:
 	);
 	
 	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)", 
-			obj, derived, err ? __liballocs_errstring(err) : "(found object did not include queried pointer)", alloc_site);
+			obj, derived, err ? __liballocs_errstring(err) : "no allocation found spanning queried pointer", alloc_site);
 	return __libcrunch_max_bounds(obj);
 }
 
