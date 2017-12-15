@@ -1096,7 +1096,7 @@ static void report_failure(const void *site, long *p_repeat_suppression_count,
 			(void*) alloc_start, (void*) alloc_start, alloc_size_bytes, __builtin_return_address(0), \
 			NULL); \
 		/* Now ask the meta-alloc protocol to update that object's metadata to this type. */ \
-		if (a && a->set_type) a->set_type((void*) alloc_start, alloc_uniqtype); \
+		if (a && a->set_type) a->set_type(NULL, (void*) alloc_start, alloc_uniqtype); \
 	} \
 	 \
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype; \
@@ -1166,7 +1166,7 @@ int __is_a_internal(const void *obj, const void *arg)
 			&& is_lazy_uniqtype(UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype))
 			&& !__currently_allocating, 0))
 	{
-		struct insert *ins = __liballocs_get_insert(obj);
+		struct insert *ins = __liballocs_get_insert(NULL, obj);
 		assert(ins);
 		if (STORAGE_CONTRACT_IS_LOOSE(ins, alloc_site))
 		{
@@ -1732,7 +1732,7 @@ reinstate_looseness_if_necessary(
 			&& alloc_site != NULL
 			&& UNIQTYPE_IS_POINTER_TYPE(alloc_uniqtype))
 	{
-		struct insert *ins = __liballocs_get_insert(alloc_start);
+		struct insert *ins = __liballocs_get_insert(NULL, alloc_start);
 		//	(void*) alloc_start, malloc_usable_size((void*) alloc_start)
 		//);
 		if (ins->alloc_site_flag)
@@ -2151,7 +2151,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	 * If the written-to pointer is not generic, then it's that target type.
 	 */
 	// FIXME: use value_alloc_start to avoid another heap lookup
-	struct insert *value_object_info = __liballocs_get_insert(value);
+	struct insert *value_object_info = __liballocs_get_insert(NULL, value);
 	/* HACK: until we have a "loose" bit */
 	struct uniqtype *pointee = UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to);
 
