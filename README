@@ -25,14 +25,15 @@ collector (which masks errors) and a mostly-timely checker (which
 catches errors), but nothing concrete yet.
 
 The medium-term goal is a proof-of-concept implementation of C that is
-usable by unmodified source code, binary-compatible with completely
-uninstrumented code (albeit sacrificing safety guarantees), and performs
-usably well (hopefully no worse than half native speed, usually better).
+dynamically safe... and runs most source code unmodified, is
+binary-compatible even with uninstrumented code (albeit sacrificing
+safety guarantees), and performs usably well (hopefully no worse than
+half native speed, usually better).
 
-And I have some plans for improving performance by a mixture of hardware
+To get good performance, I have some plans for exploiting hardware
 assistance (various kinds of tagged memory that are springing up) and
-speculative/dynamic optimisations. Again, nothing concrete yet (but feel
-free to ask).
+also speculative/dynamic optimisations. Again, nothing concrete yet (but
+feel free to ask).
 
 All this is built on top of my other project, liballocs, which you
 should build (and probably understand) first. In a nutshell, liballocs
