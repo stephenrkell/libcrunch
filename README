@@ -1,18 +1,45 @@
-libcrunch is a runtime library, with some toolchain extensions (compiler
-wrapper, etc.), for fast dynamic type checking in unsafe languages.
-Currently that means mostly C, although languages are fairly pluggable
+libcrunch is a system for fast dynamic type and bounds checking in
+unsafe languages -- currently C, although languages are fairly pluggable
 in the design.
+
+It is somewhat inaccurately named, in that it is nowadays both a runtime
+library and some toolchain extensions (compiler wrapper, linker plugin,
+auxiliary tools).
 
 "Dynamic type checking" mostly means checking pointer casts. There is
 limited checking of other things like va_arg and union use; more to add
-in due course. More recently, libcrunch has acquired a bounds checker
-which promises to be faster and more usable than SoftBound. I'm hoping
-it will become the first really practical on-by-default bounds checker,
-but time will tell... it is still fairly immature and unevaluated. There
-is no temporal memory checking at present, but a GC is on the cards.
+in due course.
 
-All this is build on top of my other project, liballocs, which you
-should build (and probably understand) first. Overall, the build looks
+Bounds checking means probably what you think it means. The innovation
+of libcrunch is to do fine-grained bounds checking (sensitive to
+subobjects, such as arrays-in-structs), over all allocators (static,
+stack, heap and custom), with very few false positives. The key to doing
+this is run-time type information and a run-time model of allocators.
+Currently, bounds checking performs about the same as ASan, but does
+finer-grained checking. It's also comparable to SoftBound, but doesn't
+suffer the kind of false positives that fat-pointer systems do when they
+lose track of bounds.
+
+I have some plans for temporal checking too, including a garbage
+collector (which masks errors) and a mostly-timely checker (which
+catches errors), but nothing concrete yet.
+
+The medium-term goal is a proof-of-concept implementation of C that is
+usable by unmodified source code, binary-compatible with completely
+uninstrumented code (albeit sacrificing safety guarantees), and performs
+usably well (hopefully no worse than half native speed, usually better).
+
+And I have some plans for improving performance by a mixture of hardware
+assistance (various kinds of tagged memory that are springing up) and
+speculative/dynamic optimisations. Again, nothing concrete yet (but feel
+free to ask).
+
+All this is built on top of my other project, liballocs, which you
+should build (and probably understand) first. In a nutshell, liballocs
+provides the type information and other dynamic run-time services; its
+goal is "Smalltalk-style dynamism for Unix processes".
+
+Building is non-trivial... but you can do it! Overall, the build looks
 something like this.
 
 $ git clone https://github.com/stephenrkell/liballocs.git
@@ -36,10 +63,10 @@ Tips for non-Debian or non-jessie users:
   "--with-libdwarf-includes=/path/to/includes" so that liballocs's
   contrib build process will configure libdwarfpp appropriately.
 
-- Some problems have been reported with gcc 5.x and later. I can't
-  reproduce them right now myself, but for now the recommended gcc is
-  the 4.9 series. Bug reports for build errors occurring on 5.x and
-  later are welcome.
+- Some problems have been reported with gcc 5.x and later. See gcc bug
+  78407. For now the recommended gcc is the 4.9 series, although 7.2.x
+  fixes that bug and seems to work. Bug reports for build errors
+  occurring on other versions are welcome.
 
 - Be careful of build skew with libelf. Again, there are two versions:
   libelf0 and libelf1. It doesn't much matter which you use, but you
@@ -73,26 +100,29 @@ such as
 
 assert(__is_aU(p, &__uniqtype_Widget));
 
-to assert that p points to a Widget, and so on. 
+to assert that p points to a Widget, and so on.
 
-A compiler wrapper inserts these checks automatically at particular
-points -- primarily at pointer casts, but also at certain uses of va_arg
-(and some other places too obscure to get into here). The effect is to
-provide clean error messages on bad pointer casts. Language-wise,
-libcrunch slightly narrows standard C, such that all live, allocated
-storage has a well-defined type at any moment (cf. C99 "effective type"
-which is more liberal).
+For bounds errors, libcrunch instruments /pointer derivation/. This
+includes array indexing and pointer arithmetic, but not pointer
+dereference which can safely proceed unchecked. Bad pointer uses are
+caught and reported in a segfault handler.
+
+A compiler wrapper inserts these checks (and some others) automatically
+at particular points. The effect is to provide clean error messages on
+bad pointer casts, bad pointer uses and other operations that would
+otherwise be corrupting failure (undefined behaviour, in C).
+Language-wise, libcrunch slightly narrows standard C, such that all
+live, allocated storage has a well-defined type at any moment (cf. C99
+"effective type" which is more liberal). This can be a source of false
+positives in the quirkiest code; there are some mitigations.
 
 Instrumentation is currently done with CIL. There is also a clang
-front-end which is less mature (lacks a bounds checker) but will appear
-as a submodule in this tree shortly.
+front-end which is less mature (lacks a bounds checker) and currently
+rather out-of-date, but will be revived at some point.
 
-Below there is a slightly out-of-date list of some of the known
-limitations. More positively, it really works (if you can build it),
-supports lots of nasty C code really quite well, and usually only slows
-execution by about 5--35% (more if you turn on bounds checking, though).
-You can also run instrumented code without the library loaded, when the
-slowdown is usually negligible (again, less so for bounds checks).
+Type-checking usually only slows execution by about 5--35%. You can also
+run type-check-instrumented code without the library loaded; in that
+case the slowdown is usually minimal (a few percent at most).
 
 
 
@@ -102,7 +132,8 @@ Usability quirks
 liballocs does)
 
 - check-on-cast is too eager for some C programming styles
-    ("trap pointer" mechanism in the works)
+    ("trap pointer" mechanism for casts in the works; bounds checks
+    already work this way)
     
 - higher-order (indirect, pointer-to-function) checks are slightly 
     conservative
@@ -121,10 +152,5 @@ Limitations of metadata
 - no metadata (debug info) for address-taken temporaries
      (significant for C++, but not for C; needs compiler fixes)
      
-- sizeof scraping is not completely reliable (but is really not bad)
-
-
-Current performance quirks
-
-- liballocs's trailer-based heap index implementation causes clownshoes
+- sizeof scraping is not completely reliable (but is pretty good!)
 
