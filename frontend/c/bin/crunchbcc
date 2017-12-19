@@ -87,7 +87,8 @@ class CrunchBCC(CrunchCC):
             #"--commPrintLn",
             includeArgs = [ \
             "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
-            "-include", os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
+            "-include", \
+                os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../ptrintarith/ptrintarith.cmxs"), "--doptrintarith", \
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
             ] + (["--void-ptr-has-bounds"] if "-DLIBCRUNCH_VOID_POINTERS_HAVE_BOUNDS" in defines else []) \
