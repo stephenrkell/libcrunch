@@ -504,7 +504,7 @@ extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gn
 			if ((char*) obj >= (char*)cache->entries[i].obj_base
 					&& (char*) obj < (char*)cache->entries[i].obj_limit
 					&& 
-					((diff == 0)
+					((diff == 0 && !require_period)
 						|| (cache->entries[i].period != 0
 							&& (!require_period || cache->entries[i].period == require_period)
 							&& diff % cache->entries[i].period == 0)))
