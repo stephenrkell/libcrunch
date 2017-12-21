@@ -944,8 +944,8 @@ match ptrE with
     | Const(_) -> false
     | _ -> true
 
-let pointeeUniqtypeGlobalPtrGivenPtrT ptrT enclosingFile uniqtypeGlobals =
-    let ts = match ptrT with 
+let pointeeUniqtypeGlobalPtrGivenPtrTs ptrTs enclosingFile uniqtypeGlobals =
+    let ts = match  decayArrayInPointeeTypesig ptrTs with 
         TSPtr(targetTs, _) -> targetTs
       | _ -> failwith "fetching bounds for a non-pointer"
     in
@@ -955,9 +955,9 @@ let pointeeUniqtypeGlobalPtrGivenPtrT ptrT enclosingFile uniqtypeGlobals =
 
 let pointeeUniqtypeGlobalPtr e enclosingFile uniqtypeGlobals =
     (* care: if we just wrote a T*, it's the type "t" that we need to pass to fetchbounds *)
-    let ptrT = exprConcreteType e
+    let ptrTs = exprConcreteType e
     in
-    pointeeUniqtypeGlobalPtrGivenPtrT ptrT enclosingFile uniqtypeGlobals
+    pointeeUniqtypeGlobalPtrGivenPtrTs ptrTs enclosingFile uniqtypeGlobals
 
 let ensureBoundsLocalLval ptrExpr boundsDescrForPtrExpr enclosingFunction boundsType =
     match boundsDescrForPtrExpr with
@@ -3380,7 +3380,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             (* It's worth doing the cache prefill. *)
                             let blv = ensureBoundsLocalLval subex be f boundsType
                             in
-                            let pointeeUniqtypeExpr = pointeeUniqtypeGlobalPtrGivenPtrT (Cil.typeSig (Cil.typeOf subex)) enclosingFile uniqtypeGlobals
+                            let pointeeUniqtypeExpr = pointeeUniqtypeGlobalPtrGivenPtrTs (Cil.typeSig (Cil.typeOf subex)) enclosingFile uniqtypeGlobals
                             in
                             let boundsExpr = (Lval(blv)) in
                             let preInstrs = boundsUpdateInstrs ~doFetchOol:false blv subex be 
