@@ -3362,7 +3362,19 @@ class crunchBoundVisitor = fun enclosingFile ->
                         self#queueInstr checkInstrs
                         end
                    (* Remember: maybeDetrappedSubex and exprTmpVar both have the same type as the overall cast expression *)
-                   else (self#queueInstr [Set((Var(exprTmpVar),NoOffset), maybeDetrappedSubex, instrLoc !currentInst)]));
+                   else (self#queueInstr (
+                    [Set((Var(exprTmpVar),NoOffset), maybeDetrappedSubex, instrLoc !currentInst)]
+                    @
+                    (* The cast doesn't need fresh bounds, but it may still have bounds to copy. *)
+                        if typeNeedsBounds exprTmpVar.vtype enclosingFile
+                        then [makeBoundsWriteInstruction
+                                    enclosingFile f !currentFuncAddressTakenLocalNames
+                                    helperFunctions uniqtypeGlobals
+                                    (Var(exprTmpVar), NoOffset) maybeDetrappedSubex maybeDetrappedSubex
+                                    localLvalToBoundsFun !currentInst !tempLoadExprs]
+                        else []
+                   )
+                   ));
                    (* Now exprTmpVar is the result of the cast expression... I hope you're keeping up *)
                    (if castWantsCachePrefill subex targetT enclosingFile then
                        begin
