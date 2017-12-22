@@ -77,7 +77,10 @@ unsigned long *__libcrunch_bounds_sizes_region_7a;
  * Annoyingly, liballocs eagerly replaces alloc site info with uniqtype
  * info. So making queries on an object will erase its looseness.
  * FIXME: separate this out, so that non-libcrunch clients don't have to
- * explicitly preserve looseness. */
+ * explicitly preserve looseness.
+ * FIXME: this "loose storage contract" should really be a special
+ * kind of uniqtype, maybe __PTR__1 i.e. existentially quantified?
+ * YES, so __EXISTS1___PTR__1 is a pointer to some 'a for unknown 'a. */
 #define STORAGE_CONTRACT_IS_LOOSE(ins, site) \
 (((site) != NULL) /* i.e. liballocs only just erased the alloc site */ || \
 !(ins)->alloc_site_flag /* or it still hasn't */ || \
@@ -127,15 +130,15 @@ static int match_typename_cb(struct uniqtype *t, void *ignored)
 {
 	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
 	{
-		if (!lazy_heap_types[i] && 
-			0 == strcmp(UNIQTYPE_NAME(t), lazy_heap_typenames[i]))
-		{
-			// install this type in the lazy_heap_type slot
-			lazy_heap_types[i] = t;
-			
-			// keep going -- we might have more to match
-			return 0;
-		}
+// 		if (!lazy_heap_types[i] && 
+// 			0 == strcmp(UNIQTYPE_NAME(t), lazy_heap_typenames[i]))
+// 		{
+// 			// install this type in the lazy_heap_type slot
+// 			lazy_heap_types[i] = t;
+// 			
+// 			// keep going -- we might have more to match
+// 			return 0;
+// 		}
 	}
 	return 0; // keep going
 }
@@ -144,36 +147,36 @@ static int do_nothing_cb(struct uniqtype *t, void *ignored)
 	return 0; // keep going
 }
 
-void __libcrunch_scan_lazy_typenames(void *typelib_handle)
-{
-	/* NOTE that any object can potentially contain uniqtypes, so "typelib_handle"
-	 * might not actually be the handle of a -types.so. */
-	
-	/* __liballocs_iterate_types is slow. use the hash table instead. */
-	/* __liballocs_iterate_types(typelib_handle, match_typename_cb, NULL); */
-	// HACK: while still hunting performance regressions, waste some time by doing nothing
-	// __liballocs_iterate_types(typelib_handle, do_nothing_cb, NULL);
-	
-	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
-	{
-		if (lazy_heap_typenames[i] && !lazy_heap_types[i])
-		{
-			// was: look up using our hacky helper
-			// const void *u = typestr_to_uniqtype_from_lib(typelib_handle, lazy_heap_typenames[i]);
-			
-			// build the uniqtype name and use the power of the symbol hash tables
-			char buf[4096];
-			char *pos = &buf[0];
-			strcpy(buf, "__uniqtype__"); // use the codeless version. FIXME: what if that's not enough?
-			strncat(buf, lazy_heap_typenames[i], sizeof buf - sizeof "__uniqtype__");
-			buf[sizeof buf - 1] = '\0';
-			// look up in global namespace
-			const void *u = dlsym(RTLD_DEFAULT, buf);
-			// if we found it, install it
-			if (u) lazy_heap_types[i] = (struct uniqtype *) u;
-		}
-	}
-}
+// void __libcrunch_scan_lazy_typenames(void *typelib_handle)
+// {
+// 	/* NOTE that any object can potentially contain uniqtypes, so "typelib_handle"
+// 	 * might not actually be the handle of a -types.so. */
+// 	
+// 	/* __liballocs_iterate_types is slow. use the hash table instead. */
+// 	/* __liballocs_iterate_types(typelib_handle, match_typename_cb, NULL); */
+// 	// HACK: while still hunting performance regressions, waste some time by doing nothing
+// 	// __liballocs_iterate_types(typelib_handle, do_nothing_cb, NULL);
+// 	
+// 	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
+// 	{
+// 		if (lazy_heap_typenames[i] && !lazy_heap_types[i])
+// 		{
+// 			// was: look up using our hacky helper
+// 			// const void *u = typestr_to_uniqtype_from_lib(typelib_handle, lazy_heap_typenames[i]);
+// 			
+// 			// build the uniqtype name and use the power of the symbol hash tables
+// 			char buf[4096];
+// 			char *pos = &buf[0];
+// 			strcpy(buf, "__uniqtype__"); // use the codeless version. FIXME: what if that's not enough?
+// 			strncat(buf, lazy_heap_typenames[i], sizeof buf - sizeof "__uniqtype__");
+// 			buf[sizeof buf - 1] = '\0';
+// 			// look up in global namespace
+// 			const void *u = dlsym(RTLD_DEFAULT, buf);
+// 			// if we found it, install it
+// 			if (u) lazy_heap_types[i] = (struct uniqtype *) u;
+// 		}
+// 	}
+// }
 int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *data)
 {
 	/* NOTE: we don't do this any more.
@@ -275,14 +278,14 @@ static ElfW(Dyn) *get_dynamic_entry_from_section(void *dynsec, unsigned long tag
 	return dynamic_section;
 }
 
-static _Bool is_lazy_uniqtype(const void *u)
-{
-	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
-	{
-		if (lazy_heap_types[i] == u) return 1;
-	}
-	return 0;
-}
+// static _Bool is_lazy_uniqtype(const void *u)
+// {
+// 	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
+// 	{
+// 		if (lazy_heap_types[i] == u) return 1;
+// 	}
+// 	return 0;
+// }
 
 static _Bool prefix_pattern_matches(const char *pat, const char *str)
 {
@@ -358,7 +361,7 @@ unsigned long __libcrunch_aborted_init;
 unsigned long __libcrunch_trivially_succeeded;
 #endif
 unsigned long __libcrunch_aborted_typestr;
-unsigned long __libcrunch_lazy_heap_type_assignment;
+//unsigned long __libcrunch_lazy_heap_type_assignment;
 unsigned long __libcrunch_failed;
 unsigned long __libcrunch_failed_in_alloc;
 unsigned long __libcrunch_failed_and_suppressed;
@@ -447,8 +450,8 @@ static void print_exit_summary(void)
 #else
 	fprintf(crunch_stream_err, "       remaining                           % 11ld\n", __libcrunch_begun - (__liballocs_aborted_unknown_storage + __libcrunch_aborted_typestr));
 #endif	
-	fprintf(crunch_stream_err, "------------------------------------------------------\n");
-	fprintf(crunch_stream_err, "   of which did lazy heap type assignment: % 11ld\n", __libcrunch_lazy_heap_type_assignment);
+	//fprintf(crunch_stream_err, "------------------------------------------------------\n");
+	//fprintf(crunch_stream_err, "   of which did lazy heap type assignment: % 11ld\n", __libcrunch_lazy_heap_type_assignment);
 	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 	fprintf(crunch_stream_err, "       failed inside allocation functions: % 11ld\n", __libcrunch_failed_in_alloc);
 	fprintf(crunch_stream_err, "       failed otherwise:                   % 11ld\n", __libcrunch_failed);
@@ -494,7 +497,6 @@ static void print_exit_summary(void)
 static unsigned count_separated_words(const char *str, char sep)
 {
 	unsigned count = 1;
-	/* Count the lazy heap types */
 	const char *pos = str;
 	while ((pos = strchr(pos, sep)) != NULL) { ++count; ++pos; }
 	return count;
@@ -801,26 +803,26 @@ int __libcrunch_global_init(void)
 	 * C-specificity we'd rather not have here, but live with it for now.
 	 * Perhaps the best way is to have "uninterpreted_sbyte" and make signed_char
 	 * an alias for it.) We count the other ones. */
-	const char *lazy_heap_types_str = getenv("LIBCRUNCH_LAZY_HEAP_TYPES");
+	//const char *lazy_heap_types_str = getenv("LIBCRUNCH_LAZY_HEAP_TYPES");
 	lazy_heap_types_count = 1;
 	unsigned upper_bound = 2; // signed char plus one string with zero spaces
-	if (lazy_heap_types_str)
-	{
-		unsigned count = count_separated_words(lazy_heap_types_str, ' ');
-		upper_bound += count;
-		lazy_heap_types_count += count;
-	}
+	//if (lazy_heap_types_str)
+	//{
+	//	unsigned count = count_separated_words(lazy_heap_types_str, ' ');
+	//	upper_bound += count;
+	//	lazy_heap_types_count += count;
+	//}
 	/* Allocate and populate. */
 	lazy_heap_typenames = calloc(upper_bound, sizeof (const char *));
 	lazy_heap_types = calloc(upper_bound, sizeof (struct uniqtype *));
 
 	// the first entry is always signed char
 	lazy_heap_typenames[0] = "signed_char$8";
-	if (lazy_heap_types_str)
-	{
-		fill_separated_words(&lazy_heap_typenames[1], lazy_heap_types_str, ' ',
-				upper_bound - 1);
-	}
+	//if (lazy_heap_types_str)
+	//{
+	//	fill_separated_words(&lazy_heap_typenames[1], lazy_heap_types_str, ' ',
+	//			upper_bound - 1);
+	//}
 	
 // 	/* We have to scan for lazy heap types *in link order*, so that we see
 // 	 * the first linked definition of any type that is multiply-defined.
@@ -831,17 +833,17 @@ int __libcrunch_global_init(void)
 // 	 * Instead, walk the link map directly, like a debugger would
 // 	 *                                           (like I always knew somebody should). */
 // 	// grab the executable's end address
-	dlerror();
-	void *executable_handle = dlopen(NULL, RTLD_NOW | RTLD_NOLOAD);
-	assert(executable_handle != NULL);
-	void *exec_dynamic = ((struct link_map *) executable_handle)->l_ld;
-	assert(exec_dynamic != NULL);
-	ElfW(Dyn) *dt_debug = get_dynamic_entry_from_section(exec_dynamic, DT_DEBUG);
-	struct r_debug *r_debug = (struct r_debug *) dt_debug->d_un.d_ptr;
-	for (struct link_map *l = r_debug->r_map; l; l = l->l_next)
-	{
-		__libcrunch_scan_lazy_typenames(l);
-	}
+// 	dlerror();
+// 	void *executable_handle = dlopen(NULL, RTLD_NOW | RTLD_NOLOAD);
+// 	assert(executable_handle != NULL);
+// 	void *exec_dynamic = ((struct link_map *) executable_handle)->l_ld;
+// 	assert(exec_dynamic != NULL);
+// 	ElfW(Dyn) *dt_debug = get_dynamic_entry_from_section(exec_dynamic, DT_DEBUG);
+// 	struct r_debug *r_debug = (struct r_debug *) dt_debug->d_un.d_ptr;
+	//for (struct link_map *l = r_debug->r_map; l; l = l->l_next)
+	//{
+	//	__libcrunch_scan_lazy_typenames(l);
+	//}
 	
 	/* Load the suppression list from LIBCRUNCH_SUPPRESS. It's a space-separated
 	 * list of triples <test-type-pat, testing-function-pat, alloc-type-pat>
@@ -1161,24 +1163,25 @@ int __is_a_internal(const void *obj, const void *arg)
 	 * If a heap block is an __ARRn of X, and X is lazy, we want to match X.
 	 * But we might have terminated on a subobject of X.
 	 */
-	if (__builtin_expect(a == &__generic_malloc_allocator /* FIXME: use meta-protocol */
-			&& UNIQTYPE_IS_ARRAY_TYPE(alloc_uniqtype)
-			&& is_lazy_uniqtype(UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype))
-			&& !__currently_allocating, 0))
+	if (a->set_type
+			&& ((UNIQTYPE_IS_ARRAY_TYPE(alloc_uniqtype) &&
+					UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype) &&
+					UNIQTYPE_IS_ABSTRACT(UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)))
+				//|| is_lazy_uniqtype(UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)
+				)
+			&& !__currently_allocating)//, 0)
 	{
 		struct insert *ins = __liballocs_get_insert(NULL, obj);
 		assert(ins);
-		if (STORAGE_CONTRACT_IS_LOOSE(ins, alloc_site))
+		//if (STORAGE_CONTRACT_IS_LOOSE(ins, alloc_site))
 		{
-			++__libcrunch_lazy_heap_type_assignment;
+			//++__libcrunch_lazy_heap_type_assignment;
 			
 			/* update the heap chunk's info to say that its type is (strictly) our test_uniqtype,
-			 * or rather, an ARR0 thereof. */
-			ins->alloc_site_flag = 1;
-			struct uniqtype *t = __liballocs_get_or_create_array_type(
+			 * or rather, an array thereof. */
+			a->set_type(NULL, (void *) obj, __liballocs_get_or_create_array_type(
 					(struct uniqtype *) test_uniqtype, 
-					alloc_size_bytes / test_uniqtype->pos_maxoff);
-			ins->alloc_site = (uintptr_t) t;
+					alloc_size_bytes / test_uniqtype->pos_maxoff));
 			if (a->is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 1, period, alloc_start);
 		
 			return 1;
@@ -1720,6 +1723,12 @@ static _Bool is_generic_pointer_type(struct uniqtype *t)
 	return is_generic_pointer_type_of_degree_at_least(t, 1);
 }
 
+static _Bool is_abstract_pointer_type(struct uniqtype *t)
+{
+	return UNIQTYPE_IS_POINTER_TYPE(t)
+		&& t->make_precise;
+}
+
 static void
 reinstate_looseness_if_necessary(
     const void *alloc_start, const void *alloc_site,
@@ -2150,23 +2159,27 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	 * What's a "right" type?
 	 * If the written-to pointer is not generic, then it's that target type.
 	 */
-	// FIXME: use value_alloc_start to avoid another heap lookup
-	struct insert *value_object_info = __liballocs_get_insert(NULL, value);
-	/* HACK: until we have a "loose" bit */
-	struct uniqtype *pointee = UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to);
-
-	if (!is_generic_pointer_type(type_of_pointer_being_stored_to)
+	if (!is_abstract_pointer_type(type_of_pointer_being_stored_to)
 		&& value_alloc_uniqtype
-		&& UNIQTYPE_IS_POINTER_TYPE(value_alloc_uniqtype)
-		&& is_generic_pointer_type(value_alloc_uniqtype)
-		&& value_object_info
-		&& STORAGE_CONTRACT_IS_LOOSE(value_object_info, value_alloc_site))
+		&& is_abstract_pointer_type(value_alloc_uniqtype)
+		//&& value_object_info
+		//&& STORAGE_CONTRACT_IS_LOOSE(value_object_info, value_alloc_site)
+	)
 	{
-		value_object_info->alloc_site_flag = 1;
-		value_object_info->alloc_site = (uintptr_t) pointee; // i.e. *not* loose!
+		unsigned array_len = obj_alloc_size_bytes / 
+			type_of_pointer_being_stored_to->pos_maxoff;
+		obj_a->set_type(NULL, (void *) obj_alloc_start,
+			// make this an array as necessary
+			__liballocs_get_or_create_array_type(type_of_pointer_being_stored_to,
+				array_len)
+		);
+		//value_object_info->alloc_site_flag = 1;
+		//value_object_info->alloc_site = (uintptr_t) UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to); // i.e. *not* loose!
 		debug_printf(0, "libcrunch: specialised allocation at %p from %s to %s", 
-			value, NAME_FOR_UNIQTYPE(value_alloc_uniqtype), NAME_FOR_UNIQTYPE(pointee));
-		++__libcrunch_lazy_heap_type_assignment;
+			value,
+			NAME_FOR_UNIQTYPE(value_alloc_uniqtype),
+			NAME_FOR_UNIQTYPE(UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to)));
+		//++__libcrunch_lazy_heap_type_assignment;
 		return 1;
 	}
 
@@ -2665,6 +2678,7 @@ __libcrunch_bounds_t
 (__attribute__((pure,__const__)) __fetch_bounds_ool_via_dladdr)
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
+	if (!ptr) return __make_bounds(0, 1);
 	Dl_info i = dladdr_with_cache(ptr);
 	if (i.dli_fname && i.dli_sname)
 	{

@@ -3324,7 +3324,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             )
                         ]
                         ;
-                        CastE(targetT, Lval(Var(tmpVar), NoOffset))
+                        CastE(Cil.typeOf subex(*was: targetT*), Lval(Var(tmpVar), NoOffset))
                   else subex
                 in
                     let localLvalToBoundsFun = boundsLvalForLocalLval boundsLocals f enclosingFile
@@ -3361,16 +3361,19 @@ class crunchBoundVisitor = fun enclosingFile ->
                         in
                         self#queueInstr checkInstrs
                         end
-                   (* Remember: maybeDetrappedSubex and exprTmpVar both have the same type as the overall cast expression *)
+                   (* Remember: exprTmpVar has the same type as the overall cast expression.
+                    * maybeDetrappedSubex has the type of subex. *)
                    else (self#queueInstr (
-                    [Set((Var(exprTmpVar),NoOffset), maybeDetrappedSubex, instrLoc !currentInst)]
+                    let realPointerExpr = CastE(targetT, maybeDetrappedSubex)
+                    in
+                    [Set((Var(exprTmpVar),NoOffset), realPointerExpr, instrLoc !currentInst)]
                     @
                     (* The cast doesn't need fresh bounds, but it may still have bounds to copy. *)
                         if typeNeedsBounds exprTmpVar.vtype enclosingFile
                         then [makeBoundsWriteInstruction
                                     enclosingFile f !currentFuncAddressTakenLocalNames
                                     helperFunctions uniqtypeGlobals
-                                    (Var(exprTmpVar), NoOffset) maybeDetrappedSubex maybeDetrappedSubex
+                                    (Var(exprTmpVar), NoOffset) realPointerExpr realPointerExpr
                                     localLvalToBoundsFun !currentInst !tempLoadExprs]
                         else []
                    )
