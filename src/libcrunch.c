@@ -962,7 +962,7 @@ static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const
 	}
 #endif
 	/* Create the new entry and put it at the head. */
-	warnx("Creating fake bounds %p-%p", obj_base, obj_limit);
+	debug_printf(1, "Creating fake bounds %p-%p", obj_base, obj_limit);
 	__libcrunch_fake_bounds_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
@@ -2436,7 +2436,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	}
 	else
 	{
-		debug_printf(0, "libcrunch: no bounds for %p, target type %s, offset %d in allocation of %s at %p", 
+		debug_printf(1, "libcrunch: no bounds for %p, target type %s, offset %d in allocation of %s at %p", 
 			obj, NAME_FOR_UNIQTYPE(t), target_offset_within_uniqtype, NAME_FOR_UNIQTYPE(alloc_uniqtype),
 			alloc_start);
 		goto return_min_bounds;
@@ -2482,7 +2482,7 @@ abort_returning_max_bounds:
 		t, 1, (t ? t->pos_maxoff : 1), NULL /* no alloc start */
 	);
 	
-	debug_printf(0, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)", 
+	debug_printf(1, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)", 
 			obj, derived, err ? __liballocs_errstring(err) : "no allocation found spanning queried pointer", alloc_site);
 	return __libcrunch_max_bounds(obj);
 }
