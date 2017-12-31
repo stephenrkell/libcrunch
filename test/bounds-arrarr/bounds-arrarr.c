@@ -8,7 +8,7 @@ int *g(void *p)
 
 int main(void)
 {
-	int x[13][12][11] = { { { 1, 2 }, { 3, 4 } },
+	int x[2][2][47] = { { { 1, 2 }, { 3, 4 } },
 	                   { { 5, 6 }, { 7, 8 } } };
 
 	int dest[sizeof x / sizeof x[0]];
