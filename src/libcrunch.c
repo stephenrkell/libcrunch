@@ -1000,6 +1000,9 @@ void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bou
 	/* We ensure in crunchbound.ml that ptr is never trapped.
 	 * It follows that it might be pointing one-past-the-end... FIXME: do we deal with that? */
 	const void *ptr = (const void *) ptrval;
+	/* Never cache invalid bounds or max bounds. */
+	if (__libcrunch_bounds_invalid(ptr_bounds, ptr)) return;
+	if (__libcrunch_get_limit(ptr_bounds, ptr) == (void*) -1) return;
 	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(ptr, ptr, t, t->pos_maxoff);
 	if (__libcrunch_bounds_invalid(from_cache, ptr))
 	{
