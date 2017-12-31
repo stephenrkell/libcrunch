@@ -3239,6 +3239,7 @@ class crunchBoundVisitor = fun enclosingFile ->
   method vexpr (outerE: exp) : exp visitAction = 
     debug_print 1 (("Visiting expression: " ^ (expToString outerE)) ^ "\n");
     debug_print 1 (("CIL form: " ^ (expToCilString outerE)) ^ "\n");
+    let l = instrLoc !currentInst in
     match !currentFunc with
         None -> (* expression outside function *) SkipChildren
       | Some(f) -> 
@@ -3271,7 +3272,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                 (* When differencing pointers of distinct type, what type denominates? *)
                 let unifyPointerTargetTypes pt1 pt2 = 
                     match (pt1, pt2) with
-                        (TPtr(t1, _), TPtr(t2, _)) when Cil.typeSig t1 = Cil.typeSig t2 -> t1
+                        (TPtr(t1, _), TPtr(t2, _))
+                            when Cil.typeSigWithAttrs (fun attrs -> []) t1 
+                            = Cil.typeSigWithAttrs (fun attrs -> []) t2 -> t1
                       | (TPtr(TVoid(_), _), TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
                       | (TPtr(TVoid(_), _), TPtr(TInt(IUChar, _), _)) -> TInt(IUChar, [])
                       | (TPtr(TVoid(_), _), TPtr(TInt(ISChar, _), _)) -> TInt(ISChar, [])
@@ -3284,7 +3287,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                       | (TPtr(TInt(ISChar, _), _),  TPtr(TInt(IUChar, _), _)) -> TInt(IChar, [])
                       | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(IChar, _), _)) -> TInt(IChar, [])
                       | (TPtr(TInt(IUChar, _), _),  TPtr(TInt(ISChar, _), _)) -> TInt(IChar, [])
-                      | (_, _) -> failwith "impossible: differencing non-unifiable pointer types"
+                      | (_, _) -> failwith ("impossible: differencing non-unifiable pointer types in file " ^ l.file ^ ", line " ^ (string_of_int l.line))
                 in
                 (* De-trap both pointer expressions, if necessary. 
                  * If it's not necessary to detrap them, we just cast them to ulongType,
@@ -3414,7 +3417,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                             (* It's worth doing the cache prefill. *)
                             let blv = ensureBoundsLocalLval subex be f boundsType
                             in
-                            let pointeeUniqtypeExpr = pointeeUniqtypeGlobalPtrGivenPtrTs (Cil.typeSig (Cil.typeOf subex)) enclosingFile uniqtypeGlobals
+                            let pointeeUniqtypeExpr = pointeeUniqtypeGlobalPtrGivenPtrTs
+                                (*(decayArrayToCompatiblePointer subexTs)*) subexTs enclosingFile uniqtypeGlobals
                             in
                             let boundsExpr = (Lval(blv)) in
                             let preInstrs = boundsUpdateInstrs ~doFetchOol:false blv subex be 
