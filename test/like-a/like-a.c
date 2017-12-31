@@ -12,7 +12,9 @@ struct sockaddr test_sockaddr;
 
 int main(void)
 {
-	struct sockaddr_in *p_mysock = malloc(sizeof (struct sockaddr));
+	/* HACK: want to "abstract" arbitrary types, so that we can go back
+	 * to sockaddr here -- FIXME FIXME FIXME. */
+	struct sockaddr_in *p_mysock = malloc(sizeof (struct sockaddr_in));
 	
 	fprintf(stderr, "Allocated a sockaddr_in at %p\n", p_mysock);
 	

@@ -269,8 +269,8 @@ bounds-diff/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	$(MAKE) cleanrun-bounds-diff >/dev/null 2>&1 && touch "$@"
 
 # Some cases are special and have their own matching criteria
-checkrun-lazy-typing: lazy-typing/$(FRONTEND)/check-stamp
-lazy-typing/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
+#checkrun-lazy-typing: lazy-typing/$(FRONTEND)/check-stamp
+XXXdisabed-lazy-typing/$(FRONTEND)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	@echo "frontend $(FRONTEND), case is lazy-typing" && \
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \

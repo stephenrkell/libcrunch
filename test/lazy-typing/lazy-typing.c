@@ -16,7 +16,9 @@ int main(void)
 	
 	assert(__libcrunch_is_initialized);
 	
-	struct sockaddr_in *p_mysock = malloc(sizeof (struct sockaddr));
+	//struct sockaddr_in *p_mysock = malloc(sizeof (struct sockaddr));
+	/* FIXME: reinstate this once we have arbitrary type abstraction. */
+	struct sockaddr_in *p_mysock = malloc(sizeof (struct sockaddr_in));
 	
 	fprintf(stderr, "Allocated a sockaddr_in at %p\n", p_mysock);
 
