@@ -3271,7 +3271,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 in
                 (* When differencing pointers of distinct type, what type denominates? *)
                 let unifyPointerTargetTypes pt1 pt2 = 
-                    match (pt1, pt2) with
+                    match (unrollType pt1, unrollType pt2) with
                         (TPtr(t1, _), TPtr(t2, _))
                             when Cil.typeSigWithAttrs (fun attrs -> []) t1 
                             = Cil.typeSigWithAttrs (fun attrs -> []) t2 -> t1
