@@ -312,11 +312,30 @@ let castNeedsFreshBounds sourceE targetT enclosingFile =
     (* AND either the cast-from expr does not have bounds, or it has different bounds *)
     && (
         (sourceConcrete <> targetConcrete
-        && (* possibly-different sizes? *)
-            (not (tsIsPointer targetTS && tsIsPointer sourceTS && 
+        && (* possibly-different sizes?
+            * ARGH no, we can't be clever and just look at sizes, because
+            * we depend on casts after allocation functions, even if they return void** or similar.
+            * e.g.
+            *     ppf = (float** ) my_voidptrptr_allocator(n * sizeof(void * ))
+            *
+            * ... if we don't do the fetch on the cast to float**, we won't have the bounds.
+            * The long-term fix here is to instrument allocation functions specially
+            * so that they always return bounds on the stack, or at least in the cache.
+            * One way would be to prefill the cache withe the right bounds, but I don't
+            * think that will catch all cases -- we don't consult the cache on peek-result-bounds.
+            * Another is to actually pretend that a given alloc call, typed T, really
+            * returns a T* -- changing the return type that Cil sees, somhow.
+            * Then if any intervening expression actually wants it as a void*, say,
+            * we get an explicit cast, but otherwise the cast/fetch get eliminated.
+            * All calls get a temporary to hold their result, so we could just change
+            * the type of that temporary, then put a cast on all expression that use
+            * the temporary. YES, this should probably be a separate CIL pass, running
+            * before the cast-collapsing one.
+            *)
+            (not false(*(tsIsPointer targetTS && tsIsPointer sourceTS && 
                 let sourcePointeeT = match unrollType sourceT with TPtr(x, _) -> x | _ -> failwith "impossible" in
                 let targetPointeeT = match unrollType targetT with TPtr(x, _) -> x | _ -> failwith "impossible" in
-                sizeOf sourcePointeeT = sizeOf targetPointeeT))
+                sizeOf sourcePointeeT = sizeOf targetPointeeT )*))
         )
         || (not (typeNeedsBounds sourceT enclosingFile))
     )
