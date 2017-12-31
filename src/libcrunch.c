@@ -179,7 +179,8 @@ static int do_nothing_cb(struct uniqtype *t, void *ignored)
 // }
 int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *data)
 {
-	/* NOTE: we don't do this any more.
+	/* NOTE: this used to initialize the bounds metadata for static-storage pointers.
+	 * We don't do this any more.
 	 *
 	 * There are several reasons. One is that it's less efficient than a 
 	 * compile-time solution that instruments static initializers.
@@ -197,7 +198,9 @@ int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *
 	 * not decided until link time. However, that could be resolved using
 	 * only link-time mechanisms, e.g. probing the size of symbol blah
 	 * (if only we could insert a relocation that is expanded with the link-time
-	 * size of a symbol!).
+	 * size of a symbol! Oh, actually there is one: R_X86_64_SIZE,
+	 * but I guess our instrumentation would have to drop down to assembly level
+	 * to generate these).
 	 */
 // 	struct object_metadata *p_meta = (struct object_metadata *) data;
 // 	const char *real_name = dynobj_name_from_dlpi_name(info->dlpi_name, (void*) info->dlpi_addr);
@@ -317,12 +320,6 @@ static _Bool test_site_matches(const char *pat /* will be saved! must not be fre
 static _Bool suppression_matches(struct suppression *s, 
 		const char *test_typestr, const void *test_site, const char *alloc_typestr)
 {
-	/* dladdr is expensive, so 
-	 * 
-	 * - use it last;
-	 * - cache its results (in test_site_matches. 
-	 */
-		
 	return prefix_pattern_matches(s->test_type_pat, test_typestr)
 			&& prefix_pattern_matches(s->alloc_type_pat, alloc_typestr)
 			&& test_site_matches(s->testing_function_pat, test_site);
@@ -390,26 +387,18 @@ struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache = {
 	.next_victim = 1
 };
 
-static unsigned long repeat_suppression_count;
-// enum check
-// {
-// 	IS_A,
-// 	LIKE_A,
-// 	NAMED_A,
-// 	CHECK_ARGS,
-// 	IS_A_FUNCTION_REFINING
-// };
-//static enum check last_repeat_suppressed_check_kind;
-
-static const void *last_failed_site;
-static const struct uniqtype *last_failed_deepest_subobject_type;
-
+static void report_repeat_failure_summary(void);
+static unsigned long repeat_summarisation_count;
 struct addrlist distinct_failure_sites;
 
 /* This filter is used to avoid repeated warnings, unless 
  * the user has requested them (verbose mode). */
-static _Bool should_report_failure_at(void *site)
+static _Bool should_report_failure_at(void *site, const struct uniqtype *maybe_test_uniqtype,
+	const struct uniqtype *maybe_alloc_uniqtype)
 {
+	if (is_suppressed(maybe_test_uniqtype ? UNIQTYPE_NAME(maybe_test_uniqtype) : NULL,
+			site,
+			maybe_alloc_uniqtype ? UNIQTYPE_NAME(maybe_alloc_uniqtype) : NULL)) return 0;
 	if (verbose) return 1;
 	_Bool is_unseen = !__liballocs_addrlist_contains(&distinct_failure_sites, site);
 	if (is_unseen)
@@ -427,11 +416,7 @@ static void print_exit_summary(void)
 		&& __libcrunch_created_invalid_pointer == 0
 		&& !getenv("LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY")) return;
 	
-	if (repeat_suppression_count > 0)
-	{
-		debug_printf(0, "Suppressed %ld further occurrences of the previous error", 
-				repeat_suppression_count);
-	}
+	report_repeat_failure_summary();
 	
 	fprintf(crunch_stream_err, "======================================================\n");
 	fprintf(crunch_stream_err, "libcrunch summary: \n");
@@ -1038,34 +1023,77 @@ void __libcrunch_uncache_is_a(const void *allocptr, size_t size)
 	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
 }
 
-static void report_failure(const void *site, long *p_repeat_suppression_count,
-	const void **p_last_failed_site,
-	const struct uniqtype **p_last_failed_deepest_subobject_type,
-	struct uniqtype *found_uniqtype,
+enum check_kind
+{
+	IS_A,
+	LIKE_A,
+	NAMED_A,
+	IS_A_FUNCTION_REFINING,
+	CHECK_ARGS,
+	LOOSELY_LIKE_A,
+	IS_A_POINTER_OF_DEGREE,
+	CAN_HOLD_POINTER,
+	DERIVED_PTR_VALID,
+	DEREFED_PTR_VALID,
+	CHECK_MAX = 0x255
+};
+static const char *check_kind_names[CHECK_MAX + 1] = {
+	[IS_A]              = "__is_a",
+	[LIKE_A]            = "__like_a",
+	[NAMED_A]           = "__named_a",
+	[IS_A_FUNCTION_REFINING] = "__is_a_function_refining",
+	[CHECK_ARGS]        = "__check_args",
+	[LOOSELY_LIKE_A]    = "__loosely_like_a",
+	[IS_A_POINTER_OF_DEGREE] = "__is_a_pointer_of_degree",
+	[CAN_HOLD_POINTER] = "__can_hold_pointer",
+	[DERIVED_PTR_VALID] = "__check_derive_ptr",
+	[DEREFED_PTR_VALID] = "__check_deref_ptr"
+};
+
+static struct
+{
+	enum check_kind kind;
+	const void *site;
+	const void *opaque_decider;
+} last_failed_check;
+static unsigned long repeat_failure_suppression_count;
+
+static void report_repeat_failure_summary(void)
+{
+	if (repeat_summarisation_count > 0)
+	{
+		debug_printf(0, "Saw %ld further occurrences of the previous error",
+				repeat_summarisation_count);
+		repeat_summarisation_count = 0;
+	}
+}		
+static void report_failure_if_necessary(const void *site,
+	enum check_kind kind,
+	const struct uniqtype *found_uniqtype,
+	const struct uniqtype *test_uniqtype,
+	const struct uniqtype *alloc_uniqtype,
 	const char *fmt,
 	...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	if (should_report_failure_at(__builtin_return_address(0)))
+	if (should_report_failure_at(__builtin_return_address(0), test_uniqtype, alloc_uniqtype))
 	{
-		if (*p_last_failed_site == __builtin_return_address(0)
-				&& *p_last_failed_deepest_subobject_type == found_uniqtype)
+		if (last_failed_check.site == __builtin_return_address(0)
+				&& last_failed_check.opaque_decider /* deepest_subobject_type */ == found_uniqtype)
 		{
-			++repeat_suppression_count;
+			++repeat_summarisation_count;
 		}
 		else
 		{
-			if (repeat_suppression_count > 0)
-			{
-				debug_printf(0, "Suppressed %ld further occurrences of the previous error", 
-						repeat_suppression_count);
-			}
-
+			report_repeat_failure_summary();
+			debug_printf(0, "Failed check at %p (%s): %s", site,
+				format_symbolic_address(site), check_kind_names[kind]);
 			debug_vprintf(0, fmt, ap);
-			*p_last_failed_site = __builtin_return_address(0);
-			*p_last_failed_deepest_subobject_type = found_uniqtype;
-			*p_repeat_suppression_count = 0;
+			last_failed_check.kind = kind;
+			last_failed_check.site = __builtin_return_address(0);
+			// FIXME: the choice of decider depends on the check kind
+			last_failed_check.opaque_decider /* deepest_subobject_type */ = found_uniqtype;
 		}
 	}
 	va_end(ap);
@@ -1202,29 +1230,25 @@ int __is_a_internal(const void *obj, const void *arg)
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
-		{
-			report_failure(__builtin_return_address(0), 
-				&repeat_suppression_count,
-				&last_failed_site,
-				&last_failed_deepest_subobject_type,
-				cur_obj_uniqtype,
-				"Failed check __is_a(%p, %p a.k.a. \"%s\") at %p (%s); "
-							"ptr is %ld bytes into a %s-allocated %s "
-							"(deepest subobject spanning ptr: %s at offset %d) "
-							"originating at %p\n", 
-				obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
-				__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
-				(long)((char*) obj - (char*) alloc_start),
-				a ? a->name : "(no allocator)",
-				NAME_FOR_UNIQTYPE(alloc_uniqtype), 
-				(cur_obj_uniqtype ? 
-					((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : UNIQTYPE_NAME(cur_obj_uniqtype)) 
-					: "(none)"), 
-				cumulative_offset_searched, 
-				alloc_site
-			);
-		}
+		report_failure_if_necessary(__builtin_return_address(0),
+			IS_A,
+			cur_obj_uniqtype,
+			test_uniqtype,
+			alloc_uniqtype,
+			"(%p, %p a.k.a. \"%s\"): "
+				"ptr is %ld bytes into a %s-allocated %s "
+				"(deepest subobject spanning ptr: %s at offset %d) "
+				"originating at %p\n", 
+			obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+			(long)((char*) obj - (char*) alloc_start),
+			a ? a->name : "(no allocator)",
+			NAME_FOR_UNIQTYPE(alloc_uniqtype), 
+			(cur_obj_uniqtype ? 
+				((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : UNIQTYPE_NAME(cur_obj_uniqtype)) 
+				: "(none)"), 
+			cumulative_offset_searched, 
+			alloc_site
+		);
 	}
 out:
 	return 1; // HACK: so that the program will continue
@@ -1346,19 +1370,17 @@ like_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
-		{
-			if (should_report_failure_at(__builtin_return_address(0)))
-			{
-				debug_printf(0, "Failed check __like_a(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p", 
-					obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
-					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
-					a ? a->name : "(no allocator)",
-					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
-					NAME_FOR_UNIQTYPE(alloc_uniqtype), 
-					alloc_site);
-			}
-		}
+		report_failure_if_necessary(__builtin_return_address(0),
+			LIKE_A,
+			cur_obj_uniqtype,
+			test_uniqtype,
+			alloc_uniqtype,
+			"(%p, %p a.k.a. \"%s\"): allocation was a %s%s%s originating at %p", 
+				obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+				a ? a->name : "(no allocator)",
+				(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
+				NAME_FOR_UNIQTYPE(alloc_uniqtype), 
+				alloc_site);
 	}
 out:
 	return 1; // HACK: so that the program will continue
@@ -1411,19 +1433,17 @@ named_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(test_typestr, __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
-		{
-			if (should_report_failure_at(__builtin_return_address(0)))
-			{
-				debug_printf(0, "Failed check __named_a(%p, \"%s\") at %p (%s), allocation was a %s%s%s originating at %p", 
-					obj, test_typestr,
-					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
-					a ? a->name : "(no allocator)",
-					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
-					NAME_FOR_UNIQTYPE(alloc_uniqtype),
-					alloc_site);
-			}
-		}
+		report_failure_if_necessary(__builtin_return_address(0),
+			NAMED_A,
+			cur_obj_uniqtype,
+			NULL,
+			alloc_uniqtype,
+			"named_a(%p, \"%s\"): allocation was a %s%s%s originating at %p", 
+				obj, test_typestr,
+				a ? a->name : "(no allocator)",
+				(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
+				NAME_FOR_UNIQTYPE(alloc_uniqtype),
+				alloc_site);
 	}
 	return 1; // HACK: so that the program will continue
 }
@@ -1602,38 +1622,20 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
-		{
-			if (should_report_failure_at(__builtin_return_address(0)))
-			{
-				if (last_failed_site == __builtin_return_address(0)
-						&& last_failed_deepest_subobject_type == alloc_uniqtype)
-				{
-					++repeat_suppression_count;
-				}
-				else
-				{
-					if (repeat_suppression_count > 0)
-					{
-						debug_printf(0, "Suppressed %ld further occurrences of the previous error", 
-								repeat_suppression_count);
-					}
-
-					debug_printf(0, "Failed check __is_a_function_refining(%p, %p a.k.a. \"%s\") at %p (%s), "
-							"found an allocation of a %s%s%s "
-							"originating at %p", 
-						obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
-						__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
-						a ? a->name : "(no allocator)",
-						(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
-						NAME_FOR_UNIQTYPE(alloc_uniqtype),
-						alloc_site);
-					last_failed_site = __builtin_return_address(0);
-					last_failed_deepest_subobject_type = alloc_uniqtype;
-					repeat_suppression_count = 0;
-				}
-			}
-		}
+		report_failure_if_necessary(__builtin_return_address(0),
+			IS_A_FUNCTION_REFINING,
+			cur_obj_uniqtype,
+			test_uniqtype,
+			alloc_uniqtype,
+			"(%p, %p a.k.a. \"%s\"): "
+				"found an allocation of a %s%s%s "
+				"originating at %p", 
+			obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+			a ? a->name : "(no allocator)",
+			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
+			NAME_FOR_UNIQTYPE(alloc_uniqtype),
+			alloc_site
+		);	
 	}
 out:
 	return 1; // HACK: so that the program will continue
@@ -1936,19 +1938,17 @@ loosely_like_a_failed:
 	else
 	{
 		++__libcrunch_failed;
-		if (!is_suppressed(UNIQTYPE_NAME(test_uniqtype), __builtin_return_address(0), alloc_uniqtype ? UNIQTYPE_NAME(alloc_uniqtype) : NULL))
-		{
-			if (should_report_failure_at(__builtin_return_address(0)))
-			{
-				debug_printf(0, "Failed check __loosely_like_a(%p, %p a.k.a. \"%s\") at %p (%s), allocation was a %s%s%s originating at %p", 
-					obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
-					__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)),
-					a ? a->name : "(no allocator)",
-					(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
-					NAME_FOR_UNIQTYPE(alloc_uniqtype), 
-					alloc_site);
-			}
-		}
+		report_failure_if_necessary(__builtin_return_address(0),
+			LOOSELY_LIKE_A,
+			cur_obj_uniqtype,
+			test_uniqtype,
+			alloc_uniqtype,
+			"(%p, %p a.k.a. \"%s\"): allocation was a %s%s%s originating at %p", 
+			obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+			a ? a->name : "(no allocator)",
+			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
+			NAME_FOR_UNIQTYPE(alloc_uniqtype), 
+			alloc_site);
 	}
 	return 1; // HACK: so that the program will continue
 }
@@ -1968,11 +1968,15 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 	
 is_a_pointer_failed:
 	++__libcrunch_failed;
-	debug_printf(0, "Failed check __is_a_pointer_of_degree(%p, %d) at %p (%s), "
+	report_failure_if_necessary(__builtin_return_address(0),
+		IS_A_POINTER_OF_DEGREE,
+		cur_obj_uniqtype,
+		NULL,
+		alloc_uniqtype,
+		"(%p, %d): "
 			"found an allocation of a %s%s%s "
 			"originating at %p", 
 		obj, d,
-		__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 		a ? a->name : "(no allocator)",
 		(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 		NAME_FOR_UNIQTYPE(alloc_uniqtype),
@@ -2195,11 +2199,15 @@ can_hold_pointer_failed:
 	else
 	{
 		++__libcrunch_failed;
-		debug_printf(0, "Failed check __can_hold_pointer(%p, %p) at %p (%s), "
+		report_failure_if_necessary(__builtin_return_address(0),
+			CAN_HOLD_POINTER,
+			NULL,
+			NULL,
+			NULL,
+			"(%p, %p): "
 				"target pointer is a %s, %ld bytes into a %s%s%s originating at %p, "
 				"value points %ld bytes into a %s%s%s originating at %p", 
 			obj, value,
-			__builtin_return_address(0), format_symbolic_address(__builtin_return_address(0)), 
 			NAME_FOR_UNIQTYPE(type_of_pointer_being_stored_to),
 			(long)((char*) obj - (char*) obj_alloc_start),
 			obj_a ? obj_a->name : "(no allocator)",
@@ -2621,8 +2629,13 @@ void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom,
 {
 	__libcrunch_check_init();
 	
-	warnx("code at %p generated an out-of-bounds pointer %p (from %p; difference %ld; lb %p; ub %p)",
-		addr, derived, derivedfrom, 
+	report_failure_if_necessary(addr,
+		DERIVED_PTR_VALID,
+		NULL,
+		NULL,
+		NULL,
+		"(derived %p from %p): difference %ld; lb %p; ub %p",
+		derived, derivedfrom, 
 		(char*) derived - (char*) derivedfrom, 
 		__libcrunch_get_base(bounds, derivedfrom), 
 		__libcrunch_get_limit(bounds, derivedfrom));
@@ -2639,10 +2652,16 @@ void __libcrunch_soft_deref_error_at(const void *ptr, __libcrunch_bounds_t bound
 {
 	__libcrunch_check_init();
 	
-	warnx("code at %p dereferenced an out-of-bounds pointer %p (lb %p; ub %p)",
-		addr, ptr,
+	report_failure_if_necessary(addr,
+		DEREFED_PTR_VALID,
+		NULL,
+		NULL,
+		NULL,
+		"(%p): lb %p; ub %p",
+		ptr,
 		__libcrunch_get_base(bounds, ptr), 
-		__libcrunch_get_limit(bounds, ptr));
+		__libcrunch_get_limit(bounds, ptr)
+	);
 }
 
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
