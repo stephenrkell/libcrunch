@@ -2737,7 +2737,8 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 	__libcrunch_bounds_t dest_alloc_ptrwise_bounds = __peek_argument_bounds(
 		/* really */ 1, /* offset */ 0, /* val */ srcval, "fake peek in " __FILE__);
 
-	struct uniqtype *cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
+	struct uniqtype *toplevel_cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
+	struct uniqtype *cached_target_alloc_type = toplevel_cached_target_alloc_type;
 	if (cached_target_alloc_type)
 	{
 		/* descend containment until we get a pointer. */
@@ -2753,7 +2754,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 		}
 		if (!UNIQTYPE_IS_POINTER_TYPE(cached_target_alloc_type)) cached_target_alloc_type = NULL;
 	}
-	
+
 	if (cached_target_alloc_type)
 	{
 		assert(UNIQTYPE_IS_POINTER_TYPE(cached_target_alloc_type));
@@ -2764,17 +2765,24 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 			static_guessed_srcval_pointee_type = __libcrunch_get_cached_object_type(srcval);
 		}
 		if (!static_guessed_srcval_pointee_type
+			/* If it really is a void* object, we can go ahead  */
+			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__void
+			/* ... and we do the same if the static guess agrees with the cache */
 			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == static_guessed_srcval_pointee_type)
 		{
 			/* Okay, go with the bounds the caller gave us. If they're invalid, the usual
 			 *  __store_pointer_nonlocal thing wil try fetching them, using the type. */
 			__store_pointer_nonlocal(dest, srcval, val_bounds, UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type));
 		}
-		else
+		else // static_guessed_srcval_pointee_type &&
+			// UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) != static_guessed_srcval_pointee_type
 		{
 			/* That's a pity. Report it.
 			 * FIXME: what about what the cache says about the pointee value */
-			warnx("void** bounds store: disagreed about types");
+			warnx("void** bounds store: disagreed about types: cache says %s (toplevel: %s) but static guess is %s",
+				NAME_FOR_UNIQTYPE(UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type)),
+				NAME_FOR_UNIQTYPE(toplevel_cached_target_alloc_type),
+				NAME_FOR_UNIQTYPE(static_guessed_srcval_pointee_type));
 			abort();
 		}
 	}
