@@ -3626,20 +3626,20 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                       | _ -> failwith "check statement does not have a check label"
                     in 
                     (* We then test the return value of the call. *)
-                    let (checkVarinfo, loc) = match is with 
+                    let (checkVarinfo, loc, checkArgs) = match is with 
                         [Call(Some(Var(vi), NoOffset), Lval(Var(funvar), NoOffset), args, loc)]
                              when funvar == fullCheckFun
-                                -> (vi, loc)
+                                -> (vi, loc, args)
                       | _ -> failwith "check has no output var"
                     in
                     { labels = [];
-                      skind = If(UnOp(LNot, Lval(Var(checkVarinfo), NoOffset), intType), 
+                      skind = If(UnOp(LNot, Lval(Var(checkVarinfo), NoOffset), intType),
                         mkBlock [{ labels = [];
                           skind = Block(mkBlock [
                             { labels = [];
                               skind = Instr([Call(None, 
                                 Lval(Var(helperFunctions.primarySecondaryTransition.svar), NoOffset), 
-                                [], 
+                                checkArgs, 
                                 loc)]);
                               sid = 0; succs = []; preds = []
                             };

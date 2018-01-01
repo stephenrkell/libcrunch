@@ -2016,13 +2016,21 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_bou
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(void);
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(void)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 	abort();
 #else
 	++__libcrunch_primary_secondary_transitions;
+#ifdef LIBCRUNCH_DEBUG_PRIMARY_SECONDARY_TRANSITIONS
+	warnx("Primary-secondary transition: derived %p from %p, bounds (base: %p, limit %p), type %p",
+				*p_derived, derivedfrom,
+				(void*)__libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom),
+				(void*)__libcrunch_get_limit(*p_derivedfrom_bounds, derivedfrom),
+				(unsigned long) __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom),
+				t);
+#endif
 #endif
 }
 
