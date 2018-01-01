@@ -20,7 +20,7 @@ int main(void)
 	char *c = &as[a - b]; // difference 40
 	printf("Got c: %p\n", c);
 
-	char *d = &bs[as[2]]; // value 'b' a.k.a. 98
+	char *d = &bs[as[1]]; // value 'b' a.k.a. 98
 	printf("Got d: %p\n", d);
 	
 	char **e = &cs[0].plugh;
