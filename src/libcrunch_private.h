@@ -17,22 +17,36 @@
 
 #undef debug_printf /* from liballocs */
 extern FILE *crunch_stream_err __attribute__((visibility("hidden")));
-#define debug_printf_to(strm, lvl, fmt, ...) do { \
+/* Primitives for printing at a debug level. They take a stream
+ * and a format-string message, either using varargs or a va_list. */
+#define debug_fprintf_to_nohdr(strm, lvl, fmt, ...) do { \
     if ((lvl) <= __libcrunch_debug_level) { \
-      fprintf((strm), "%s: " fmt "\n", get_exe_basename(), ## __VA_ARGS__ );  \
+      fprintf((strm), fmt, ## __VA_ARGS__ );  \
+    } \
+  } while (0)
+#define debug_vfprintf_to_nohdr(strm, lvl, fmt, ap) do { \
+    if ((lvl) <= __libcrunch_debug_level) { \
+      vfprintf((strm), fmt, ap);  \
     } \
   } while (0)
 
-#define debug_printf(lvl, fmt, ...) debug_printf_to(crunch_stream_err, lvl, fmt, ## __VA_ARGS__ )
+/* Cooked operations for printing at a debug level. These use the
+ * default stream, and emulate warnx by prepending the exec basename
+ * and (optionally) a newline. */
+#define debug_fprintf_to(strm, lvl, fmt, ...) \
+	debug_fprintf_to_nohdr(strm, lvl, "%s: " fmt, get_exe_basename(), ## __VA_ARGS__ )
+#define debug_vfprintf_to(strm, lvl, fmt, ap)  do { \
+	/* first print the header, then the va_list message */ \
+	debug_printf_to_nohdr(strm, lvl, "%s: " , get_exe_basename()); \
+	debug_printf_to_nohdr(strm, lvl, fmt, ap); \
+	} while (0)
 
-/* HACK: we insert the exe basename by adding an extra argument, which we can't 
- * do with a va list, so instead use warnx ere for now, which does it for us.
- * It also inserts a newline, so for consistency, we add one above. */
-#define debug_vprintf(lvl, fmt, ap) do { \
-    if ((lvl) <= __libcrunch_debug_level) { \
-      vwarnx( fmt, ap );  \
-    } \
-  } while (0)
+#define debug_println(lvl, fmt, ...) debug_fprintf_to(crunch_stream_err, lvl, fmt "\n", ## __VA_ARGS__ )
+#define debug_printf(lvl, fmt, ...) debug_fprintf_to(crunch_stream_err, lvl, fmt, ## __VA_ARGS__ )
+#define debug_printf_bare(lvl, fmt, ...) debug_fprintf_to_nohdr(crunch_stream_err, lvl, fmt, ## __VA_ARGS__ )
+#define debug_vprintf_bare(lvl, fmt, ap) debug_vfprintf_to_nohdr(crunch_stream_err, lvl, fmt, ap)
+#define debug_vprintf(lvl, fmt, ap) debug_vfprintf_to(crunch_stream_err, lvl, fmt, ap)
+#define debug_vprintf_nohdr(lvl, fmt, ap) debug_vfprintf_to_nohdr(crunch_stream_err, lvl, fmt, ap)
 
 /* avoid dependency on libc headers (in this header only) */
 void __assert_fail(const char *assertion, 

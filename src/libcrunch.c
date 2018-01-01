@@ -218,7 +218,7 @@ int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *
 // 			/* Check this is the first data phdr we've seen. */
 // 			if (data_begin)
 // 			{
-// 				debug_printf(1, "saw multiple data segments in %s; bailing", real_name);
+// 				debug_println(1, "saw multiple data segments in %s; bailing", real_name);
 // 				return 1;
 // 			}
 // 			data_begin = (char*) info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
@@ -227,7 +227,7 @@ int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *
 // 	}
 // 	if (!data_begin)
 // 	{
-// 		debug_printf(1, "found no data segment for %s; bailing", real_name);
+// 		debug_println(1, "found no data segment for %s; bailing", real_name);
 // 		return 1;
 // 	}
 // 	
@@ -236,14 +236,14 @@ int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *
 // 	 * - have uniqtypes that are pointers. */
 // 	if (!p_meta || !p_meta->types_handle)
 // 	{
-// 		debug_printf(1, "no types handle for %s; bailing", real_name);
+// 		debug_println(1, "no types handle for %s; bailing", real_name);
 // 		return 1;
 // 	}
 // 	
 // 	void *p_statics = dlsym(p_meta->types_handle, "statics");
 // 	if (!p_statics)
 // 	{
-// 		debug_printf(1, "no statics metadata for %s; bailing", real_name);
+// 		debug_println(1, "no statics metadata for %s; bailing", real_name);
 // 		return 1;
 // 	}
 // 	
@@ -257,7 +257,7 @@ int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *
 // 			/* FIXME: pointer-containing types too! */
 // 			if (UNIQTYPE_IS_POINTER_TYPE(p_static->entry.uniqtype))
 // 			{
-// 				debug_printf(0, "saw a static pointer alloc named %s", p_static->name);
+// 				debug_println(0, "saw a static pointer alloc named %s", p_static->name);
 // 				__shadow_store_bounds_for((void**) p_static->entry.allocsite,
 // 						__fetch_bounds_internal(
 // 							*(void**) p_static->entry.allocsite,
@@ -265,7 +265,7 @@ int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *
 // 							UNIQTYPE_POINTEE_TYPE(p_static->entry.uniqtype)
 // 						));
 // 			}
-// 			// else debug_printf(0, "... not of pointer type", p_static->name);
+// 			// else debug_println(0, "... not of pointer type", p_static->name);
 // 		}
 // 	}
 // 	
@@ -311,7 +311,7 @@ static _Bool test_site_matches(const char *pat /* will be saved! must not be fre
 	}
 	else
 	{
-		debug_printf(2, "dladdr() failed to find symbol for test site address %p", test_site);
+		debug_println(2, "dladdr() failed to find symbol for test site address %p", test_site);
 		result = prefix_pattern_matches(pat, "");
 	}
 	return result;
@@ -750,7 +750,7 @@ static void early_init(void)
 		if (!stream_err)
 		{
 			crunch_stream_err = stderr;
-			debug_printf(0, "could not open %s for writing", errvar);
+			debug_println(0, "could not open %s for writing", errvar);
 		}
 	} else crunch_stream_err = stderr;
 	assert(crunch_stream_err);
@@ -852,7 +852,7 @@ int __libcrunch_global_init(void)
 			unsigned n_comma_sep = count_separated_words(*p_word, ',');
 			if (n_comma_sep != 3)
 			{
-				debug_printf(1, "invalid suppression: %s", *p_word);
+				debug_println(1, "invalid suppression: %s", *p_word);
 			}
 			else
 			{
@@ -873,7 +873,7 @@ int __libcrunch_global_init(void)
 	
 	__libcrunch_is_initialized = 1;
 
-	debug_printf(1, "libcrunch successfully initialized");
+	debug_println(1, "libcrunch successfully initialized");
 	
 	return 0;
 }
@@ -962,7 +962,7 @@ static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const
 	}
 #endif
 	/* Create the new entry and put it at the head. */
-	debug_printf(1, "Creating fake bounds %p-%p", obj_base, obj_limit);
+	debug_println(1, "Creating fake bounds %p-%p", obj_base, obj_limit);
 	__libcrunch_fake_bounds_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
 		.obj_base = obj_base,
 		.obj_limit = obj_limit,
@@ -1062,7 +1062,7 @@ static void report_repeat_failure_summary(void)
 {
 	if (repeat_summarisation_count > 0)
 	{
-		debug_printf(0, "Saw %ld further occurrences of the previous error",
+		debug_println(0, "Saw %ld further occurrences of the previous error",
 				repeat_summarisation_count);
 		repeat_summarisation_count = 0;
 	}
@@ -1089,7 +1089,8 @@ static void report_failure_if_necessary(const void *site,
 			report_repeat_failure_summary();
 			debug_printf(0, "Failed check at %p (%s): %s", site,
 				format_symbolic_address(site), check_kind_names[kind]);
-			debug_vprintf(0, fmt, ap);
+			debug_vprintf_nohdr(0, fmt, ap);
+			debug_printf_bare(0, "\n");
 			last_failed_check.kind = kind;
 			last_failed_check.site = __builtin_return_address(0);
 			// FIXME: the choice of decider depends on the check kind
@@ -1839,14 +1840,14 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	 * element in the test type is such an array, we skip over any number of
 	 * fields in the object type, until we reach the offset of the end element.  */
 	unsigned i_obj_subobj = 0, i_test_subobj = 0;
-	if (test_uniqtype != cur_obj_uniqtype) debug_printf(0, "__loosely_like_a proceeding on subobjects of (test) %s and (object) %s",
+	if (test_uniqtype != cur_obj_uniqtype) debug_println(0, "__loosely_like_a proceeding on subobjects of (test) %s and (object) %s",
 		NAME_FOR_UNIQTYPE(test_uniqtype), NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
 	for (; 
 		i_obj_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(cur_obj_uniqtype)
 			&& i_test_subobj < UNIQTYPE_COMPOSITE_MEMBER_COUNT(test_uniqtype); 
 		++i_test_subobj, ++i_obj_subobj)
 	{
-		debug_printf(0, "Subobject types are (test) %s and (object) %s",
+		debug_println(0, "Subobject types are (test) %s and (object) %s",
 			NAME_FOR_UNIQTYPE((struct uniqtype *) test_uniqtype->related[i_test_subobj].un.memb.ptr), 
 			NAME_FOR_UNIQTYPE((struct uniqtype *) cur_obj_uniqtype->related[i_obj_subobj].un.memb.ptr));
 		
@@ -1911,17 +1912,17 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	
 	_Bool success;
 	try_deeper:
-		debug_printf(0, "No dice; will try the object type one level down if there is one...");
+		debug_println(0, "No dice; will try the object type one level down if there is one...");
 		success = __liballocs_first_subobject_spanning(
 				&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
 				&cur_contained_pos);
 		if (!success) goto loosely_like_a_failed;
-		debug_printf(0, "... got %s", NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
+		debug_println(0, "... got %s", NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
 
 	} while (1);
 	
 loosely_like_a_succeeded:
-	if (test_uniqtype != alloc_uniqtype) debug_printf(0, "__loosely_like_a succeeded! test type %s, allocation type %s",
+	if (test_uniqtype != alloc_uniqtype) debug_println(0, "__loosely_like_a succeeded! test type %s, allocation type %s",
 		NAME_FOR_UNIQTYPE(test_uniqtype), NAME_FOR_UNIQTYPE(alloc_uniqtype));
 	++__libcrunch_succeeded;
 out:
@@ -2182,7 +2183,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		);
 		//value_object_info->alloc_site_flag = 1;
 		//value_object_info->alloc_site = (uintptr_t) UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to); // i.e. *not* loose!
-		debug_printf(0, "libcrunch: specialised allocation at %p from %s to %s", 
+		debug_println(0, "libcrunch: specialised allocation at %p from %s to %s", 
 			value,
 			NAME_FOR_UNIQTYPE(value_alloc_uniqtype),
 			NAME_FOR_UNIQTYPE(UNIQTYPE_POINTEE_TYPE(type_of_pointer_being_stored_to)));
@@ -2436,7 +2437,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	}
 	else
 	{
-		debug_printf(1, "libcrunch: no bounds for %p, target type %s, offset %d in allocation of %s at %p", 
+		debug_println(1, "libcrunch: no bounds for %p, target type %s, offset %d in allocation of %s at %p", 
 			obj, NAME_FOR_UNIQTYPE(t), target_offset_within_uniqtype, NAME_FOR_UNIQTYPE(alloc_uniqtype),
 			alloc_start);
 		goto return_min_bounds;
@@ -2482,7 +2483,7 @@ abort_returning_max_bounds:
 		t, 1, (t ? t->pos_maxoff : 1), NULL /* no alloc start */
 	);
 	
-	debug_printf(1, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)", 
+	debug_println(1, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)", 
 			obj, derived, err ? __liballocs_errstring(err) : "no allocation found spanning queried pointer", alloc_site);
 	return __libcrunch_max_bounds(obj);
 }
@@ -2609,7 +2610,7 @@ out_fail:
 			if (addr - new_base <= new_limit - new_base - t_sz) 
 			{
 				/* Okay, looks like we widened some fake the bounds. */
-				debug_printf(1, "libcrunch: allowing derivation of %p (from %p) owing to cached fake bounds.", derived, derivedfrom);
+				debug_println(1, "libcrunch: allowing derivation of %p (from %p) owing to cached fake bounds.", derived, derivedfrom);
 				// FIXME: this violates our "valid bounds don't change" assumption
 				//*derivedfrom_bounds = /* from_cache */
 				//	__libcrunch_max_bounds(derivedfrom);
