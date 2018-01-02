@@ -4,7 +4,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-
 #include <string.h>
 #include <dlfcn.h>
 #include <unistd.h>
@@ -1123,12 +1122,20 @@ static void report_failure_if_necessary(const void *site,
 	 \
 	if (alloc_uniqtype->make_precise) \
 	{ \
-		/* FIXME: should really do a fuller treatment of make_precise, to allow e.g. */ \
-		/* returning a fresh uniqtype into a buffer, and (even) passing mcontext. */ \
-		alloc_uniqtype = alloc_uniqtype->make_precise(alloc_uniqtype, \
-			NULL, 0, \
-			(void*) alloc_start, (void*) alloc_start, alloc_size_bytes, __builtin_return_address(0), \
-			NULL); \
+		/* HACK: special-case to avoid overheads of 1-element array type creation */ \
+		if (alloc_uniqtype->make_precise == __liballocs_make_array_precise_with_memory_bounds && \
+			1 == (alloc_size_bytes / alloc_uniqtype->pos_maxoff)) \
+		{ \
+			alloc_uniqtype = UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype); \
+		} \
+		else \
+		{ \
+			/* FIXME: should really do a fuller treatment of make_precise, to allow e.g. */ \
+			/* returning a fresh uniqtype into a buffer, and (even) passing mcontext. */ \
+			alloc_uniqtype = alloc_uniqtype->make_precise(alloc_uniqtype, \
+				NULL, 0, (void*) alloc_start, (void*) alloc_start, alloc_size_bytes, \
+				__builtin_return_address(0), NULL); \
+		} \
 		/* Now ask the meta-alloc protocol to update that object's metadata to this type. */ \
 		if (a && a->set_type) a->set_type(NULL, (void*) alloc_start, alloc_uniqtype); \
 	} \
