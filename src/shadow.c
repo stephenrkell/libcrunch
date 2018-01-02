@@ -22,12 +22,10 @@
 #include "libcrunch_private.h"
 #include "libcrunch_cil_inlines.h"
 
-void **__libcrunch_bounds_bases_region_00;
-void **__libcrunch_bounds_bases_region_2a;
-void **__libcrunch_bounds_bases_region_7a;
-unsigned long *__libcrunch_bounds_sizes_region_00;
-unsigned long *__libcrunch_bounds_sizes_region_2a;
-unsigned long *__libcrunch_bounds_sizes_region_7a;
+/* These are defined in *both* libcrunch.c *and* stubs.c. */
+extern unsigned *__libcrunch_bounds_region_00;
+extern unsigned *__libcrunch_bounds_region_2a;
+extern unsigned *__libcrunch_bounds_region_7f;
 
 static void *first_2a_free;
 static void *first_30_free = (void*) 0x300000000000ul;
@@ -35,9 +33,9 @@ static void *first_30_free = (void*) 0x300000000000ul;
 static int check_maps_cb(struct maps_entry *ent, char *linebuf, void *arg)
 {
 	/* Does this mapping fall within our shadowed ranges? This means
-	 *     0000..0555
-	 * or  2aaa..2fff
-	 * or  7aaa..7fff.
+	 *     0000..0550
+	 * or  2aa0..2ff0
+	 * or  7f00..7fff.
 	 */
 	
 #define is_in_range(range_start, range_lastbyte, mapping_start, mapping_lastbyte) \
@@ -53,9 +51,9 @@ static int check_maps_cb(struct maps_entry *ent, char *linebuf, void *arg)
 	}
 	
 	if (
-		   is_in_range(0x000000000000ul, 0x055555555554ul, ent->first, ent->second - 1)
-		|| is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, ent->first, ent->second - 1)
-		|| is_in_range(0x7aaaaaaab000ul, 0x7ffffffffffful, ent->first, ent->second - 1)
+		   is_in_range(0x000000000000ul, 0x055000000000ul, ent->first, ent->second)
+		|| is_in_range(0x2a0000000000ul, 0x2f0000000000ul, ent->first, ent->second)
+		|| is_in_range(0x7f0000000000ul, 0x800000000000ul, ent->first, ent->second)
 		)
 	{
 		// okay -- we shadow these
@@ -64,9 +62,9 @@ static int check_maps_cb(struct maps_entry *ent, char *linebuf, void *arg)
 	{
 		// okay -- it's a kernel thingy
 	}
-	else if (is_in_range(0x300000000000ul, 0x4ffffffffffful, ent->first, ent->second - 1))
+	else if (is_in_range(0x300000000000ul, 0x4f0000000000ul, ent->first, ent->second))
 	{
-		// we assume the 3s and 4s are controlled by us -- HMM
+		// we assume the 3s and (most of the) 4s are controlled by us -- HMM
 	}
 	else abort();
 }
@@ -86,7 +84,7 @@ void __wrap___liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot,
                   p_fd, p_offset, caller);
 	
 	// do nothing more if we're not initialized
-	if (!__libcrunch_bounds_bases_region_00) return;
+	if (!__libcrunch_bounds_region_00) return;
 	
 	/* We vet and perhaps tweak the mmap paramters.
 	 * Currently the main use of this is in providing libcrunch's
@@ -109,8 +107,8 @@ void __wrap___liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot,
 		/* This means the caller is really sure where they want it. 
 		 * We only really trust them if it's us, but go ahead either way. 
 		 * If they're in the 2a range, update our metadata. */
-		if (is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, (unsigned long) *p_addr,
-				(unsigned long) ((char*) *p_addr + *p_length - 1)))
+		if (is_in_range(0x2a0000000000ul, 0x2f0000000000ul, (unsigned long) *p_addr,
+				(unsigned long) ((char*) *p_addr + *p_length)))
 		{
 			if (!first_2a_free || (char*) *p_addr + *p_length > (char*) first_2a_free)
 			{
@@ -177,9 +175,9 @@ static void init_shadow_space(void) // constructor (declared above)
 	/* Map out a big chunk of virtual address space. 
 	 * But one big chunk causes fragmentation. 
 	 * We assume user pointers are in
-	 *     0000..0555
-	 * or  2aaa..2fff
-	 * or  7aaa..7fff.
+	 *     0000..0550
+	 * or  2aa0..2ff0
+	 * or  7f00..7fff.
 	 * 
 	 * First, CHECK this from /proc/maps at startup, and at mmap() calls.
 	 */
@@ -189,36 +187,28 @@ static void init_shadow_space(void) // constructor (declared above)
 	if (!first_30_free) first_30_free = (void*) 0x300000000000ul;
 	close(fd);
 	
-	/* HMM. Stick with XOR top-three-bits thing for the base.
-	 * we need {0000,0555} -> {7000,7555}
-	 *         {2aaa,2fff} -> {5aaa,5fff}
-	 *         {7aaa,7fff} -> {0aaa,0fff}
-	 * What about sizes? 
-	 * First we want to divide the addr by 2
-	 * giving  {0000,02aa} 
-	 *         {1555,1aaa} 
-	 *         {3d55,3fff}
-	 * Then come up with a fixed offset that we can add these to
-	 * so that we don't clash with any of the above (six) ranges
-	 * while leaving a good chunk of free VAS in the 3s--4s.
-	 * How about 0800?
-	 * giving  {0800,0aaa} 
-	 *         {1d55,22aa} 
-	 *         {4555,47ff}.
-	 * Okay, let's try it.
+	/* See libcrunch_cil_inlines.h for our bounds storage scheme.
+	 * But in brief, we do rol 19; addb 0xa0; ror 19.
+	 * The top byte of a 47-bit address is, in effect, bits 46..39.
+	 * To get these into positions 7..0,
+	 * i.e. positions 71..64 modulo 64,
+	 * we need to rotate by decimal 25 bits, i.e. 0x19.
+	 * We get  {0000,0550} -> {5000,5550}
+	 *         {2a00,2f00} -> {7a00,7f00}
+	 *         {7f00,7fff} -> {4f00,4fff}
 	 */
-	__libcrunch_bounds_bases_region_00 = mmap(/* base */ (void*) 0x700000000000ul, 
-		/* size */ 0x755555556000ul - 0x700000000000ul, PROT_READ|PROT_WRITE, 
+	__libcrunch_bounds_region_00 = mmap(/* base */ (void*) 0x500000000000ul,
+		/* size */ 0x555000000000ul - 0x500000000000ul, PROT_READ|PROT_WRITE,
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_bases_region_00 != (void*) 0x700000000000ul) abort();
-	__libcrunch_bounds_bases_region_2a = mmap(/* base */ (void*) 0x5aaaaaaab000ul, 
-		/* size */ 0x600000000000ul - 0x5aaaaaaab000ul, PROT_READ|PROT_WRITE, 
+	if (__libcrunch_bounds_region_00 != (void*) 0x500000000000ul) abort();
+	__libcrunch_bounds_region_2a = mmap(/* base */ (void*) 0x7a0000000000ul,
+		/* size */ 0x7f0000000000ul - 0x7a0000000000ul, PROT_READ|PROT_WRITE,
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_bases_region_2a != (void*) 0x5aaaaaaab000ul) abort();
-	__libcrunch_bounds_bases_region_7a = mmap(/* base */ (void*) 0x0aaaaaaab000ul, 
-		/* size */ 0x100000000000ul - 0x0aaaaaaab000ul, PROT_READ|PROT_WRITE, 
+	if (__libcrunch_bounds_region_2a != (void*) 0x7a0000000000ul) abort();
+	__libcrunch_bounds_region_7f = mmap(/* base */ (void*) 0x4f0000000000ul,
+		/* size */ 0x500000000000ul - 0x4f0000000000ul, PROT_READ|PROT_WRITE,
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
-	if (__libcrunch_bounds_bases_region_7a != (void*) 0x0aaaaaaab000ul) abort();
+	if (__libcrunch_bounds_region_7f != (void*) 0x4f0000000000ul) abort();
 	
 	/* Nasty but pleasing trick:
 	 * - if the full libcrunch is not loaded, 
@@ -237,20 +227,6 @@ static void init_shadow_space(void) // constructor (declared above)
 		fd = open("/dev/ones", O_RDONLY);
 		flags = (fd == -1) ? MAP_ANONYMOUS : 0;
 	}
-	__libcrunch_bounds_sizes_region_00 = mmap(/* base */ (void*) 0x080000000000ul, 
-		/* size */ 0x0aaaaaaab000ul - 0x080000000000ul, PROT_READ|PROT_WRITE, 
-		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
-	if (__libcrunch_bounds_sizes_region_00 != (void*) 0x080000000000ul) abort();
-	if (!libcrunch_is_loaded && fd != -1 &&
-		*(unsigned *) __libcrunch_bounds_sizes_region_00 != 0xffffffffu) abort();
-	__libcrunch_bounds_sizes_region_2a = mmap(/* base */ (void*) 0x1d5555556000ul, 
-		/* size */ 0x22aaaaaab000ul - 0x1d5555556000ul, PROT_READ|PROT_WRITE, 
-		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
-	if (__libcrunch_bounds_sizes_region_2a != (void*) 0x1d5555556000ul) abort();
-	__libcrunch_bounds_sizes_region_7a = mmap(/* base */ (void*) 0x455555556000ul, 
-		/* size */ 0x480000000000ul - 0x455555556000ul, PROT_READ|PROT_WRITE, 
-		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
-	if (__libcrunch_bounds_sizes_region_7a != (void*) 0x455555556000ul) abort();
 
 	if (!libcrunch_is_loaded && fd != -1)
 	{
@@ -323,14 +299,14 @@ static void init_shadow_entries(void)
 	for (const char **argvi = argv_vector_start; argvi != argv_vector_terminator; ++argvi)
 	{
 		/* We're pointing at a stored pointer. */
-		*BASE_STORED(argvi) = (void*) *argvi;
-		*SIZE_STORED(argvi) = strlen(*argvi) + 1;
+		*BASE_LOWBITS_STORED((void**)argvi) = (unsigned)(uintptr_t)(void*) *argvi;
+		*SIZE_STORED((void**)argvi) = strlen(*argvi) + 1;
 	}
 	for (const char **envi = env_vector_start; envi != env_vector_terminator; ++envi)
 	{
 		/* We're pointing at a stored pointer. */
-		*BASE_STORED(envi) = (void*) *envi;
-		*SIZE_STORED(envi) = strlen(*envi) + 1;
+		*BASE_LOWBITS_STORED((void**)envi) = (unsigned)(uintptr_t)(void*) *envi;
+		*SIZE_STORED((void**)envi) = strlen(*envi) + 1;
 	}
 	/* Leave argv's bounds there on the shadow stack for main() to pick up. */
 	__push_argument_bounds_base_limit(argv_vector_start, 
@@ -343,26 +319,26 @@ static void init_shadow_entries(void)
 	__push_argument_bounds_cookie(main_addr);
 	
 	void **p = (void**) environ;
-	*BASE_STORED(p) = env_vector_start;
+	*BASE_LOWBITS_STORED(p) = (unsigned)(uintptr_t)env_vector_start;
 	*SIZE_STORED(p) = (env_vector_terminator + 1 - env_vector_start) * sizeof (char*);
 	p = (void**) &stdin;
-	*BASE_STORED(p) = *p;
+	*BASE_LOWBITS_STORED(p) = (unsigned)(uintptr_t)*p;
 	*SIZE_STORED(p) = sizeof (FILE);
 	p = (void**) &stdout;
-	*BASE_STORED(p) = *p;
+	*BASE_LOWBITS_STORED(p) = (unsigned)(uintptr_t)*p;
 	*SIZE_STORED(p) = sizeof (FILE);
 	p = (void**) &stderr;
-	*BASE_STORED(p) = *p;
+	*BASE_LOWBITS_STORED(p) = (unsigned)(uintptr_t)*p;
 	*SIZE_STORED(p) = sizeof (FILE);
 	
 	/* HACK: stuff below here is glibc-specific.  */
 	p = (void**) __ctype_b_loc();
-	*BASE_STORED(p) = *p;
+	*BASE_LOWBITS_STORED(p) = (unsigned)(uintptr_t)*p;
 	*SIZE_STORED(p) = 768;
 	p = (void**) __ctype_toupper_loc();
-	*BASE_STORED(p) = *p;
+	*BASE_LOWBITS_STORED(p) = (unsigned)(uintptr_t)*p;
 	*SIZE_STORED(p) = 384 * sizeof (int);
 	p = (void**) __ctype_tolower_loc();
-	*BASE_STORED(p) = *p;
+	*BASE_LOWBITS_STORED(p) = (unsigned)(uintptr_t)*p;
 	*SIZE_STORED(p) = 384 * sizeof (int);
 }

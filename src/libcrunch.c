@@ -64,12 +64,9 @@ enum dwarf_regs_x86_64
 
 /* We need our own overriding versions of these, since the _stubs.so copies
  * won't be available to the preload object. */
-void **__libcrunch_bounds_bases_region_00;
-void **__libcrunch_bounds_bases_region_2a;
-void **__libcrunch_bounds_bases_region_7a;
-unsigned long *__libcrunch_bounds_sizes_region_00;
-unsigned long *__libcrunch_bounds_sizes_region_2a;
-unsigned long *__libcrunch_bounds_sizes_region_7a;
+unsigned *__libcrunch_bounds_region_00;
+unsigned *__libcrunch_bounds_region_2a;
+unsigned *__libcrunch_bounds_region_7f;
 
 /* Heap storage sized using a "loose" data type, like void*,
  * is marked as loose, and becomes non-loose when a cast to a non-loose type.
@@ -2233,7 +2230,7 @@ out:
 	return 1; // fail, but program continues
 }
 extern void *__real___notify_copy(void *dest, const void *src, size_t n);
-void **__libcrunch_ool_base_stored_addr(void *const *stored_ptr_addr);
+unsigned *__libcrunch_ool_base_lowbits_stored_addr(void *const *stored_ptr_addr);
 unsigned *__libcrunch_ool_size_stored_addr(void *const *stored_ptr_addr);
 void *__wrap___notify_copy(void *dest, const void *src, size_t n)
 {
@@ -2241,7 +2238,7 @@ void *__wrap___notify_copy(void *dest, const void *src, size_t n)
 	/* WEIRD. If I replace "goto out" with "return dest" here, 
 	 * gcc 4.9.2 miscompiles this by returning 0 (xor eax,eax).
 	 * HACK around this with an "out" label for now. */
-	if (!__libcrunch_bounds_bases_region_00) goto out;
+	if (!__libcrunch_bounds_region_00) goto out;
 	
 	// HACK: a bit stronger -- WHY? this breaks Softbound emulation unless we do the init here
 	// if (!__libcrunch_is_initialized) goto out;
@@ -2256,13 +2253,10 @@ void *__wrap___notify_copy(void *dest, const void *src, size_t n)
 		 * So fake_dlsym is invoking the ifunc for us. */
 		orig_memmove = fake_dlsym(RTLD_NEXT, "memmove");
 	}
-	orig_memmove(__libcrunch_ool_base_stored_addr(dest), 
-		__libcrunch_ool_base_stored_addr(src),
+	orig_memmove(__libcrunch_ool_base_lowbits_stored_addr(dest),
+		__libcrunch_ool_base_lowbits_stored_addr(src),
 		n);
-	
-	orig_memmove(__libcrunch_ool_size_stored_addr(dest), 
-		__libcrunch_ool_size_stored_addr(src),
-		n * sizeof (unsigned) / sizeof (void*));
+
 out:
 	return __real___notify_copy(dest, src, n);
 }
@@ -2748,7 +2742,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 	 * so its checks imdeed do end up immediately after the write instruction.
 	 * That's good for us, because we can profit from their effects on the cache. */
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
-	unsigned long size_stored_addr = (unsigned long) SIZE_STORED(dest);
+	unsigned long size_stored_addr = (unsigned long) SIZE_STORED((void**) dest);
 
 	/* WHEE. The caller probably passed us the bounds of "dest" on the shadow stack.
 	 * Is this useful? We care about whether the target alloc was allocated as
@@ -2953,14 +2947,14 @@ void __libcrunch_ool_store_pointer_nonlocal(const void **dest, const void *val, 
 	return __store_pointer_nonlocal(dest, val, val_bounds, val_pointee_type);
 }
 
-void **__libcrunch_ool_base_stored_addr(void *const *stored_ptr_addr)
+unsigned *__libcrunch_ool_base_lowbits_stored_addr(void *const *stored_ptr_addr)
 {
-	return BASE_STORED(stored_ptr_addr);
+	return BASE_LOWBITS_STORED((void**) stored_ptr_addr);
 }
 
 unsigned *__libcrunch_ool_size_stored_addr(void *const *stored_ptr_addr)
 {
-	return (unsigned *) SIZE_STORED(stored_ptr_addr);
+	return (unsigned *) SIZE_STORED((void**) stored_ptr_addr);
 }
 
 __libcrunch_bounds_t __libcrunch_ool_fetch_bounds_from_shadow_space(const void *ptr, void **loaded_from)

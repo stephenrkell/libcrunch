@@ -2695,7 +2695,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                   (* Don't instrument calls to our own (liballocs/libcrunch) functions that get -include'd. *)
                   (* Also don't instrument calls to __builtin_va_arg. *)
                   if (match calledE with Lval(Var(fvi), NoOffset)
-			when (varIsOurs fvi || fvi.vname = "__builtin_va_arg") -> true
+                   when (varIsOurs fvi || fvi.vname = "__builtin_va_arg") -> true
                     | _ -> false)
                   then changedInstrs
                   else
@@ -3855,6 +3855,7 @@ class helperizePureCalleesVisitor = fun enclosingFile ->
                            not (list_empty (containedPointerExprsForExpr (Lval(lv))))
                          | None -> false
                     ) (* returnsBounds *)
+                    && (not (varIsOurs fvi))
                     && (let _ = debug_print 1 ("It has attributes: " ^ (List.fold_left (fun accum -> (function Attr(astr, aargs) -> (if accum = "" then "" else (accum ^ ", ")) ^ astr)) "" fvi.vattr) ^ "\n") in
                     filterAttributes "const" fvi.vattr <> [] (* HACK: why does "const" become "aconst"? very CILly *)||
                     filterAttributes "aconst" fvi.vattr <> [] (* HACK: why does "const" become "aconst"? very CILly *)||

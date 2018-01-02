@@ -24,12 +24,9 @@ unsigned long int __libcrunch_ptr_derivations = 0;
 unsigned long int __libcrunch_ptr_derefs = 0;
 unsigned long int __libcrunch_ptr_stores = 0;
 
-void **__libcrunch_bounds_bases_region_00;
-void **__libcrunch_bounds_bases_region_2a;
-void **__libcrunch_bounds_bases_region_7a;
-unsigned long *__libcrunch_bounds_sizes_region_00;
-unsigned long *__libcrunch_bounds_sizes_region_2a;
-unsigned long *__libcrunch_bounds_sizes_region_7a;
+unsigned *__libcrunch_bounds_region_00;
+unsigned *__libcrunch_bounds_region_2a;
+unsigned *__libcrunch_bounds_region_7f;
 
 static void print_exit_summary(void)
 {

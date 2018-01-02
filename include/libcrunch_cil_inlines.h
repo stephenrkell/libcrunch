@@ -16,9 +16,15 @@
 //#endif
 #endif
 
-/* Ideally we really want to fit in 64 bits on x86-64. 
+/* Ideally we really want to fit local bounds into 64 bits on x86-64.
  * This makes life a bit trickier, however. 
- * For now, we support both representations, using conditional compilation. */
+ * For now, we support both representations, using conditional compilation.
+ * Initial experiments show that spending 128 bits is faster, perhaps surprisingly.
+ * It might be that the compiler is not smart enough to exploit rotations,
+ * 32-bit register aliases, and other tricks that would make this optimal.
+ * FIXME: experiment with some assembly. Using a union, where most bounds
+ * accesses can be expressed as operations on a 64-bit integer, rather than
+ * a wrapped structure, may help. */
 struct __libcrunch_bounds_s
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
@@ -55,29 +61,43 @@ union __libcrunch_ptr_with_bounds_u
 	struct __libcrunch_ptr_with_bounds_s s;
 	__int128 raw;
 };
-//typedef struct __libcrunch_ptr_with_bounds_s __libcrunch_ptr_with_bounds_t;
+union __libcrunch_uintptr_u
+{
+	unsigned long full;
+	struct
+	{
+		unsigned lower;
+		unsigned upper;
+	} halves;
+};
+extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
+	__base_stored_loc)(void **stored_pointer_addr)
+{
+	// old version
+	// return ((void**)(((unsigned long) (stored_ptr_addr)) ^ 0x700000000000ul))
+	union {
+		unsigned long addr;
+		unsigned char lowbyte;
+	} a = { addr: (unsigned long) stored_pointer_addr };
+	__asm__ ("rol $0x19, %0\n"  : "+q"(a) );
+	__asm__ ("addb $0xa0, %1\n" : "=q"(a) : "q"(a.lowbyte));
+	__asm__ ("ror $0x19, %0\n"  : "+q"(a) );
+	return (unsigned *) a.addr;
+}
+extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
+	__size_stored_loc)(void **stored_pointer_addr)
+{
+	// old version
+	// return ((unsigned *)((((unsigned long) (stored_ptr_addr)) >> 1) + 0x080000000000ul))
+	return __base_stored_loc(stored_pointer_addr) + 1;
+}
 
-/// / HACKs to get us going
-// #define LIBCRUNCH_BOUNDS_REGION_BASE ((void*) 0x300000000000ul)
-// #define LIBCRUNCH_BOUNDS_REGION_SIZE          0x400000000000ul
-// /* The bounds region is n/(n+1) of the address space size, 
-//  * where n is the ratio of bounds size to pointer size.
-//  * We round it down to 40 bits (FIXME: safe? not really) */
-// // #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-// // #define BOUNDS_RATIO 1
-// // #else
-// // #define BOUNDS_RATIO 2
-// // #endif
-// // #define LIBCRUNCH_BOUNDS_REGION_SIZE ( \
-// //     ((((((1ul<<47) * BOUNDS_RATIO) / (BOUNDS_RATIO + 1)) >> 40) /*+ 1*/) << 40) \
-// // )
+#define BASE_LOWBITS_STORED(ptr) (__base_stored_loc((ptr)))
+#define SIZE_STORED(ptr) (__size_stored_loc((ptr)))
 
-extern void **__libcrunch_bounds_bases_region_00;
-extern void **__libcrunch_bounds_bases_region_2a;
-extern void **__libcrunch_bounds_bases_region_7a;
-extern unsigned long *__libcrunch_bounds_sizes_region_00;
-extern unsigned long *__libcrunch_bounds_sizes_region_2a;
-extern unsigned long *__libcrunch_bounds_sizes_region_7a;
+extern unsigned *__libcrunch_bounds_region_00;
+extern unsigned *__libcrunch_bounds_region_2a;
+extern unsigned *__libcrunch_bounds_region_7f;
 
 #ifndef unlikely
 #define __libcrunch_defined_unlikely
@@ -99,6 +119,7 @@ int __libcrunch_global_init (void);
 #define PURE
 #endif
 
+/* FIXME: use rotation here. */
 #define _CLEAR_UPPER_32(i) \
 (((unsigned long) (i)) & ((1ul<<32)-1ul))
 #define _CLEAR_LOWER_32(i) \
@@ -1433,9 +1454,6 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3)
 
 #endif
 
-#define BASE_STORED(ptr) ((void**)(((unsigned long) (ptr)) ^ 0x700000000000ul))
-#define SIZE_STORED(ptr) ((unsigned *)((((unsigned long) (ptr)) >> 1) + 0x080000000000ul))
-
 extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t);
 extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t)
 {
@@ -1461,10 +1479,9 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 	 * Okay, let's try it.
 	 */
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	unsigned long b = val_bounds.base;/* promote to full width */
-	*(BASE_STORED(stored_pointer_addr)) = (void*)    b;/* (necessary hack to avoid compiler warnings) */
+	*(BASE_LOWBITS_STORED(stored_pointer_addr)) = val_bounds.base;
 #else
-	*(BASE_STORED(stored_pointer_addr)) = (void*)    val_bounds.base;
+	*(BASE_LOWBITS_STORED(stored_pointer_addr)) = (unsigned) val_bounds.base;
 #endif
 	*(SIZE_STORED(stored_pointer_addr)) = (unsigned) val_bounds.size;
 }
@@ -1481,8 +1498,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 #endif
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	unsigned long dest_addr __attribute__((unused)) = (unsigned long) dest;
-	unsigned long base_stored_addr __attribute__((unused)) = (unsigned long) BASE_STORED(dest);
-	unsigned long size_stored_addr = (unsigned long) SIZE_STORED(dest);
+	unsigned long size_stored_addr = (unsigned long) SIZE_STORED((void**)dest);
 	
 	/* Being as lazy as we can here, but no lazier:
 	 * - we do the expensive ool fetch to avoid leaving stale bounds in the shadow space.
@@ -1567,11 +1583,21 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	if (loaded_from)
 	{
 		unsigned long loaded_from_addr __attribute__((unused)) = (unsigned long) loaded_from;
-		unsigned long base_stored_addr = (unsigned long) BASE_STORED(loaded_from);
 		unsigned long size_stored_addr = (unsigned long) SIZE_STORED(loaded_from);
 
+		union __libcrunch_uintptr_u word = { full: (unsigned long) ptr };
+		word.halves.lower = *(BASE_LOWBITS_STORED(loaded_from));
+		unsigned long base = word.full;
+#ifndef LIBCRUNCH_NO_DENORM_BOUNDS
+		/* The denorm case is when we get a base that is *higher* than our pointer.
+		 * In that case, it should really be 4GB down. */
+		if (unlikely(base < (unsigned long) ptr))
+		{
+			base -= 0x100000000ul;
+		}
+#endif
 		__libcrunch_bounds_t b = (__libcrunch_bounds_t) {
-			.base = (unsigned long) *((void **)         base_stored_addr),
+			.base = base,
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 			.size = *((unsigned *) size_stored_addr)
 #else
@@ -1579,7 +1605,9 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 			 * loading "0x ffff ffff" maps to "max bounds", 
 			 * we need a 32-to-64 transformation that generates
 			 * "0x ffff ffff ffff ffff" from "0x ffff ffff"
-			 * but leaves everything else unchanged. Below is the answer.
+			 * but leaves everything else unchanged.
+			 * Plain old sign extension will munge anything >=0x80000000.
+			 * Below is the answer.
 			 */
 #ifdef LIBCRUNCH_LONG_SIZE
 			.size = (
