@@ -70,26 +70,104 @@ union __libcrunch_uintptr_u
 		unsigned upper;
 	} halves;
 };
+
+/* for debugging our fancy asm */
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) simulate_rotate_left)(unsigned long arg, unsigned count)
+{
+	unsigned long ret = (arg << count) | (arg >> (8 * (sizeof arg) - count));
+	//warnx("Rotated left is %lx", ret);
+	return ret;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) simulate_rotate_right)(unsigned long arg, unsigned count)
+{
+	unsigned long ret = (arg >> count) | (arg << (8 * (sizeof arg) - count));
+	//warnx("Rotated right is %lx", ret);
+	return ret;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) simulate_add_lowbyte)(unsigned long arg, unsigned inc)
+{
+	unsigned char val = (unsigned char)arg;
+	unsigned long ret = (arg & ~0xfful) | (unsigned long)(unsigned char)(val + (unsigned char) inc);
+	//warnx("After addition is %lx", ret);
+	return ret;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_asm)(unsigned long arg, unsigned inc)
+{
+	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
+	__asm__ volatile ("addb $0xa0, %1 # %0 \n" : "+q"(u.addr) : "q"(u.byte));
+	return u.addr;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_noasm)(unsigned long arg, unsigned inc)
+{
+	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
+	u.byte += (unsigned char) 0xa0;
+	return u.addr;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_memcpy)(unsigned long arg, unsigned inc)
+{
+	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
+	unsigned char bytes[8];
+	__builtin_memcpy(bytes, &arg, sizeof bytes);
+	bytes[0] += inc;
+	__builtin_memcpy(&arg, bytes, sizeof bytes);
+	return arg;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) xor_lowbyte_memcpy)(unsigned long arg, unsigned inc)
+{
+	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
+	unsigned char bytes[8];
+	__builtin_memcpy(bytes, &arg, sizeof bytes);
+	bytes[0] ^= (unsigned char) 0xe0;
+	__builtin_memcpy(&arg, bytes, sizeof bytes);
+	return arg;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_asm_vegard)(unsigned long arg, unsigned inc)
+{
+	__asm__ ("addb $0xa0, %b0" : "+r" (arg) );
+	return arg;
+}
 extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
 	__base_stored_loc)(void **stored_pointer_addr)
 {
 	// old version
 	// return ((void**)(((unsigned long) (stored_ptr_addr)) ^ 0x700000000000ul))
-	union {
-		unsigned long addr;
-		unsigned char lowbyte;
-	} a = { addr: (unsigned long) stored_pointer_addr };
-	__asm__ ("rol $0x19, %0\n"  : "+q"(a) );
-	__asm__ ("addb $0xa0, %1\n" : "=q"(a) : "q"(a.lowbyte));
-	__asm__ ("ror $0x19, %0\n"  : "+q"(a) );
-	return (unsigned *) a.addr;
+	// less old, still old version
+	//union {
+	//	unsigned long addr;
+	//	unsigned char lowbyte;
+	//} a = { addr: (unsigned long) stored_pointer_addr };
+	//__asm__ ("rol $0x19, %0\n"  : "+q"(a) );
+	//__asm__ ("addb $0xa0, %1\n" : "=q"(a) : "q"(a.lowbyte));
+	//__asm__ ("ror $0x19, %0\n"  : "+q"(a) );
+	//unsigned *ret = (unsigned*) a.addr;
+	unsigned *asm_ret = (unsigned*) simulate_rotate_right(
+			/*add_lowbyte_asm*/add_lowbyte_asm_vegard(
+				simulate_rotate_left((unsigned long) stored_pointer_addr, 0x19),
+				0xa0u
+			),
+			0x19
+		);
+	//unsigned *simulated_ret = (unsigned*) simulate_rotate_right(
+	//		simulate_add_lowbyte(
+	//			simulate_rotate_left((unsigned long) stored_pointer_addr, 0x19),
+	//			0xa0u
+	//		),
+	//		0x19
+	//	);
+	//if (!(asm_ret == simulated_ret))
+	//{
+	//	warnx("base addr calculation for %p disagreed with simulation: said %p, sim %p",
+	//		stored_pointer_addr, asm_ret, simulated_ret);
+	//	abort();
+	//}
+	return (unsigned *) asm_ret + 1;
 }
 extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
 	__size_stored_loc)(void **stored_pointer_addr)
 {
 	// old version
 	// return ((unsigned *)((((unsigned long) (stored_ptr_addr)) >> 1) + 0x080000000000ul))
-	return __base_stored_loc(stored_pointer_addr) + 1;
+	return __base_stored_loc(stored_pointer_addr) - 1;
 }
 
 #define BASE_LOWBITS_STORED(ptr) (__base_stored_loc((ptr)))
