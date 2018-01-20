@@ -1,0 +1,100 @@
+#!/bin/bash
+# FIXME: rewrite this in C
+
+# Using gcc's -wrapper option, the compiler driver will invoke
+# us instead of cpp, cc1, etc., with the full command path as
+# $1. We want to substitute cilpp in the right places.
+# NOTE: this whole thing is necessary only because the driver
+# does not want to run `cpp' ever... it uses cc1 -E.
+
+ulimit -s unlimited
+
+is_pp () {
+    saw_pp=0
+    outpos=0
+    while shift; do
+        ctr="$(( $ctr + 1 ))"
+        if [[ -z "$1" ]]; then continue; fi
+        case "$1" in
+         (-o) outfile="$2"; outpos="$(( $ctr + 1 ))";;
+         (-E) saw_pp=1 ;;
+        esac
+    done
+    # if we're only preprocessing, or if we have no explicit output file, just run cc1
+    if [ "$saw_pp" -eq 0 ] || [ $outpos -eq 0 ]; then false; else true; fi
+}
+
+run_with_replacement_outfile () {
+    replacement="$1"
+    declare -a args
+    ctr=0
+    while shift; do
+        ctr="$(( $ctr + 1 ))"
+        if [[ -z "$1" ]]; then continue; fi
+        case "$1" in
+         (-o) args[$ctr]="$1"; args[$(( $ctr + 1 ))]="$replacement"; shift; ctr="$(( $ctr + 1 ))" ;;
+         (*)  args[$ctr]="$1" ;;
+        esac
+    done
+    echo "Running + replacement outfile: ${args[@]}" 1>&2
+    "${args[@]}"
+}
+
+run_with_replacement_infile () {
+    # We are running cpp
+    # PROBLEM: how do we identify the input filename?
+    # Doing this generally means understanding cpp's entire command-line syntax.
+    # We instead use a HACK:
+    # for gcc we only need understand the options -E -quiet -imultiarch x86_64-linux-gnu
+    # ... which (1) come first, and (2) cpp *doesn't* understand.
+    replacement="$1"
+    shift
+    declare -a args
+    args[0]="$1"
+    ctr=1
+    orig_infile=""
+    while shift; do
+        ctr="$(( $ctr + 1 ))"
+        if [[ -z "$1" ]]; then continue; fi
+        case "$1" in
+            (-E|-quiet) ;; # skip it!
+            (-imultiarch) shift ;; # skip it and its arg!
+            (*) if [[ -z "$orig_infile" ]]; then
+                    orig_infile="$1";
+                    args[$ctr]="$replacement"
+                else
+                    args[$ctr]="$1"
+                fi
+                ;;
+        esac
+    done
+    echo "Running + replacement infile: ${args[@]}" 1>&2
+    "${args[@]}"
+}
+
+echo "\$1 is $1" 1>&2
+
+case "$1" in
+    (*/cc1)
+        ctr=0
+        exe="$1"
+        # if we're only preprocessing, or if we have no explicit output file, just run cc1
+        if is_pp "$@"; then
+            echo "outpos is $outpos" 1>&2
+            echo "outfile is $outfile" 1>&2
+            # do the cpp, then run CIL
+            echo "We think we do have to substitute preprocessing." 1>&2
+            tmpfile="$(mktemp)" || exit 1
+            echo "Substituted $tmpfile in place of $outfile" 1>&2
+            run_with_replacement_outfile "$tmpfile" "$@" && \
+            shift && run_with_replacement_infile "$tmpfile" "$(dirname "$0")"/cilpp "$@"
+        else
+            echo "We think we don't have to substitute preprocessing." 1>&2
+            echo "Running non-substituted: $@" 1>&2
+            exec "$@"
+        fi
+        ;;
+    (*) echo "Non-wrapping: $@" 1>&2
+        exec "$@"
+        ;;
+esac
