@@ -1200,20 +1200,19 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 	 *
 	 * -- do this!
 	 */
-	if (likely(addr - like_trapped_base <= size))
+	if (likely(addr - like_trapped_base < size))
 	{
-		if (unlikely(addr - base == size))
-		{
-			// FIXME: needs to be "re-trap", i.e. no-op if derived was already trapped
-			*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST); // TODO: try with conditional trap
-		}
-		else
-		{
-			// no-op if derived was already untrapped
-			*p_derived = __libcrunch_detrap(*p_derived); // TODO: try with conditional untrap
-		}
+		// no-op if derived was already untrapped
+		*p_derived = __libcrunch_detrap(*p_derived); // TODO: try with conditional untrap
 		success = 1;
-	} else success = 0;
+	}
+	else if (addr - like_trapped_base == size)
+	{
+		// FIXME: needs to be "re-trap", i.e. no-op if derived was already trapped
+		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST); // TODO: try with conditional trap
+		success = 1;
+	}
+	else success = 0;
 	/* Possible trick for splitting cases here without bloating the code.
 	 * 1. Put the possibly-bad pointer in a register and do a one-byte read from it.
 	 * 2. If the register has changed, it means we took a trap, decided it was
@@ -1237,11 +1236,11 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 #endif
 #if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH)
-	if (!success) warnx("Primary check failed: addr %p, base %p, size %lu", 
+	if (unlikely(!success)) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
 #endif
 #ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
-	if (!success)
+	if (unlikely(!success))
 	{
 		__libcrunch_bounds_error(*p_derived, derivedfrom, derivedfrom_bounds);
 #ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
@@ -1252,7 +1251,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 	}
 #endif
-	return success;
+	return likely(success);
 	//if (!(addr - base < size)) abort(); else return 1;
 #endif
 #else
