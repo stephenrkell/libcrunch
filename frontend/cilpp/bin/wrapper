@@ -7,8 +7,6 @@
 # NOTE: this whole thing is necessary only because the driver
 # does not want to run `cpp' ever... it uses cc1 -E.
 
-ulimit -s unlimited
-
 is_pp () {
     saw_pp=0
     outpos=0
