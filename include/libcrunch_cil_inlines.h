@@ -15,6 +15,20 @@
 //#define assert(cond)
 //#endif
 #endif
+/* Inside pure check/fetch logic, we don't want calls to warnx to prevent
+ * the whole check/fetch from being dropped if we don't use the result.
+ * So pretend that we have a pure warnx. We only use this in cases where
+ * performance matters -- if we're #ifdef'd inside some debugging diagnostics,
+ * just use warnx. */
+void warnx(const char *fmt, ...);
+void vwarnx(const char *fmt, __builtin_va_list ap);
+static void ( __attribute__((pure,noinline)) warnx_pure )(const char *fmt, ...)
+{
+	__builtin_va_list ap;
+	__builtin_va_start(ap, fmt);
+	vwarnx(fmt, ap);
+	__builtin_va_end(ap);
+}
 
 /* Ideally we really want to fit in 64 bits on x86-64. 
  * This makes life a bit trickier, however. 
@@ -56,21 +70,6 @@ union __libcrunch_ptr_with_bounds_u
 	__int128 raw;
 };
 //typedef struct __libcrunch_ptr_with_bounds_s __libcrunch_ptr_with_bounds_t;
-
-/// / HACKs to get us going
-// #define LIBCRUNCH_BOUNDS_REGION_BASE ((void*) 0x300000000000ul)
-// #define LIBCRUNCH_BOUNDS_REGION_SIZE          0x400000000000ul
-// /* The bounds region is n/(n+1) of the address space size, 
-//  * where n is the ratio of bounds size to pointer size.
-//  * We round it down to 40 bits (FIXME: safe? not really) */
-// // #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-// // #define BOUNDS_RATIO 1
-// // #else
-// // #define BOUNDS_RATIO 2
-// // #endif
-// // #define LIBCRUNCH_BOUNDS_REGION_SIZE ( \
-// //     ((((((1ul<<47) * BOUNDS_RATIO) / (BOUNDS_RATIO + 1)) >> 40) /*+ 1*/) << 40) \
-// // )
 
 extern void **__libcrunch_bounds_bases_region_00;
 extern void **__libcrunch_bounds_bases_region_2a;
@@ -341,14 +340,13 @@ extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch
 	                   pop %0" : "=r"(addr)); /* FIXME: CIL frontc parse bug: */ // : /* no inputs */ : /* no clobbers */);
 	return addr;
 }
-void warnx(const char *fmt, ...);
 
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val __attribute__((unused)), unsigned long from_size __attribute__((unused)));
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_trace_widen_int_to_pointer )(unsigned long long val __attribute__((unused)), unsigned long from_size __attribute__((unused)))
 {
 #ifdef LIBCRUNCH_TRACE_WIDEN_INT_TO_POINTER
 	/* To get a return address, use a noinline nested function. */
-	if (from_size < sizeof (void*)) warnx("Unsafe integer-to-pointer cast of value %llx %at %p", val, __libcrunch_get_pc());
+	if (from_size < sizeof (void*)) warnx_pure("Unsafe integer-to-pointer cast of value %llx %at %p", val, __libcrunch_get_pc());
 #endif
 }
 
@@ -1222,7 +1220,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 	 * Problem: not all memory is readable.
 	 *
 	 * Anyway, some trick of this form might shorten our 
-	 * warnx() and __libcrunch_bounds_error paths below, since
+	 * warnx_pure() and __libcrunch_bounds_error paths below, since
 	 * the diagnostic messages can be handled in the fault handler. */
 #else
 #if defined(LIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK)
@@ -1236,7 +1234,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 #endif
 #if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH)
-	if (unlikely(!success)) warnx("Primary check failed: addr %p, base %p, size %lu", 
+	if (unlikely(!success)) warnx_pure("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
 #endif
 #ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
@@ -1335,21 +1333,21 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	 *                                  or if we fetched bounds (above). */
 	// do the primary check again
 	// -- write now-untrapped addr back, if derivedfrom was trapped
-	// warnx("Got to 1, deriving %p", *p_derived);
+	// warnx_pure("Got to 1, deriving %p", *p_derived);
 	if (addr - base < size)
 	{
-		// warnx("Got to 2, deriving %p", *p_derived);
+		// warnx_pure("Got to 2, deriving %p", *p_derived);
 		if (derivedfrom_trapped)
 		{
 #ifndef LIBCRUNCH_NO_WARN_BACK_IN
-			warnx("Went back in bounds at %p: %p (base %p, size %lu)", 
+			warnx_pure("Went back in bounds at %p: %p (base %p, size %lu)", 
 				__libcrunch_get_pc(), (void*) addr, (void*) base, (unsigned long) size);
 #endif
 			*p_derived = (const void*) addr;
 		}
 		else
 		{
-			// warnx("Got to 3, deriving %p", *p_derived);
+			// warnx_pure("Got to 3, deriving %p", *p_derived);
 			/* Q. When is this true?
 			 * A. 
 			 * NOT when deriving a one-past trapped pointer from an untrapped one
@@ -1361,11 +1359,11 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		return 1;
 	}
 	
-	// warnx("Got to 4, deriving %p", *p_derived);
+	// warnx_pure("Got to 4, deriving %p", *p_derived);
 	if (unlikely(addr - base == size))
 	{
 #ifndef LIBCRUNCH_NO_WARN_ONE_PAST
-		warnx("Created one-past pointer at %p: %p (base %p, size %lu)", 
+		warnx_pure("Created one-past pointer at %p: %p (base %p, size %lu)", 
 			__libcrunch_get_pc(), (void*) addr, (void*) base, (unsigned long) size);
 #endif
 		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
@@ -1375,7 +1373,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	/* Note that we NEVER create trapped pointers from fake bounds. 
 	 * The reason is that in fake cases, the local bounds are always max_bounds. */
 
-	// warnx("Got to 5, deriving %p", *p_derived);
+	// warnx_pure("Got to 5, deriving %p", *p_derived);
 	/* Handle the error. */
 	__libcrunch_bounds_error(*p_derived, derivedfrom, *p_derivedfrom_bounds);
 #ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
@@ -1516,7 +1514,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 #else
 		/* Do nothing -- can't do any better in SoftBound mode (if we could get bounds
 		 * via dladdr, we would have fetched them just now... I think. FIXME) */
-		warnx("Storing pointer with no bounds (storing to %p, value %p)", dest, val);
+		warnx_pure("Storing pointer with no bounds (storing to %p, value %p)", dest, val);
 #endif
 	}
 
@@ -1558,8 +1556,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 /* This is now and out-of-line path. */
 extern void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type);
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1),pure)) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1),pure)) __fetch_bounds_from_shadow_space)(const void *ptr, void **loaded_from)
 {
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
 	if (!ptr) return __make_bounds(0, 1);
@@ -1596,7 +1594,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 #ifndef LIBCRUNCH_NO_DEBUG_SHADOW_SPACE
 		if (unlikely(__libcrunch_bounds_invalid(b, ptr)))
 		{
-			warnx("Fetched invalid bounds for %p (loaded from %p)", ptr, loaded_from);
+			warnx_pure("Fetched invalid bounds for %p (loaded from %p)", ptr, loaded_from);
 		}
 #endif
 		return b;
@@ -1605,8 +1603,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	return __libcrunch_make_invalid_bounds(ptr);
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1),pure)) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1),pure)) __fetch_bounds_inl)(const void *ptr, void **loaded_from, struct uniqtype *t)
 {
 	/* We could choose to inline or not:
 	 * - shadow-space lookup
@@ -1620,8 +1618,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	return __fetch_bounds_from_shadow_space(ptr, loaded_from);
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1),pure)) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,nonnull(1),pure)) __fetch_bounds_full)(const void *ptr, const void *derived, void **loaded_from, struct uniqtype *t)
 {
 	if (!ptr) return __libcrunch_make_invalid_bounds(derived);
 	if (!t) return __libcrunch_make_invalid_bounds(derived);
