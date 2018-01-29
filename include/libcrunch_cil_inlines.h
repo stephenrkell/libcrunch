@@ -19,7 +19,11 @@
  * the whole check/fetch from being dropped if we don't use the result.
  * So pretend that we have a pure warnx. We only use this in cases where
  * performance matters -- if we're #ifdef'd inside some debugging diagnostics,
- * just use warnx. */
+ * just use warnx. FIXME: hmm, since warnx returns void, a sane compiler
+ * would simply drop every call to our pure warnx. Even if we make it return
+ * something uninteresting, we'll ignore the return value at the call site,
+ * so a sane compiler should still drop the call. We should probably write
+ * the dummy return value to a global or something. */
 void warnx(const char *fmt, ...);
 void vwarnx(const char *fmt, __builtin_va_list ap);
 static void ( __attribute__((pure,noinline)) warnx_pure )(const char *fmt, ...)
@@ -86,59 +90,42 @@ union __libcrunch_uintptr_u
 };
 
 /* for debugging our fancy asm */
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) simulate_rotate_left)(unsigned long arg, unsigned count)
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,__const__)) __rotate_left_19)(unsigned long arg)
 {
-	unsigned long ret = (arg << count) | (arg >> (8 * (sizeof arg) - count));
+	//unsigned long ret = (arg << count) | (arg >> (8 * (sizeof arg) - count));
 	//warnx("Rotated left is %lx", ret);
-	return ret;
+	__asm__ ("rol $0x19, %0\n"  : "+q"(arg) );
+	return arg;
 }
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) simulate_rotate_right)(unsigned long arg, unsigned count)
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,__const__)) __rotate_right_19)(unsigned long arg)
 {
-	unsigned long ret = (arg >> count) | (arg << (8 * (sizeof arg) - count));
+	//unsigned long ret = (arg >> count) | (arg << (8 * (sizeof arg) - count));
 	//warnx("Rotated right is %lx", ret);
-	return ret;
-}
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) simulate_add_lowbyte)(unsigned long arg, unsigned inc)
-{
-	unsigned char val = (unsigned char)arg;
-	unsigned long ret = (arg & ~0xfful) | (unsigned long)(unsigned char)(val + (unsigned char) inc);
-	//warnx("After addition is %lx", ret);
-	return ret;
-}
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_asm)(unsigned long arg, unsigned inc)
-{
-	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
-	__asm__ ("addb $0xa0, %1 # %0 \n" : "+q"(u.addr) : "q"(u.byte));
-	return u.addr;
-}
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_noasm)(unsigned long arg, unsigned inc)
-{
-	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
-	u.byte += (unsigned char) 0xa0;
-	return u.addr;
-}
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_memcpy)(unsigned long arg, unsigned inc)
-{
-	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
-	unsigned char bytes[8];
-	__builtin_memcpy(bytes, &arg, sizeof bytes);
-	bytes[0] += inc;
-	__builtin_memcpy(&arg, bytes, sizeof bytes);
+	__asm__ ("ror $0x19, %0\n"  : "+q"(arg) );
 	return arg;
 }
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) xor_lowbyte_memcpy)(unsigned long arg, unsigned inc)
+extern inline unsigned long (__attribute__((always_inline,gnu_inline,__const__)) __add_lowbyte_a0)(unsigned long arg)
 {
-	union { unsigned char byte; unsigned long addr; } u = { addr: arg };
-	unsigned char bytes[8];
-	__builtin_memcpy(bytes, &arg, sizeof bytes);
-	bytes[0] ^= (unsigned char) 0xe0;
-	__builtin_memcpy(&arg, bytes, sizeof bytes);
+	__asm__ ("addb $0xa0, %b0" : "+r"(arg) );
 	return arg;
 }
-extern inline unsigned long (__attribute__((always_inline,gnu_inline)) add_lowbyte_asm_vegard)(unsigned long arg, unsigned inc)
+
+extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
+	__size_stored_loc)(void **stored_pointer_addr)
 {
-	__asm__ ("addb $0xa0, %b0" : "+r" (arg) );
-	return arg;
+	// old version
+	// return ((unsigned *)((((unsigned long) (stored_ptr_addr)) >> 1) + 0x080000000000ul))
+	return (unsigned*) __rotate_right_19(__add_lowbyte_a0(__rotate_left_19(
+			(unsigned long) stored_pointer_addr
+	)));
+}
+/* This is NOT ifdef'd LIBCRUNCH_WORDSIZE_BOUNDS because we now *always*
+ * store bounds in a one-word (64-bit) format in the shadow space, regardless
+ * of how we represent them locally. */
+extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
+	__bounds_stored_loc)(void **stored_pointer_addr)
+{
+	return __size_stored_loc(stored_pointer_addr);
 }
 extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
 	__base_stored_loc)(void **stored_pointer_addr)
@@ -154,13 +141,7 @@ extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,
 	//__asm__ ("addb $0xa0, %1\n" : "=q"(a) : "q"(a.lowbyte));
 	//__asm__ ("ror $0x19, %0\n"  : "+q"(a) );
 	//unsigned *ret = (unsigned*) a.addr;
-	unsigned *asm_ret = (unsigned*) simulate_rotate_right(
-			/*add_lowbyte_asm*/add_lowbyte_asm_vegard(
-				simulate_rotate_left((unsigned long) stored_pointer_addr, 0x19),
-				0xa0u
-			),
-			0x19
-		);
+	return __size_stored_loc(stored_pointer_addr) + 1;
 	//unsigned *simulated_ret = (unsigned*) simulate_rotate_right(
 	//		simulate_add_lowbyte(
 	//			simulate_rotate_left((unsigned long) stored_pointer_addr, 0x19),
@@ -174,16 +155,22 @@ extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,
 	//		stored_pointer_addr, asm_ret, simulated_ret);
 	//	abort();
 	//}
-	return (unsigned *) asm_ret + 1;
+	// return (unsigned *) asm_ret + 1;
 }
-extern inline unsigned *(__attribute__((always_inline,gnu_inline,used,__const__,nonnull(1)))
-	__size_stored_loc)(void **stored_pointer_addr)
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __clear_upper_32)(unsigned long arg)
 {
-	// old version
-	// return ((unsigned *)((((unsigned long) (stored_ptr_addr)) >> 1) + 0x080000000000ul))
-	return __base_stored_loc(stored_pointer_addr) - 1;
+	// return arg;
+	//return (((unsigned long) (arg)) & ((1ul<<32)-1ul));
+	/* x86-64 quirk: writing to the low 32 bits zero-extends, clearing the high */
+	__asm__ ("movq %k0, %k0" : "+r"(arg) );
+	return arg;
 }
-
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __clear_lower_32)(unsigned long arg)
+{
+	// return arg;
+	// return (((unsigned long) (arg)) & ~((1ul<<32)-1ul));
+	return (arg >> 32) << 32; // FIXME: can do in one instruction?
+}
 #define BASE_LOWBITS_STORED(ptr) (__base_stored_loc((ptr)))
 #define SIZE_STORED(ptr) (__size_stored_loc((ptr)))
 
@@ -210,12 +197,6 @@ int __libcrunch_global_init (void);
 #elif !defined(PURE)
 #define PURE
 #endif
-
-/* FIXME: use rotation here. */
-#define _CLEAR_UPPER_32(i) \
-(((unsigned long) (i)) & ((1ul<<32)-1ul))
-#define _CLEAR_LOWER_32(i) \
-(((unsigned long) (i)) & ~((1ul<<32)-1ul))
 
 #ifndef LIBCRUNCH_USING_TRAP_PTRS
 void __libcrunch_soft_deref_error_at(const void *ptr, struct __libcrunch_bounds_s ptr_bounds, 
@@ -1083,7 +1064,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return (__libcrunch_bounds_t) {
-			((unsigned long) _CLEAR_UPPER_32(base)),
+			__clear_upper_32(base),
 			limit - base
 	};
 #else
@@ -1103,8 +1084,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	 * a 4GB -1 size.
 	 * Note that in extreme cases, this will actually not permit
 	 * some accesses which the intention of "max bounds" is to include. */
-	return __make_bounds(_CLEAR_LOWER_32((unsigned long) ptr),
-			_CLEAR_LOWER_32((unsigned long) ptr) + ((unsigned) -1));
+	return __make_bounds(__clear_lower_32((unsigned long) ptr),
+			__clear_lower_32((unsigned long) ptr) + ((unsigned) -1));
 #else
 	return __make_bounds((unsigned long) 0, (unsigned long) -1);
 #endif
@@ -1126,13 +1107,13 @@ extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch
 	 * check fails and we do the detrap stuff from __secondary_check.
 	 */
 #ifndef LIBCRUNCH_NO_DENORM_BOUNDS
-	if (likely(bounds.base <= _CLEAR_UPPER_32(derivedfrom)))
+	if (likely(bounds.base <= __clear_upper_32(derivedfrom)))
 	{
 #endif
 		const void *ptr = (const void *) __libcrunch_detrap(derivedfrom);
-		return (void*) (_CLEAR_LOWER_32(ptr) + bounds.base);
+		return (void*) (__clear_lower_32(ptr) + bounds.base);
 #ifndef LIBCRUNCH_NO_DENORM_BOUNDS
-	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) - 0x100000000ul + bounds.base);
+	} else return (void*) (__clear_lower_32(derivedfrom) - 0x100000000ul + bounds.base);
 #endif
 #else
 	return (void*) bounds.base;
@@ -1163,7 +1144,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	 * itself as the base, and 0 as the size. This *always* fails the Austin
 	 * check, because addr - base == 0, i.e. NOT (addr - base < size). */
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	return (__libcrunch_bounds_t) { .base =  _CLEAR_UPPER_32(ptr), .size = 0 };
+	return (__libcrunch_bounds_t) { .base =  __clear_upper_32((unsigned long) ptr), .size = 0 };
 #else
 	/* remember! must fail the Austin test, which is 
 	 *      addr - base < size
@@ -1284,7 +1265,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* If we have denorms, we will use the denorm base directly and fail over to secondary
 	 * checks. HMM. Actually, is that really faster? FIXME: TEST. */
-	unsigned long like_trapped_base = _CLEAR_LOWER_32((unsigned long) derivedfrom) | derivedfrom_bounds.base;
+	unsigned long like_trapped_base = __clear_lower_32((unsigned long) derivedfrom) | derivedfrom_bounds.base;
 	unsigned long base = (unsigned long) __libcrunch_detrap(like_trapped_base);
 #else
 	/* Here 'base' is never trapped. */
@@ -1348,7 +1329,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 #endif
 #if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH)
-	if (unlikely(!success)) warnx_pure("Primary check failed: addr %p, base %p, size %lu", 
+	if (unlikely(!success)) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
 #endif
 #ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
@@ -1447,10 +1428,10 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	 *                                  or if we fetched bounds (above). */
 	// do the primary check again
 	// -- write now-untrapped addr back, if derivedfrom was trapped
-	// warnx_pure("Got to 1, deriving %p", *p_derived);
+	// warnx("Got to 1, deriving %p", *p_derived);
 	if (addr - base < size)
 	{
-		// warnx_pure("Got to 2, deriving %p", *p_derived);
+		// warnx("Got to 2, deriving %p", *p_derived);
 		if (derivedfrom_trapped)
 		{
 #ifndef LIBCRUNCH_NO_WARN_BACK_IN
@@ -1461,7 +1442,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		}
 		else
 		{
-			// warnx_pure("Got to 3, deriving %p", *p_derived);
+			// warnx("Got to 3, deriving %p", *p_derived);
 			/* Q. When is this true?
 			 * A. 
 			 * NOT when deriving a one-past trapped pointer from an untrapped one
@@ -1473,7 +1454,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		return 1;
 	}
 	
-	// warnx_pure("Got to 4, deriving %p", *p_derived);
+	// warnx("Got to 4, deriving %p", *p_derived);
 	if (unlikely(addr - base == size))
 	{
 #ifndef LIBCRUNCH_NO_WARN_ONE_PAST
@@ -1487,7 +1468,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	/* Note that we NEVER create trapped pointers from fake bounds. 
 	 * The reason is that in fake cases, the local bounds are always max_bounds. */
 
-	// warnx_pure("Got to 5, deriving %p", *p_derived);
+	// warnx("Got to 5, deriving %p", *p_derived);
 	/* Handle the error. */
 	__libcrunch_bounds_error(*p_derived, derivedfrom, *p_derivedfrom_bounds);
 #ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
@@ -1569,11 +1550,15 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 	 * Okay, let's try it.
 	 */
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	*(BASE_LOWBITS_STORED(stored_pointer_addr)) = val_bounds.base;
+	/* The shadow bounds are a 64-bit word based at SIZE_STORED(addr). */
+	memcpy(SIZE_STORED(stored_pointer_addr), val_bounds, sizeof val_bounds); // = val_bounds.base;
 #else
-	*(BASE_LOWBITS_STORED(stored_pointer_addr)) = (unsigned) val_bounds.base;
+	//*(BASE_LOWBITS_STORED(stored_pointer_addr)) = (unsigned) val_bounds.base;
+	//*(SIZE_STORED(stored_pointer_addr)) = (unsigned) val_bounds.size;
+	unsigned *bounds_loc = __bounds_stored_loc(stored_pointer_addr);
+	*bounds_loc = (unsigned) val_bounds.size;
+	*(bounds_loc + 1) = (unsigned) val_bounds.base;
 #endif
-	*(SIZE_STORED(stored_pointer_addr)) = (unsigned) val_bounds.size;
 }
 
 extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __store_pointer_nonlocal)
@@ -1950,8 +1935,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __tweak_argu
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)));
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)))
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* Were we passed anything? 
@@ -2085,8 +2070,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_p
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)));
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)))
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* If the cookie hasn't been tweaked, do nothing. */
@@ -2163,8 +2148,5 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_sec
 #endif
 
 #undef __libcrunch_fetch_bounds_ool_to_use
-
-#undef _CLEAR_LOWER_32
-#undef _CLEAR_UPPER_32
 
 #endif
