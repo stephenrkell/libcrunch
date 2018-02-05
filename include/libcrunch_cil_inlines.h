@@ -19,7 +19,11 @@
  * the whole check/fetch from being dropped if we don't use the result.
  * So pretend that we have a pure warnx. We only use this in cases where
  * performance matters -- if we're #ifdef'd inside some debugging diagnostics,
- * just use warnx. */
+ * just use warnx. FIXME: hmm, since warnx returns void, a sane compiler
+ * would simply drop every call to our pure warnx. Even if we make it return
+ * something uninteresting, we'll ignore the return value at the call site,
+ * so a sane compiler should still drop the call. We should probably write
+ * the dummy return value to a global or something. */
 void warnx(const char *fmt, ...);
 void vwarnx(const char *fmt, __builtin_va_list ap);
 static void ( __attribute__((pure,noinline)) warnx_pure )(const char *fmt, ...)
@@ -97,11 +101,6 @@ int __libcrunch_global_init (void);
 #elif !defined(PURE)
 #define PURE
 #endif
-
-#define _CLEAR_UPPER_32(i) \
-(((unsigned long) (i)) & ((1ul<<32)-1ul))
-#define _CLEAR_LOWER_32(i) \
-(((unsigned long) (i)) & ~((1ul<<32)-1ul))
 
 #ifndef LIBCRUNCH_USING_TRAP_PTRS
 void __libcrunch_soft_deref_error_at(const void *ptr, struct __libcrunch_bounds_s ptr_bounds, 
@@ -969,7 +968,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 {
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	return (__libcrunch_bounds_t) {
-			((unsigned long) _CLEAR_UPPER_32(base)),
+			__clear_upper_32(base),
 			limit - base
 	};
 #else
@@ -989,8 +988,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	 * a 4GB -1 size.
 	 * Note that in extreme cases, this will actually not permit
 	 * some accesses which the intention of "max bounds" is to include. */
-	return __make_bounds(_CLEAR_LOWER_32((unsigned long) ptr),
-			_CLEAR_LOWER_32((unsigned long) ptr) + ((unsigned) -1));
+	return __make_bounds(__clear_lower_32((unsigned long) ptr),
+			__clear_lower_32((unsigned long) ptr) + ((unsigned) -1));
 #else
 	return __make_bounds((unsigned long) 0, (unsigned long) -1);
 #endif
@@ -1012,13 +1011,13 @@ extern inline void * (__attribute__((always_inline,gnu_inline,used)) __libcrunch
 	 * check fails and we do the detrap stuff from __secondary_check.
 	 */
 #ifndef LIBCRUNCH_NO_DENORM_BOUNDS
-	if (likely(bounds.base <= _CLEAR_UPPER_32(derivedfrom)))
+	if (likely(bounds.base <= __clear_upper_32(derivedfrom)))
 	{
 #endif
 		const void *ptr = (const void *) __libcrunch_detrap(derivedfrom);
-		return (void*) (_CLEAR_LOWER_32(ptr) + bounds.base);
+		return (void*) (__clear_lower_32(ptr) + bounds.base);
 #ifndef LIBCRUNCH_NO_DENORM_BOUNDS
-	} else return (void*) (_CLEAR_LOWER_32(derivedfrom) - 0x100000000ul + bounds.base);
+	} else return (void*) (__clear_lower_32(derivedfrom) - 0x100000000ul + bounds.base);
 #endif
 #else
 	return (void*) bounds.base;
@@ -1049,7 +1048,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	 * itself as the base, and 0 as the size. This *always* fails the Austin
 	 * check, because addr - base == 0, i.e. NOT (addr - base < size). */
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
-	return (__libcrunch_bounds_t) { .base =  _CLEAR_UPPER_32(ptr), .size = 0 };
+	return (__libcrunch_bounds_t) { .base =  __clear_upper_32((unsigned long) ptr), .size = 0 };
 #else
 	/* remember! must fail the Austin test, which is 
 	 *      addr - base < size
@@ -1170,7 +1169,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	/* If we have denorms, we will use the denorm base directly and fail over to secondary
 	 * checks. HMM. Actually, is that really faster? FIXME: TEST. */
-	unsigned long like_trapped_base = _CLEAR_LOWER_32((unsigned long) derivedfrom) | derivedfrom_bounds.base;
+	unsigned long like_trapped_base = __clear_lower_32((unsigned long) derivedfrom) | derivedfrom_bounds.base;
 	unsigned long base = (unsigned long) __libcrunch_detrap(like_trapped_base);
 #else
 	/* Here 'base' is never trapped. */
@@ -1234,7 +1233,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 #endif
 #if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH)
-	if (unlikely(!success)) warnx_pure("Primary check failed: addr %p, base %p, size %lu", 
+	if (unlikely(!success)) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
 #endif
 #ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
@@ -1333,10 +1332,10 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	 *                                  or if we fetched bounds (above). */
 	// do the primary check again
 	// -- write now-untrapped addr back, if derivedfrom was trapped
-	// warnx_pure("Got to 1, deriving %p", *p_derived);
+	// warnx("Got to 1, deriving %p", *p_derived);
 	if (addr - base < size)
 	{
-		// warnx_pure("Got to 2, deriving %p", *p_derived);
+		// warnx("Got to 2, deriving %p", *p_derived);
 		if (derivedfrom_trapped)
 		{
 #ifndef LIBCRUNCH_NO_WARN_BACK_IN
@@ -1347,7 +1346,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		}
 		else
 		{
-			// warnx_pure("Got to 3, deriving %p", *p_derived);
+			// warnx("Got to 3, deriving %p", *p_derived);
 			/* Q. When is this true?
 			 * A. 
 			 * NOT when deriving a one-past trapped pointer from an untrapped one
@@ -1359,7 +1358,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		return 1;
 	}
 	
-	// warnx_pure("Got to 4, deriving %p", *p_derived);
+	// warnx("Got to 4, deriving %p", *p_derived);
 	if (unlikely(addr - base == size))
 	{
 #ifndef LIBCRUNCH_NO_WARN_ONE_PAST
@@ -1373,7 +1372,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	/* Note that we NEVER create trapped pointers from fake bounds. 
 	 * The reason is that in fake cases, the local bounds are always max_bounds. */
 
-	// warnx_pure("Got to 5, deriving %p", *p_derived);
+	// warnx("Got to 5, deriving %p", *p_derived);
 	/* Handle the error. */
 	__libcrunch_bounds_error(*p_derived, derivedfrom, *p_derivedfrom_bounds);
 #ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
@@ -1429,6 +1428,21 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3)
 #endif
 
 #endif
+
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __clear_upper_32)(unsigned long arg)
+{
+	// return arg;
+	//return (((unsigned long) (arg)) & ((1ul<<32)-1ul));
+	/* x86-64 quirk: writing to the low 32 bits zero-extends, clearing the high */
+	__asm__ ("mov %k0, %k0" : "+r"(arg) );
+	return arg;
+}
+extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __clear_lower_32)(unsigned long arg)
+{
+	// return arg;
+	// return (((unsigned long) (arg)) & ~((1ul<<32)-1ul));
+	return (arg >> 32) << 32; // FIXME: can do in one instruction?
+}
 
 #define BASE_STORED(ptr) ((void**)(((unsigned long) (ptr)) ^ 0x700000000000ul))
 #define SIZE_STORED(ptr) ((unsigned *)((((unsigned long) (ptr)) >> 1) + 0x080000000000ul))
@@ -1829,8 +1843,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __tweak_argu
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)));
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)))
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_argument_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *debugstr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* Were we passed anything? 
@@ -1964,8 +1978,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __fetch_and_p
 #endif
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)));
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)))
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)));
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used,pure)) __peek_result_bounds)(_Bool really, unsigned long offset, const void *ptr, const char *calleestr __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NO_BOUNDS_STACK
 	/* If the cookie hasn't been tweaked, do nothing. */
@@ -2042,8 +2056,5 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_sec
 #endif
 
 #undef __libcrunch_fetch_bounds_ool_to_use
-
-#undef _CLEAR_LOWER_32
-#undef _CLEAR_UPPER_32
 
 #endif
