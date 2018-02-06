@@ -207,7 +207,7 @@ noquery-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	if $(MAKE) cleanrun-noquery-$* 1>$$out 2>$$err && \
            ! grep '^queries handled.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
-# SoftBound should also never call liballocs
+# SoftBound should also never call liballocs -- alloc wrappers return bounds
 checkrun-softbound-%: softbound-%/$(FRONTEND)+$(CONFIG)/check-stamp
 	true # remembered pass of softbound-$*
 softbound-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
