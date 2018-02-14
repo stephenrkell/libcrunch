@@ -53,7 +53,7 @@ endif
 # If we don't have a frontend in mind, loop over all frontends.
 # What about configs? Each test defines one or more configs in which it's supposed to pass.
 frontends = c c++ cilpp clang
-configs = default pb Sb x # Pb mb Mb tb Tb sb
+configs = default b Sb x # Pb mb Mb tb Tb sb
 ifeq ($(FRONTEND)$(CONFIG),)
 checkalltests:
 	for f in $(frontends); do \
@@ -102,17 +102,14 @@ export LDFLAGS += -L$(LIBALLOCS)/lib
 # Give each test a chance to say something about its frontends and configs
 #$(foreach c,$(cases),-include $(c)/frontend.mk)
 
+# set CASES_fe and CASES_CONFIG_c for each test's {( fe, c )}
 -include */frontend.mk
 
-# This could do either
-# CASES_$(FRONTEND) += ourselves # for each fe
-# or
-# FRONTENDS_$(case) += < list of frontends >
-# -- which?
+# some cases don't set 
 explicit_fe_cases := $(foreach c,$(cases),$(notdir $(realpath $(dir $(wildcard $(TESTDIR)/$(c)/frontend.mk)))))
 no_explicit_fe_cases := $(filter-out $(explicit_fe_cases),$(cases))
 #$(warning explicit_fe_cases is $(explicit_fe_cases))
-#$(warning no_explicit_fe_cases is $(no_explicit_fe_cases))
+$(warning no_explicit_fe_cases is $(no_explicit_fe_cases))
 # Common-case rules are:
 # - assume C language, so frontends "c" and "clang".
 # - assume default config
@@ -210,7 +207,7 @@ noquery-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	if $(MAKE) cleanrun-noquery-$* 1>$$out 2>$$err && \
            ! grep '^queries handled.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
-# SoftBound should also never call liballocs
+# SoftBound should also never call liballocs -- alloc wrappers return bounds
 checkrun-softbound-%: softbound-%/$(FRONTEND)+$(CONFIG)/check-stamp
 	true # remembered pass of softbound-$*
 softbound-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
@@ -345,12 +342,15 @@ endif # end assuming we have FRONTEND
 
 clean-%:
 	if [ -z "$(FRONTEND)" ]; then frontends="$(frontends)"; else frontends=$(FRONTEND); fi; \
+	if [ -z "$(CONFIG)" ]; then configs="$(configs)"; else configs=$(CONFIG); fi; \
+	for c in $$configs; do \
 	for f in $$frontends; do \
-		if [ -d "$*"/$$f ]; then \
-			$(MAKE) -C "$*"/$$f $(INCLUDE_MK_INC) -f $(realpath $(THIS_MAKEFILE)) clean; \
-			rm -f "$*"/$$f/"$*"; \
+		if [ -d "$*"/$$f+$$c ]; then \
+			$(MAKE) -C "$*"/$$f+$$c $(INCLUDE_MK_INC) -f $(realpath $(THIS_MAKEFILE)) clean; \
+			rm -f "$*"/$$f+$$c/"$*"; \
 		fi; \
-	done
+	done; \
+    done
 
 # generic clean rule that we can run from test dirs too (with $(MAKE) -f ../Makefile)
 clean: $(foreach c,$(cases),clean-$(c)) # (delete anything whose name is a prefix of a .c file's and doesn't contain a dot)

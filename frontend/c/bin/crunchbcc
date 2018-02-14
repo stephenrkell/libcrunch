@@ -20,9 +20,9 @@ class CrunchBCC(CrunchCC):
     
     def getBoundsConfigLetter(self):
         basename = os.path.basename(sys.argv[0])
-        result = re.match("crunch(.)bcc", basename)
+        result = re.match("(crunch)?(.)bcc", basename)
         if result:
-            return result.groups()[0][0]
+            return result.groups()[1][0]
         else:
             return 'p'
     
