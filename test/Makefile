@@ -4,7 +4,7 @@ CFLAGS += -DUSE_STARTUP_BRK
 
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 TESTDIR := $(realpath $(dir $(THIS_MAKEFILE)))
-$(warning TESTDIR is $(TESTDIR))
+#$(warning TESTDIR is $(TESTDIR))
 
 export CFLAGS
 
@@ -31,7 +31,7 @@ LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m`
 endif
 
 cases := $(filter-out checks.sh,$(filter-out rename-case.sh,$(notdir $(wildcard $(TESTDIR)/[-a-z]*))))
-
+#$(info cases is $(cases))
 LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/../lib/libcrunch_preload.so)
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -52,13 +52,13 @@ endif
 
 # If we don't have a frontend in mind, loop over all frontends.
 # What about configs? Each test defines one or more configs in which it's supposed to pass.
-frontends = c c++ cilpp clang
-configs = default b Sb x # Pb mb Mb tb Tb sb
+frontends = c #cilpp #clang #c++
+configs = default b Sb tb x # Pb mb Mb tb Tb sb
 ifeq ($(FRONTEND)$(CONFIG),)
 checkalltests:
-	for f in $(frontends); do \
+	@for f in $(frontends); do \
 		for c in $(configs); do \
-			$(MAKE) FRONTEND=$$f CONFIG=$$c checkalltests || break 2; \
+			$(MAKE) --no-print-directory FRONTEND=$$f CONFIG=$$c checkalltests || break 2; \
 		done; \
 	done
 else
@@ -102,6 +102,14 @@ export LDFLAGS += -L$(LIBALLOCS)/lib
 # Give each test a chance to say something about its frontends and configs
 #$(foreach c,$(cases),-include $(c)/frontend.mk)
 
+# Define some useful functions that the frontend.mk files might use.
+print_warning = $(warning $(1))
+print_info = $(info $(1))
+get_case_name = $(notdir $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST))))))
+set_frontend_for_case = $(eval CASES_$(2) := $(CASES_$(2)) $(1)) #$(info CASES_$(2) is now $(CASES_$(2)))
+set_configs_for_case = $(foreach c,$(2),$(eval CASES_CONFIG_$(c) := $(CASES_CONFIG_$(c)) $(1)) )
+#$(info CASES_CONFIG_$(c) is now $(CASES_CONFIG_$(c)) owing to $(realpath $(lastword $(MAKEFILE_LIST))) ) )
+
 # set CASES_fe and CASES_CONFIG_c for each test's {( fe, c )}
 -include */frontend.mk
 
@@ -109,23 +117,23 @@ export LDFLAGS += -L$(LIBALLOCS)/lib
 explicit_fe_cases := $(foreach c,$(cases),$(notdir $(realpath $(dir $(wildcard $(TESTDIR)/$(c)/frontend.mk)))))
 no_explicit_fe_cases := $(filter-out $(explicit_fe_cases),$(cases))
 #$(warning explicit_fe_cases is $(explicit_fe_cases))
-$(warning no_explicit_fe_cases is $(no_explicit_fe_cases))
+#$(warning no_explicit_fe_cases is $(no_explicit_fe_cases))
 # Common-case rules are:
 # - assume C language, so frontends "c" and "clang".
 # - assume default config
 # For all cases which don't define a frontend.mk, add to CASES_c and CASES_clang.
-CASES_c += $(no_explicit_fe_cases)
-CASES_clang += $(no_explicit_fe_cases)
-CASES_CONFIG_default += $(no_explicit_fe_cases)
+CASES_c := $(no_explicit_fe_cases) $(CASES_c)
+CASES_clang := $(no_explicit_fe_cases) $(CASES_clang)
+CASES_CONFIG_default := $(no_explicit_fe_cases) $(CASES_CONFIG_default)
 
 # This frontend cases, and this config cases
 fcases := $(filter $(CASES_$(FRONTEND)),$(cases))
 ccases := $(filter $(CASES_CONFIG_$(CONFIG)),$(cases))
 fccases := $(filter $(CASES_CONFIG_$(CONFIG)),$(fcases))
-$(info frontend $(FRONTEND), config $(CONFIG))
+$(info frontend $(FRONTEND), config $(CONFIG), cases: $(fccases))
 #$(info fcases is $(fcases))
 #$(info ccases is $(ccases))
-$(info fccases is $(fccases))
+#$(info fccases is $(fccases))
 
 # We used to specify "config" by setting CC in mk.inc.
 # Now we have frontend.mk do it.

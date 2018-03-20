@@ -1,2 +1,3 @@
-case_name := $(notdir $(realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST))))))
-CASES_clang := $(CASES_clang) $(case_name)
+case_name := $(call get_case_name)
+$(call set_frontend_for_case,$(case_name),clang)
+$(call set_configs_for_case,$(case_name),default)
