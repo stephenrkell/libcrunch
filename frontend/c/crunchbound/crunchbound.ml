@@ -70,13 +70,14 @@ type helperFunctionsRecord = {
  mutable peekResultBounds : fundec; 
  mutable cleanupBoundsStack : fundec; 
  mutable makeInvalidBounds : fundec; 
- mutable checkDerivePtr : fundec; 
+ mutable fullCheckDerivePtr : fundec; 
  mutable primaryCheckDerivePtr : fundec; 
  mutable detrap : fundec; 
  mutable checkLocalBounds : fundec; 
  mutable storePointerNonLocal : fundec;
  mutable storePointerNonLocalViaVoidptrptr : fundec;
- mutable primarySecondaryTransition : fundec;
+ mutable primarySecondaryDeriveTransition : fundec;
+ mutable primarySecondaryDerefTransition : fundec;
  mutable checkDeref: fundec
 }
 
@@ -490,8 +491,35 @@ let boundsLvalForLocalLval (boundsLocals : Cil.varinfo VarinfoMap.t ref) enclosi
                 match Cil.typeSig (Cil.typeOf (Lval(Var(boundsVi), NoOffset))) with
                     TSArray(_) -> Index(indexExpr, NoOffset)
                   | TSComp(_) -> 
-                        if not (isStaticallyZero indexExpr) then 
-                                failwith "singleton bounds but non-zero bounds expr"
+                        if not (isStaticallyZero indexExpr) then
+                            (* PROBLEM. Consider this code (based on something in SPEC gcc)
+                                static const int nums[] = { 1 };
+                                struct { int *p; } *info[(sizeof nums / sizeof (int))];
+                                for (int n = 0; n < 1; ++n) info[n] = ... ;
+                               Statically, at info[n], we don't know that n is always 0.
+                               But earlier, we *did* know that "info" has only one element.
+                               There, we were reasoning about a more constrained language
+                               (the language of constant-foldable expressions).
+                               To avoid bailing here, we must omit the check and unconditionally
+                               access the singleton comp bounds.
+                               Correctness of this is relying on our indexing checks on local
+                               arrays, via checkLocalBounds. Consider the following.
+                               e.g.
+                               int *access_idx(int idx)
+                               {
+                                 static int *localps[] = { ... };
+                                 return localps[idx];
+                               }
+                               We test idx against the bounds of localps.
+                               If it succeeds, we load+return localps[idx] 
+                               *together with* its bounds, localbound_localps[idx].
+                               We're worried about localbound_localps[idx] overflowing.
+                               If it did, the first check would have failed.
+                               There is a compiler-visible dependency from the localps load
+                               to the result of the checkLocalBounds check. So we should be okay.
+                             *)
+                            (* failwith "singleton bounds but non-zero bounds expr" *)
+                            NoOffset
                        else NoOffset
                   | _ -> failwith "bad bounds var type"
             )
@@ -1199,7 +1227,7 @@ let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction help
       [let checkResultVar = Cil.makeTempVar ~name:"__cil_boundscheck_" enclosingFunction boolType in
       (checkResultVar.vattr <- [Attr("unused", [])];
       Call( (* Some((Var(exprTmpVar), NoOffset)) *) (* None *) Some(Var(checkResultVar), NoOffset), (* return value dest *)
-          (Lval(Var(helperFunctions.checkDerivePtr.svar),NoOffset)),  (* lvalue of function to call *)
+          (Lval(Var(helperFunctions.fullCheckDerivePtr.svar),NoOffset)),  (* lvalue of function to call *)
           [ 
             (* const void **p_derived *)
             CastE(voidConstPtrPtrType, mkAddrOf (Var(exprTmpVar), NoOffset))
@@ -1231,16 +1259,18 @@ let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction help
           ; makeSizeOfPointeeType ptrExp
           ],
           loc
-       )) ] else []) @ (if isBeingDerefed then [
-       Call(None,
-            (Lval(Var(helperFunctions.checkDeref.svar),NoOffset)),
-            [ Lval(Var(exprTmpVar), NoOffset)
-            ; match boundsDescrForAdjustedExpr with
-                    BoundsLval(lv) -> Lval(lv)
-                  | _ -> 
-                        (Lval(Var(exprTmpBoundsVar), NoOffset))
-            ], loc
-       )] else [])
+       )) ] else []) @ (if isBeingDerefed then
+            let checkResultVar = Cil.makeTempVar ~name:"__cil_derefcheck_" enclosingFunction boolType in
+              (checkResultVar.vattr <- [Attr("unused", [])];
+              [Call(Some(Var(checkResultVar), NoOffset),
+                    (Lval(Var(helperFunctions.checkDeref.svar),NoOffset)),
+                    [ Lval(Var(exprTmpVar), NoOffset)
+                    ; match boundsDescrForAdjustedExpr with
+                            BoundsLval(lv) -> Lval(lv)
+                          | _ -> 
+                                (Lval(Var(exprTmpBoundsVar), NoOffset))
+                    ], loc
+       )]) else [])
     ) (* end pair *)
     in
     let resTmp, resInstrs = res
@@ -1500,13 +1530,14 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      peekResultBounds = emptyFunction "__peek_result_bounds";
      cleanupBoundsStack = emptyFunction "__cleanup_bounds_stack";
      makeInvalidBounds = emptyFunction "__libcrunch_make_invalid_bounds";
-     checkDerivePtr = emptyFunction "__full_check_derive_ptr";
+     fullCheckDerivePtr = emptyFunction "__full_check_derive_ptr";
      primaryCheckDerivePtr = emptyFunction "__primary_check_derive_ptr";
      detrap = emptyFunction "__libcrunch_detrap";
      checkLocalBounds = emptyFunction "__check_local_bounds";
      storePointerNonLocal = emptyFunction "__store_pointer_nonlocal";
      storePointerNonLocalViaVoidptrptr = emptyFunction "__store_pointer_nonlocal_via_voidptrptr";
-     primarySecondaryTransition = emptyFunction "__primary_secondary_transition";
+     primarySecondaryDeriveTransition = emptyFunction "__primary_secondary_derive_transition";
+     primarySecondaryDerefTransition = emptyFunction "__primary_secondary_deref_transition";
      checkDeref = emptyFunction "__check_deref";
   }
   
@@ -1705,7 +1736,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                  ], 
                             false, [])) 
     ;
-    helperFunctions.checkDerivePtr <- findOrCreateExternalFunctionInFile
+    helperFunctions.fullCheckDerivePtr <- findOrCreateExternalFunctionInFile
                             enclosingFile "__full_check_derive_ptr" (TFun(voidPtrType, 
                             Some [ ("p_derived", voidConstPtrPtrType, []);
                                    ("derivedfrom", voidConstPtrType, []); 
@@ -1745,8 +1776,13 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                             ], 
                             false, []))
     ;
-    helperFunctions.primarySecondaryTransition <- findOrCreateExternalFunctionInFile
-                            enclosingFile "__primary_secondary_transition" (TFun(voidType, 
+    helperFunctions.primarySecondaryDeriveTransition <- findOrCreateExternalFunctionInFile
+                            enclosingFile "__primary_secondary_derive_transition" (TFun(voidType, 
+                            Some [],
+                            false, []))
+    ;
+    helperFunctions.primarySecondaryDerefTransition <- findOrCreateExternalFunctionInFile
+                            enclosingFile "__primary_secondary_deref_transition" (TFun(voidType, 
                             Some [],
                             false, []))
     ;
@@ -1894,8 +1930,8 @@ let doNonLocalPointerStoreInstr ~useVoidPP ptrE pointeeUniqtypeExpr storeLv be l
           l
     )]
 
-let instrIsCheck checkDeriveFun instr = match instr with
-    Call(_, Lval(Var(funvar), NoOffset), _, _) when funvar == checkDeriveFun -> true
+let instrIsCallTo f instr = match instr with
+    Call(_, Lval(Var(fvar), NoOffset), _, _) when fvar == f -> true
   | _ -> false
 
 let makeShadowBoundsInitializerCalls helperFunctions enclosingFunc initializerLocation initializedPtrLv initializationValExpr wholeFile uniqtypeGlobals =
@@ -3054,13 +3090,15 @@ class crunchBoundVisitor = fun enclosingFile ->
                         helperFunctions currentLoc enclosingFile 
                         (pointeeUniqtypeGlobalPtr simplifiedMemExpr enclosingFile uniqtypeGlobals)
                 in
-                self#queueInstr (boundsLoadInstrs @ [Call(None,
+                let checkResultVar = Cil.makeTempVar ~name:"__cil_derefcheck_" theFunc boolType in
+                (checkResultVar.vattr <- [Attr("unused", [])];
+                self#queueInstr (boundsLoadInstrs @ [Call(Some(Var(checkResultVar), NoOffset),
                     (Lval(Var(helperFunctions.checkDeref.svar),NoOffset)),
                     [ simplifiedMemExpr
                     ; (* what are the bounds of memExpr? *)
                       Lval(blv)
                     ], currentLoc
-                )]);
+                )]));
                 (* the same lval *)
                 (Mem(memExpr), offsetFromList offsetsOkayWithoutCheck)
              in
@@ -3128,7 +3166,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     (true, isSelectingOnFlexibleArrayMember)
                               | Some(bound) -> match constInt64ValueOfExpr intExp with
                                     Some(intValue) -> 
-                                        (intValue < (Int64.of_int 0) || intValue >= bound, false)
+                                        (intValue < (Int64.zero) || intValue >= bound, false)
                                   | None ->
                                     (* This means we couldn't simplify the expression
                                      * to a constant. We really want to dynamically
@@ -3386,6 +3424,17 @@ class crunchBoundVisitor = fun enclosingFile ->
                    (* Remember: exprTmpVar has the same type as the overall cast expression.
                     * maybeDetrappedSubex has the type of subex. *)
                    else (self#queueInstr (
+                    (* FIXME: this introduces an always-safe cast, which trumptr
+                     * will then instrument, creating lots of unnecessary checks.
+                     * If we use a points-to analysis (+ other tricks)
+                     * to eliminate always-safe checks in trumptr, this will
+                     * go away. That will require an analysis smart enough to
+                     * identify the input to the cast (which is a *ulong* and
+                     * not a pointer) with the output if __libcrunch_detrap,
+                     * which we magically know is safe.
+                     * Alternatively we can move detrapping into a snippet
+                     * which we inline right here in CIL, rather than use the
+                     * helper function. I'd rather not do that. *)
                     let realPointerExpr = CastE(targetT, maybeDetrappedSubex)
                     in
                     [Set((Var(exprTmpVar),NoOffset), realPointerExpr, instrLoc !currentInst)]
@@ -3493,7 +3542,7 @@ class crunchBoundVisitor = fun enclosingFile ->
 end
 
 class checkStatementLabelVisitor = fun labelPrefix -> 
-                                   fun checkDeriveFun ->
+                                   fun checkFuns ->
                                 object(self)
   inherit nopCilVisitor
 
@@ -3519,7 +3568,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                             let rec maybeSplitInstrs (rev_acc : instr list list) (cur : instr list) instrs = 
                                 match instrs with
                                   [] -> List.rev (cur :: rev_acc)
-                                | x :: more when instrIsCheck checkDeriveFun x ->
+                                | x :: more when None <> List.find_opt (fun checkFun -> instrIsCallTo checkFun x) checkFuns ->
                                       (* debug_print 1 "Saw a check\n"; *)
                                       (* accumulate a singleton, then start a new run of instrs *)
                                       let new_singleton = [x]
@@ -3544,7 +3593,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                                       let b = 
                                       mkBlock (List.map (fun accRun -> {
                                         labels = (if List.length accRun = 1 
-                                            && instrIsCheck checkDeriveFun (List.hd accRun)
+                                            &&  None <> List.find_opt (fun checkFun -> instrIsCallTo checkFun (List.hd accRun)) checkFuns 
                                             then
                                                 let loc = match List.hd accRun with
                                                     Call(_, _, _, loc) -> loc
@@ -3581,8 +3630,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
             | _ -> DoChildren
 end
 
-class primaryToSecondaryJumpVisitor = fun fullCheckFun
-                                    -> fun primaryCheckFun
+class primaryToSecondaryJumpVisitor = fun checkFunPairs
                                     -> fun findStmtByLabel
                                     -> fun enclosingFile
                                     -> object(self)
@@ -3592,19 +3640,21 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
        (* Either it's a single call to a check function, or it doesn't 
         * include a check function at all. *)
        match outerS.skind with
-           Instr(is) -> 
-               let isCheckStmt = List.length is = 1 && instrIsCheck fullCheckFun (List.hd is)
-               in 
-               if not isCheckStmt then DoChildren
-               else 
+           Instr(is) ->
+               let maybeCalledCheckFuns = if List.length is = 0 then None else List.find_opt (fun (fullEl, priEl, argTransform, transitionFun) -> instrIsCallTo fullEl (List.hd is)) checkFunPairs
+               in
+               (match maybeCalledCheckFuns with
+                None -> DoChildren
+              | Some(fullCheckFun, primaryCheckFun, argTransform, transitionFun) ->
                    let newStatements = [
                     (* We do the check instr as usual, *except* calling the primary check function. *)
                     { labels = outerS.labels;
                       skind = Instr([match (List.hd is) with
-                            Call(out, _, [arg1; arg2; arg3; arg4; arg5], loc) ->
+                            (* *)
+                            Call(out, _, args, loc) ->
                                 Call(out, Lval(Var(primaryCheckFun), NoOffset), 
-                                    [arg1; arg2; Lval(mkMem arg3 NoOffset); arg5], loc)
-                          | _ -> failwith ("impossible: check is not a check (" ^ instToString (List.hd is) ^ ")")
+                                    argTransform args, loc)
+                          | _ -> failwith ("impossible: check is not a call (" ^ instToString (List.hd is) ^ ")")
                       ]);
                       sid = outerS.sid;
                       succs = outerS.succs;
@@ -3638,7 +3688,7 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                           skind = Block(mkBlock [
                             { labels = [];
                               skind = Instr([Call(None, 
-                                Lval(Var(helperFunctions.primarySecondaryTransition.svar), NoOffset), 
+                                Lval(Var(transitionFun.svar), NoOffset), 
                                 checkArgs, 
                                 loc)]);
                               sid = 0; succs = []; preds = []
@@ -3659,6 +3709,7 @@ class primaryToSecondaryJumpVisitor = fun fullCheckFun
                 ]
                 in
                 ChangeDoChildrenPost(outerS, fun s -> {s with labels = []; skind = Block(mkBlock newStatements)})
+                )
          | _ -> DoChildren
 end
 
@@ -3780,11 +3831,17 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       )
       in
       (* debug_print 1 ("Labelling primary checks in function " ^ f.svar.vname ^ " original body\n"); *)
-      f.sbody <- visitCilBlock (new checkStatementLabelVisitor "primary_check" helperFunctions.checkDerivePtr.svar) f.sbody;
+      (* This will label calls to *any* function in the list we pass *)
+      f.sbody <- visitCilBlock (new checkStatementLabelVisitor "primary_check"
+        [helperFunctions.checkDeref.svar; helperFunctions.fullCheckDerivePtr.svar]) f.sbody;
       (* debug_print 1 ("After visit, original body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody; *)
       (* debug_print 1 ("Labelling full checks in copied body of function " ^ f.svar.vname ^ "\n"); *)
-      let labelledSecondaryBody = visitCilBlock (new checkStatementLabelVisitor "full_check" helperFunctions.checkDerivePtr.svar) secondaryBody in
+      let labelledSecondaryBody =
+          visitCilBlock (new checkStatementLabelVisitor "full_check"
+                            [helperFunctions.fullCheckDerivePtr.svar; helperFunctions.checkDeref.svar])
+            secondaryBody
+        in
       let findStmtByLabel = fun ident -> (
           let found = ref None
           in
@@ -3800,8 +3857,14 @@ class primarySecondarySplitVisitor = fun enclosingFile ->
       debug_print 1 ("... and original body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
       debug_print 1 ("Inserting primary/secondary jumps in function " ^ f.svar.vname ^ "\n"); *)
-      f.sbody <- visitCilBlock (new primaryToSecondaryJumpVisitor helperFunctions.checkDerivePtr.svar helperFunctions.primaryCheckDerivePtr.svar findStmtByLabel enclosingFile) f.sbody;
-      (* debug_print 1 ("Finally, function body is as follows\n");
+      f.sbody <- visitCilBlock (new primaryToSecondaryJumpVisitor
+        [(helperFunctions.fullCheckDerivePtr.svar, helperFunctions.primaryCheckDerivePtr.svar,
+            (fun [arg1; arg2; arg3; arg4; arg5] -> [arg1; arg2; Lval(mkMem arg3 NoOffset); arg5]),
+            helperFunctions.primarySecondaryDeriveTransition
+        );
+         (helperFunctions.checkDeref.svar, helperFunctions.checkDeref.svar, (fun args -> args),
+            helperFunctions.primarySecondaryDerefTransition)]
+         findStmtByLabel enclosingFile) f.sbody;      (* debug_print 1 ("Finally, function body is as follows\n");
       Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 f.sbody;
       debug_print 1 ("Finished with function " ^ f.svar.vname ^ "\n"); *)
       (* Our new body is a Block containing both *)

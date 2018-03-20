@@ -1256,23 +1256,27 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
 {
 #ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
 	++__libcrunch_ptr_derefs;
 #endif
+/* If we *are* using trap pointers, there's no need to do anything. */
 #ifndef LIBCRUNCH_USING_TRAP_PTRS
 	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
 	unsigned long size = __libcrunch_get_size(ptr_bounds, ptr);
 	if (likely((unsigned long) ptr - base < size))
 	{
 		/* success */
+		return 1;
 	} else
 	{
 		__libcrunch_soft_deref_error_at(ptr, ptr_bounds, __libcrunch_get_pc());
 #ifdef LIBCRUNCH_ABORT_ON_OOB_DEREF
 		abort();
+#else
+		return 0;
 #endif
 	}
 #endif
@@ -1444,8 +1448,31 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __clear_l
 	return (arg >> 32) << 32; // FIXME: can do in one instruction?
 }
 
-#define BASE_STORED(ptr) ((void**)(((unsigned long) (ptr)) ^ 0x700000000000ul))
-#define SIZE_STORED(ptr) ((unsigned *)((((unsigned long) (ptr)) >> 1) + 0x080000000000ul))
+extern inline void **(__attribute__((always_inline,gnu_inline/*,pure,__const__*/)) __libcrunch_base_stored_loc)(void *ptr)
+{
+	/* Produce the output in the clobbered register */
+	void **ret;
+	//__asm__ ("mov $0x70, %0 \n"
+	//		 "shl $0x28, %0 \n"
+	//		 "xor %1, %0 \n": "=r"(ret) : "r"(ptr));
+	return (void**)((0x70ul << 0x28) ^ (unsigned long) ptr);
+	//return ret;
+}
+extern inline unsigned *(__attribute__((always_inline,gnu_inline/*,pure,__const__*/)) __libcrunch_size_stored_loc)(void *ptr)
+{
+	/* Produce the output in the clobbered register */
+	unsigned *ret;
+	//__asm__ ("mov $0x08, %0 \n"
+	//		 "shl $0x28, %0 \n"
+	//		 "add %1, %0 \n": "=r"(ret) : "r"(((unsigned long) ptr)>>1));
+	return (unsigned *)((0x08ul << 0x28) + (((unsigned long) ptr)>>1));
+	//return ret;
+}
+
+//#define BASE_STORED(ptr) ((void**)(((unsigned long) (ptr)) ^ 0x700000000000ul))
+#define BASE_STORED(ptr) (__libcrunch_base_stored_loc(ptr))
+//#define SIZE_STORED(ptr) ((unsigned *)((((unsigned long) (ptr)) >> 1) + 0x080000000000ul))
+#define SIZE_STORED(ptr) (__libcrunch_size_stored_loc(ptr))
 
 extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t);
 extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __shadow_store_bounds_for)(void **stored_pointer_addr, __libcrunch_bounds_t val_bounds, struct uniqtype *t)
@@ -2027,8 +2054,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_bou
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_derive_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_derive_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 	abort();
@@ -2041,6 +2068,21 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_sec
 				(void*)__libcrunch_get_limit(*p_derivedfrom_bounds, derivedfrom),
 				(unsigned long) __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom),
 				t);
+#endif
+#endif
+}
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_deref_transition)(const void *derived, __libcrunch_bounds_t derivedfrom_bounds);
+extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_deref_transition)(const void *derived, __libcrunch_bounds_t derivedfrom_bounds)
+{
+#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
+	abort();
+#else
+	++__libcrunch_primary_secondary_transitions;
+#ifdef LIBCRUNCH_DEBUG_PRIMARY_SECONDARY_TRANSITIONS
+	warnx("Primary-secondary transition: dereferenced %p, bounds (base: %p, limit %p)",
+				derived, 
+				(void*)__libcrunch_get_base(derivedfrom_bounds, derived),
+				(void*)__libcrunch_get_limit(derivedfrom_bounds, derived));
 #endif
 #endif
 }
