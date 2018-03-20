@@ -126,6 +126,13 @@ DECLARE(char*, fgets, char *s, int size, FILE *stream)
 	}
 }
 
+DECLARE(char *, strstr, const char *haystack, const char *needle)
+{
+	BEGIN(strstr);
+	char *ret_ptr = REAL(strstr)(haystack, needle);
+	RETURN_PTR(ret_ptr, ret_ptr, (char*) ret_ptr + (ret_ptr ? strlen(ret_ptr) + 1 : 1));
+}
+
 // 
 // // return arg
 // __WEAK_INLINE  char * softboundcets_mkdtemp(char *template){
