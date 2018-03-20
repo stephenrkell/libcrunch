@@ -12,16 +12,11 @@ LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
 default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o \
     libcrunch_wrappers.o
 
-ifeq ($(LIBCRUNCH_BOUNDS_CONFIG),)
-LIBCRUNCH_BOUNDS_CONFIG := p
-$(warning Defaulting to bounds config $(LIBCRUNCH_BOUNDS_CONFIG))
-endif
-
 #CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS 
 # -DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH
-CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-config-$(LIBCRUNCH_BOUNDS_CONFIG) | \
+CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
   tr -s '[:space:]' ' ')
-libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_config=0x$(shell /bin/echo -n $(LIBCRUNCH_BOUNDS_CONFIG) | hexdump -v -e '1/1 "%02x"')
+libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_abi_md5sum=0x$(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | md5sum | head -c16 )
 
 CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBDLBIND)/include
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
