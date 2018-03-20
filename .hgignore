@@ -194,3 +194,4 @@ test/bounds-trap/*/bounds-trap
 test/bounds-va_arg/*/bounds-va_arg
 test/softbound-multi-alloc/*/softbound-multi-alloc
 test/noquery-bounds-viacache/*/noquery-bounds-viacache
+frontend/cilpp/src/cilpp
