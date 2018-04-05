@@ -21,9 +21,16 @@
 #ifdef USE_REAL_LIBUNWIND
 #include <libunwind.h>
 #endif
+#include <errno.h>
 #include "relf.h"
 #include "libcrunch.h"
 #include "libcrunch_private.h"
+
+int __libcrunch_get_errno(void) // for debugging
+{
+	return errno;
+}
+
 /* from libsystrap */
 int enumerate_operands(unsigned const char *ins, unsigned const char *end,
 	void *mcontext,
@@ -120,7 +127,7 @@ struct suppression *suppressions;
 static int print_type_cb(struct uniqtype *t, void *ignored)
 {
 	fprintf(crunch_stream_err, "uniqtype addr %p, name %s, size %d bytes\n", 
-		t, UNIQTYPE_NAME(t), t->pos_maxoff);
+		t, NAME_FOR_UNIQTYPE(t), t->pos_maxoff);
 	fflush(crunch_stream_err);
 	return 0;
 }
@@ -130,7 +137,7 @@ static int match_typename_cb(struct uniqtype *t, void *ignored)
 	for (unsigned i = 0; i < lazy_heap_types_count; ++i)
 	{
 // 		if (!lazy_heap_types[i] && 
-// 			0 == strcmp(UNIQTYPE_NAME(t), lazy_heap_typenames[i]))
+// 			0 == strcmp(NAME_FOR_UNIQTYPE(t), lazy_heap_typenames[i]))
 // 		{
 // 			// install this type in the lazy_heap_type slot
 // 			lazy_heap_types[i] = t;
@@ -324,10 +331,12 @@ static _Bool suppression_matches(struct suppression *s,
 			&& test_site_matches(s->testing_function_pat, test_site);
 }
 
-static _Bool is_suppressed(const char *test_typestr, const void *test_site, 
-		const char *alloc_typestr)
+static _Bool is_suppressed(const struct uniqtype *maybe_test_uniqtype, const void *test_site, 
+		const struct uniqtype *maybe_alloc_uniqtype)
 {
 	if (!suppressions) return 0;
+	const char *test_typestr = maybe_test_uniqtype ? NAME_FOR_UNIQTYPE(maybe_test_uniqtype) : NULL;
+	const char *alloc_typestr = maybe_alloc_uniqtype ? NAME_FOR_UNIQTYPE(maybe_alloc_uniqtype) : NULL;
 	for (struct suppression *p = &suppressions[0];
 				p->test_type_pat != NULL;
 				++p)
@@ -392,17 +401,15 @@ struct addrlist distinct_failure_sites;
 
 /* This filter is used to avoid repeated warnings, unless 
  * the user has requested them (verbose mode). */
-static _Bool should_report_failure_at(void *site, const struct uniqtype *maybe_test_uniqtype,
+static _Bool should_report_failure_at(const void *site, const struct uniqtype *maybe_test_uniqtype,
 	const struct uniqtype *maybe_alloc_uniqtype)
 {
-	if (is_suppressed(maybe_test_uniqtype ? UNIQTYPE_NAME(maybe_test_uniqtype) : NULL,
-			site,
-			maybe_alloc_uniqtype ? UNIQTYPE_NAME(maybe_alloc_uniqtype) : NULL)) return 0;
+	if (is_suppressed(maybe_test_uniqtype, site, maybe_alloc_uniqtype)) return 0;
 	if (verbose) return 1;
-	_Bool is_unseen = !__liballocs_addrlist_contains(&distinct_failure_sites, site);
+	_Bool is_unseen = !__liballocs_addrlist_contains(&distinct_failure_sites, (void*) site);
 	if (is_unseen)
 	{
-		__liballocs_addrlist_add(&distinct_failure_sites, site);
+		__liballocs_addrlist_add(&distinct_failure_sites, (void*) site);
 		return 1;
 	}
 	else return 0;
@@ -1065,8 +1072,15 @@ static void report_repeat_failure_summary(void)
 				repeat_summarisation_count);
 		repeat_summarisation_count = 0;
 	}
-}		
-static void report_failure_if_necessary(const void *site,
+}
+
+#define report_failure_if_necessary(site, kind, found_uniqtype, test_uniqtype, \
+	alloc_uniqtype, fmt, args...) \
+	do { if (should_report_failure_at(site, test_uniqtype, alloc_uniqtype)) \
+		report_failure(site, kind, found_uniqtype, test_uniqtype, alloc_uniqtype, fmt, ## args); \
+	} while (0)
+
+static void report_failure(const void *site,
 	enum check_kind kind,
 	const struct uniqtype *found_uniqtype,
 	const struct uniqtype *test_uniqtype,
@@ -1076,32 +1090,33 @@ static void report_failure_if_necessary(const void *site,
 {
 	va_list ap;
 	va_start(ap, fmt);
-	if (should_report_failure_at(__builtin_return_address(0), test_uniqtype, alloc_uniqtype))
+	if (last_failed_check.site == site
+			&& last_failed_check.opaque_decider /* deepest_subobject_type */ == found_uniqtype)
 	{
-		if (last_failed_check.site == __builtin_return_address(0)
-				&& last_failed_check.opaque_decider /* deepest_subobject_type */ == found_uniqtype)
-		{
-			++repeat_summarisation_count;
-		}
-		else
-		{
-			report_repeat_failure_summary();
-			debug_printf(0, "Failed check at %p (%s): %s", site,
-				format_symbolic_address(site), check_kind_names[kind]);
-			debug_vprintf_nohdr(0, fmt, ap);
-			debug_printf_bare(0, "\n");
-			last_failed_check.kind = kind;
-			last_failed_check.site = __builtin_return_address(0);
-			// FIXME: the choice of decider depends on the check kind
-			last_failed_check.opaque_decider /* deepest_subobject_type */ = found_uniqtype;
-		}
+		++repeat_summarisation_count;
+	}
+	else
+	{
+		report_repeat_failure_summary();
+		debug_printf(0, "Failed check at %p (%s): %s", site,
+			format_symbolic_address(site), check_kind_names[kind]);
+		debug_vprintf_nohdr(0, fmt, ap);
+		debug_printf_bare(0, "\n");
+		last_failed_check.kind = kind;
+		last_failed_check.site = site;
+		// FIXME: the choice of decider depends on the check kind
+		last_failed_check.opaque_decider /* deepest_subobject_type */ = found_uniqtype;
 	}
 	va_end(ap);
 }
 
+#define CHECK_INIT \
+	/* When a check is called, we might not be initialized yet */ \
+	/* (recall that __libcrunch_global_init is not a constructor, */ \
+	/* because it's not safe to call super-early). */ \
+__libcrunch_check_init();
+
 #define DO_QUERY(obj) \
-	/* We might not be initialized yet (recall that __libcrunch_global_init is */ \
-	/* not a constructor, because it's not safe to call super-early). */ \
 	__libcrunch_check_init(); \
 	struct allocator *a = NULL; \
 	const void *alloc_start; \
@@ -1117,9 +1132,8 @@ static void report_failure_if_necessary(const void *site,
 		&alloc_site); \
 	 \
 	if (__builtin_expect(err != NULL, 0)) goto out; /* liballocs has already counted this abort */ \
-	 \
-	unsigned target_offset_within_uniqtype = (char*) obj - (char*) alloc_start; \
-	 \
+
+#define DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, allocator) \
 	if (alloc_uniqtype->make_precise) \
 	{ \
 		/* HACK: special-case to avoid overheads of 1-element array type creation */ \
@@ -1137,25 +1151,52 @@ static void report_failure_if_necessary(const void *site,
 				__builtin_return_address(0), NULL); \
 		} \
 		/* Now ask the meta-alloc protocol to update that object's metadata to this type. */ \
-		if (a && a->set_type) a->set_type(NULL, (void*) alloc_start, alloc_uniqtype); \
-	} \
-	 \
+		if (allocator && allocator->set_type) allocator->set_type(NULL, (void*) alloc_start, alloc_uniqtype); \
+	}
+
+#define INIT_SUBOBJ_SEARCH(obj) \
 	struct uniqtype *cur_obj_uniqtype = alloc_uniqtype; \
 	struct uniqtype *cur_containing_uniqtype = NULL; \
 	struct uniqtype_rel_info *cur_contained_pos = NULL; \
-	unsigned cumulative_offset_searched = 0;
-
+	unsigned cumulative_offset_searched = 0; \
+	unsigned target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
 
 int __is_a_internal(const void *obj, const void *arg)
 {
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
 	
+	CHECK_INIT
 	DO_QUERY(obj)
-	
-	_Bool success = __liballocs_find_matching_subobject(target_offset_within_uniqtype, 
-			cur_obj_uniqtype, (struct uniqtype *) test_uniqtype, &cur_obj_uniqtype, 
-			&target_offset_within_uniqtype, &cumulative_offset_searched,
-			&cur_containing_uniqtype, &cur_contained_pos);
+	INIT_SUBOBJ_SEARCH(obj)
+	/* Optimisation: if we have an array whose element type is smaller than the
+	 * test type (e.g. an array of uninterpreted bytes or chars),
+	 * we can skip precisify and fail. Or if we're zero-offset and the types
+	 * match, we can skip and pass. */
+	_Bool success;
+	if (UNIQTYPE_IS_ARRAY_TYPE(alloc_uniqtype) &&
+			UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype))
+	{
+		if (UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)->pos_maxoff
+			< test_uniqtype->pos_maxoff)
+		{
+			goto fail;
+		}
+		if (UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype) == test_uniqtype
+				&& target_offset_within_uniqtype == 0)
+		{
+			success = 1;
+		}
+	}
+	else
+	{
+		DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+		cur_obj_uniqtype = alloc_uniqtype; /* HACK: necessary because may be updated by precisify */
+
+		success = __liballocs_find_matching_subobject(target_offset_within_uniqtype, 
+				cur_obj_uniqtype, (struct uniqtype *) test_uniqtype, &cur_obj_uniqtype, 
+				&target_offset_within_uniqtype, &cumulative_offset_searched,
+				&cur_containing_uniqtype, &cur_contained_pos);
+	}
 	
 	unsigned short period;// = (alloc_uniqtype->pos_maxoff > 0) ? alloc_uniqtype->pos_maxoff : 0;
 	void *range_base;
@@ -1163,10 +1204,11 @@ int __is_a_internal(const void *obj, const void *arg)
 	
 	if (__builtin_expect(a && a->is_cacheable, 1))
 	{
-		/* Populate cache.
+		/* Calculate a typed memrange with which we can populate the cache.
 		 * Is there a repetitive (array) structure around the test uniqtype? */
 		period = test_uniqtype->pos_maxoff;
-		if (cur_containing_uniqtype && UNIQTYPE_IS_ARRAY_TYPE(cur_containing_uniqtype))
+		if (cur_containing_uniqtype && UNIQTYPE_IS_ARRAY_TYPE(cur_containing_uniqtype)
+				&& UNIQTYPE_HAS_KNOWN_LENGTH(cur_containing_uniqtype))
 		{
 			/* Use the array start and end. FIXME: this doesn't see through
 			 * arrays of arrays, which it should. Need to merge the code with
@@ -1226,8 +1268,8 @@ int __is_a_internal(const void *obj, const void *arg)
 			return 1;
 		}
 	}
-	
 	// if we got here, the check failed -- which we can cache too
+fail:
 	if (a && a->is_cacheable) cache_is_a(obj, (char*) obj + test_uniqtype->pos_maxoff,
 		test_uniqtype, 0, test_uniqtype->pos_maxoff, alloc_start);
 	if (__currently_allocating || __currently_freeing)
@@ -1244,18 +1286,19 @@ int __is_a_internal(const void *obj, const void *arg)
 			test_uniqtype,
 			alloc_uniqtype,
 			"(%p, %p a.k.a. \"%s\"): "
-				"ptr is %ld bytes into a %s-allocated %s "
+				"ptr is %ld bytes into a %s%s%s "
 				"(deepest subobject spanning ptr: %s at offset %d) "
 				"originating at %p\n", 
-			obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+			obj, test_uniqtype, NAME_FOR_UNIQTYPE(test_uniqtype),
 			(long)((char*) obj - (char*) alloc_start),
 			a ? a->name : "(no allocator)",
-			NAME_FOR_UNIQTYPE(alloc_uniqtype), 
+			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ",
+			NAME_FOR_UNIQTYPE(alloc_uniqtype),
 			(cur_obj_uniqtype ? 
-				((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : UNIQTYPE_NAME(cur_obj_uniqtype)) 
+				((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : NAME_FOR_UNIQTYPE(cur_obj_uniqtype)) 
 				: "(none)"), 
-			cumulative_offset_searched, 
-			alloc_site
+			(int) cumulative_offset_searched, 
+			(void*) alloc_site
 		);
 	}
 out:
@@ -1266,7 +1309,10 @@ int __like_a_internal(const void *obj, const void *arg)
 {
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
 	
+	CHECK_INIT
 	DO_QUERY(obj)
+	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	INIT_SUBOBJ_SEARCH(obj)
 	
 	/* Descend the subobject hierarchy until our target offset is zero, i.e. we 
 	 * find the outermost thing in the subobject tree that starts at the address
@@ -1384,7 +1430,7 @@ like_a_failed:
 			test_uniqtype,
 			alloc_uniqtype,
 			"(%p, %p a.k.a. \"%s\"): allocation was a %s%s%s originating at %p", 
-				obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+				obj, test_uniqtype, NAME_FOR_UNIQTYPE(test_uniqtype),
 				a ? a->name : "(no allocator)",
 				(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 				NAME_FOR_UNIQTYPE(alloc_uniqtype), 
@@ -1407,16 +1453,20 @@ static int offset_and_name_match_cb(struct uniqtype *spans,
 	struct offset_and_name_args *args = arg;
 	
 	return args->offset == span_start_offset
-		&& 0 == strcmp(UNIQTYPE_NAME(spans), args->name);
+		&& 0 == strcmp(NAME_FOR_UNIQTYPE(spans), args->name);
 }
 
 int __named_a_internal(const void *obj, const void *arg)
 {
 	const char *test_typestr = (const char *) arg;
 	// FIXME: use our recursive subobject search here? HMM -- semantics are non-obvious.
+	CHECK_INIT
 	DO_QUERY(obj)
+	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	INIT_SUBOBJ_SEARCH(obj)
 
-	/* Look for a matching subobject. */
+	/* The type is incomplete in the client, but not in the program
+	 * as a whole. So we still need to look for a matching subobject. */
 	unsigned target_offset = (char*) obj - (char*) alloc_start;
 	struct offset_and_name_args args = { target_offset, test_typestr };
 	int ret = __liballocs_walk_subobjects_spanning(target_offset,
@@ -1459,12 +1509,18 @@ named_a_failed:
 int 
 __check_args_internal(const void *obj, int nargs, ...)
 {
+	CHECK_INIT
 	DO_QUERY(obj)
+	/* No need for subobject stuff or array-precisifying stuff. */
 	
 	struct uniqtype *fun_uniqtype = alloc_uniqtype;
 	assert(fun_uniqtype);
-	assert(UNIQTYPE_IS_SUBPROGRAM_TYPE(fun_uniqtype));
-	assert(alloc_start == obj);
+	if (!(UNIQTYPE_IS_SUBPROGRAM_TYPE(fun_uniqtype)))
+	{
+		/* It's not a function. */
+		abort();
+	}
+	if (!(alloc_start == obj)) abort();
 	
 	/* Walk the arguments that the function expects. Simultaneously, 
 	 * walk our arguments. */
@@ -1521,7 +1577,9 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 {
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
 	
+	CHECK_INIT
 	DO_QUERY(obj)
+	/* No need for array stuff or subobject search -- functions don't nest inside functions. */
 	
 	if (__builtin_expect(err != NULL, 0))
 	{
@@ -1632,13 +1690,13 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 		++__libcrunch_failed;
 		report_failure_if_necessary(__builtin_return_address(0),
 			IS_A_FUNCTION_REFINING,
-			cur_obj_uniqtype,
+			alloc_uniqtype,
 			test_uniqtype,
 			alloc_uniqtype,
 			"(%p, %p a.k.a. \"%s\"): "
 				"found an allocation of a %s%s%s "
 				"originating at %p", 
-			obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+			obj, test_uniqtype, NAME_FOR_UNIQTYPE(test_uniqtype),
 			a ? a->name : "(no allocator)",
 			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 			NAME_FOR_UNIQTYPE(alloc_uniqtype),
@@ -1769,7 +1827,10 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 {
 	struct uniqtype *test_uniqtype = (struct uniqtype *) arg;
 	
+	CHECK_INIT
 	DO_QUERY(obj)
+	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	INIT_SUBOBJ_SEARCH(obj)
 	
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
 	
@@ -1952,7 +2013,7 @@ loosely_like_a_failed:
 			test_uniqtype,
 			alloc_uniqtype,
 			"(%p, %p a.k.a. \"%s\"): allocation was a %s%s%s originating at %p", 
-			obj, test_uniqtype, UNIQTYPE_NAME(test_uniqtype),
+			obj, test_uniqtype, NAME_FOR_UNIQTYPE(test_uniqtype),
 			a ? a->name : "(no allocator)",
 			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
 			NAME_FOR_UNIQTYPE(alloc_uniqtype), 
@@ -1963,7 +2024,10 @@ loosely_like_a_failed:
 
 int __is_a_pointer_of_degree_internal(const void *obj, int d)
 {
+	CHECK_INIT
 	DO_QUERY(obj)
+	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	INIT_SUBOBJ_SEARCH(obj)
 	
 	/* HACK */
 	reinstate_looseness_if_necessary(alloc_start, alloc_site, alloc_uniqtype);
@@ -2049,7 +2113,10 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	struct uniqtype *obj_cur_containing_uniqtype;
 	struct uniqtype_rel_info *obj_cur_contained_pos;
 	{
+		CHECK_INIT
 		DO_QUERY(obj)
+		DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+		INIT_SUBOBJ_SEARCH(obj)
 		obj_a = a;
 		obj_alloc_start = alloc_start;
 		obj_alloc_size_bytes = alloc_size_bytes;
@@ -2104,6 +2171,8 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		 * whether we're generic or not. */
 		{
 			DO_QUERY(value)
+			DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+			INIT_SUBOBJ_SEARCH(value)
 			value_a = a;
 			value_alloc_start = alloc_start;
 			value_alloc_size_bytes = alloc_size_bytes;
@@ -2370,7 +2439,10 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 {
 	if (!obj) goto return_min_bounds;
 	
+	CHECK_INIT
 	DO_QUERY(obj)
+	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	INIT_SUBOBJ_SEARCH(obj)
 	
 	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
 	{
@@ -2644,9 +2716,9 @@ void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom,
 		NULL,
 		"(derived %p from %p): difference %ld; lb %p; ub %p",
 		derived, derivedfrom, 
-		(char*) derived - (char*) derivedfrom, 
-		__libcrunch_get_base(bounds, derivedfrom), 
-		__libcrunch_get_limit(bounds, derivedfrom));
+		(long)((char*) derived - (char*) derivedfrom),
+		(void*)__libcrunch_get_base(bounds, derivedfrom), 
+		(void*)__libcrunch_get_limit(bounds, derivedfrom));
 	++__libcrunch_created_invalid_pointer;
 	
 	if (!(derivedfrom - __libcrunch_get_base(bounds, derivedfrom)
@@ -2667,8 +2739,8 @@ void __libcrunch_soft_deref_error_at(const void *ptr, __libcrunch_bounds_t bound
 		NULL,
 		"(%p): lb %p; ub %p",
 		ptr,
-		__libcrunch_get_base(bounds, ptr), 
-		__libcrunch_get_limit(bounds, ptr)
+		(void*)__libcrunch_get_base(bounds, ptr), 
+		(void*)__libcrunch_get_limit(bounds, ptr)
 	);
 }
 
@@ -2945,12 +3017,12 @@ void __libcrunch_ool_store_pointer_nonlocal(const void **dest, const void *val, 
 
 void **__libcrunch_ool_base_stored_addr(void *const *stored_ptr_addr)
 {
-	return BASE_STORED(stored_ptr_addr);
+	return BASE_STORED((void**) stored_ptr_addr);
 }
 
 unsigned *__libcrunch_ool_size_stored_addr(void *const *stored_ptr_addr)
 {
-	return (unsigned *) SIZE_STORED(stored_ptr_addr);
+	return (unsigned *) SIZE_STORED((void**) stored_ptr_addr);
 }
 
 __libcrunch_bounds_t __libcrunch_ool_fetch_bounds_from_shadow_space(const void *ptr, void **loaded_from)
