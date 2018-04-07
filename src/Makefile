@@ -4,6 +4,8 @@ srcdir := $(dir $(THIS_MAKEFILE))
 
 include $(SRCROOT)/config.mk
 TRAP_SYSCALLS ?= $(realpath $(SRCROOT)/../trap-syscalls)
+LIBSYSTRAP ?= $(TRAP_SYSCALLS)/libsystrap
+LIBRUNT ?= $(realpath $(SRCROOT)/../librunt)
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
 # HACK around lazy expansion: something unsets LIBALLOCS later? FIXME
 LIBALLOCS := $(LIBALLOCS)
@@ -18,7 +20,7 @@ CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
   tr -s '[:space:]' ' ')
 libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_abi_md5sum=0x$(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | md5sum | head -c16 )
 
-CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBDLBIND)/include
+CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBRUNT)/include -I$(LIBDLBIND)/include
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
 
 #CFLAGS += -fkeep-inline-functions
