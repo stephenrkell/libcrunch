@@ -2869,6 +2869,9 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 		if (!static_guessed_srcval_pointee_type
 			/* If it really is a void* object, we can go ahead  */
 			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__void
+			/* Ditto for any other generic pointer? FIXME: think more about this.  */
+			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__signed_char
+			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__unsigned_char
 			/* ... and we do the same if the static guess agrees with the cache */
 			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == static_guessed_srcval_pointee_type)
 		{
