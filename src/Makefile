@@ -71,9 +71,9 @@ VPATH := $(srcdir):$(VPATH)
 endif
 
 $(C_DEPS): .%.d : %.c
-	$(CC) -MM $(CFLAGS) "$<"  > "$@"
+	$(CC) -MM $(CFLAGS) "$<"  > "$@" || (rm -f "$@"; false)
 $(CC_DEPS): .%.d : %.cc
-	$(CXX) -MM $(CXXFLAGS) "$<"  > "$@"
+	$(CXX) -MM $(CXXFLAGS) "$<"  > "$@" || (rm -f "$@"; false)
 
 -include $(DEPS)
 
