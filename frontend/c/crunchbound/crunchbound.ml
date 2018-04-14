@@ -3568,7 +3568,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                             let rec maybeSplitInstrs (rev_acc : instr list list) (cur : instr list) instrs = 
                                 match instrs with
                                   [] -> List.rev (cur :: rev_acc)
-                                | x :: more when None <> List.find_opt (fun checkFun -> instrIsCallTo checkFun x) checkFuns ->
+                                | x :: more when None <> (try Some(List.find (fun checkFun -> instrIsCallTo checkFun x) checkFuns) with Not_found -> None) ->
                                       (* debug_print 1 "Saw a check\n"; *)
                                       (* accumulate a singleton, then start a new run of instrs *)
                                       let new_singleton = [x]
@@ -3593,7 +3593,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
                                       let b = 
                                       mkBlock (List.map (fun accRun -> {
                                         labels = (if List.length accRun = 1 
-                                            &&  None <> List.find_opt (fun checkFun -> instrIsCallTo checkFun (List.hd accRun)) checkFuns 
+                                            &&  None <> (try Some(List.find (fun checkFun -> instrIsCallTo checkFun (List.hd accRun)) checkFuns) with Not_found -> None) 
                                             then
                                                 let loc = match List.hd accRun with
                                                     Call(_, _, _, loc) -> loc
@@ -3641,7 +3641,7 @@ class primaryToSecondaryJumpVisitor = fun checkFunPairs
         * include a check function at all. *)
        match outerS.skind with
            Instr(is) ->
-               let maybeCalledCheckFuns = if List.length is = 0 then None else List.find_opt (fun (fullEl, priEl, argTransform, transitionFun) -> instrIsCallTo fullEl (List.hd is)) checkFunPairs
+               let maybeCalledCheckFuns = if List.length is = 0 then None else (try Some(List.find (fun (fullEl, priEl, argTransform, transitionFun) -> instrIsCallTo fullEl (List.hd is)) checkFunPairs) with Not_found -> None)
                in
                (match maybeCalledCheckFuns with
                 None -> DoChildren
