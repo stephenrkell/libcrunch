@@ -276,65 +276,28 @@ static void init_shadow_entries(void)
 {
 	/* It's not just about wrapping functions. Initialise the globals.
 	 * FIXME: not sure why SoftBound doesn't do this. */
-	/* Now walk the auxv to write bounds for the argv and envp vectors. This is
-	 * a bit of a HACK since we duplicate code from liballocs (which need not be 
-	 * linked in right here), specifically the auxv allocator. We can't easily do
-	 * this in libcrunch.c because we need to know that the shadow space has been
-	 * init'd. */
 	Elf64_auxv_t *auxv_array_start = get_auxv((const char **) environ, environ[0]);
 	if (!auxv_array_start) return;
-	
-	Elf64_auxv_t *auxv_array_terminator = auxv_array_start; 
-	while (auxv_array_terminator->a_type != AT_NULL) ++auxv_array_terminator;
-	
-	/* auxv_array_start[0] is the first word higher than envp's null terminator. */
-	const char **env_vector_terminator = ((const char**) auxv_array_start) - 1;
-	assert(!*env_vector_terminator);
-	const char **env_vector_start = env_vector_terminator;
-	while (*((char**) env_vector_start - 1)) --env_vector_start;
-	
-	/* argv_vector_terminator is the next word lower than envp's first entry. */
-	const char **argv_vector_terminator = ((const char**) env_vector_start) - 1;
-	assert(!*argv_vector_terminator);
-	const char **argv_vector_start = argv_vector_terminator;
-	unsigned nargs = 0;
-	/* HACK: to search for the start of the array, we look for an integer that is
-	 * a plausible argument count... which won't look like any pointer we're seeing. */
-	#define MAX_POSSIBLE_ARGS 4194304
-	while (*((uintptr_t*) argv_vector_start - 1) > MAX_POSSIBLE_ARGS)
-	{
-		--argv_vector_start;
-		++nargs;
-	}
-	assert(*((uintptr_t*) argv_vector_start - 1) == nargs);
-	intptr_t *p_argcount = (intptr_t*) argv_vector_start - 1;
-	
-	/* Now for the asciiz. We lump it all in one chunk. */
-	char *asciiz_start = (char*) (auxv_array_terminator + 1);
-	char *asciiz_end = asciiz_start;
-	while (*(intptr_t *) asciiz_end != 0) asciiz_end += sizeof (void*);
-	
-	void *program_entry_point = NULL;
-	ElfW(auxv_t) *found_at_entry = auxv_lookup(auxv_array_start, AT_ENTRY);
-	if (found_at_entry) program_entry_point = (void*) found_at_entry->a_un.a_val;
+
+	struct auxv_limits lims = get_auxv_limits(auxv_array_start);
 
 	/* DON'T use __shadow_store_bounds_for here because it requires a type argument. 
 	 * And we are running so early that we might not have our metadata. */
-	for (const char **argvi = argv_vector_start; argvi != argv_vector_terminator; ++argvi)
+	for (const char **argvi = lims.argv_vector_start; argvi != lims.argv_vector_terminator; ++argvi)
 	{
 		/* We're pointing at a stored pointer. */
 		*BASE_STORED(argvi) = (void*) *argvi;
 		*SIZE_STORED(argvi) = strlen(*argvi) + 1;
 	}
-	for (const char **envi = env_vector_start; envi != env_vector_terminator; ++envi)
+	for (const char **envi = lims.env_vector_start; envi != lims.env_vector_terminator; ++envi)
 	{
 		/* We're pointing at a stored pointer. */
 		*BASE_STORED(envi) = (void*) *envi;
 		*SIZE_STORED(envi) = strlen(*envi) + 1;
 	}
 	/* Leave argv's bounds there on the shadow stack for main() to pick up. */
-	__push_argument_bounds_base_limit(argv_vector_start, 
-			(unsigned long) argv_vector_start, (unsigned long) (argv_vector_terminator + 1));
+	__push_argument_bounds_base_limit(lims.argv_vector_start, 
+			(unsigned long) lims.argv_vector_start, (unsigned long) (lims.argv_vector_terminator + 1));
 	
 	struct link_map *exe_handle = get_exe_handle();
 	void *main_addr = fake_dlsym(exe_handle, "main");
@@ -342,27 +305,21 @@ static void init_shadow_entries(void)
 	// FIXME: also look at static alloc records
 	__push_argument_bounds_cookie(main_addr);
 	
-	void **p = (void**) environ;
-	*BASE_STORED(p) = env_vector_start;
-	*SIZE_STORED(p) = (env_vector_terminator + 1 - env_vector_start) * sizeof (char*);
-	p = (void**) &stdin;
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = sizeof (FILE);
-	p = (void**) &stdout;
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = sizeof (FILE);
-	p = (void**) &stderr;
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = sizeof (FILE);
+	*BASE_STORED(&environ) = lims.env_vector_start;
+	*SIZE_STORED(&environ) = (lims.env_vector_terminator + 1 - lims.env_vector_start) * sizeof (char*);
+
+	*BASE_STORED(&stdin) = stdin;
+	*SIZE_STORED(&stdin) = sizeof (FILE);
+	*BASE_STORED(&stdout) = stdout;
+	*SIZE_STORED(&stdout) = sizeof (FILE);
+	*BASE_STORED(&stderr) = stderr;
+	*SIZE_STORED(&stderr) = sizeof (FILE);
 	
 	/* HACK: stuff below here is glibc-specific.  */
-	p = (void**) __ctype_b_loc();
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = 768;
-	p = (void**) __ctype_toupper_loc();
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = 384 * sizeof (int);
-	p = (void**) __ctype_tolower_loc();
-	*BASE_STORED(p) = *p;
-	*SIZE_STORED(p) = 384 * sizeof (int);
+	*BASE_STORED((void**) __ctype_b_loc()) = *__ctype_b_loc();
+	*SIZE_STORED((void**) __ctype_b_loc()) = 768;
+	*BASE_STORED((void**) __ctype_toupper_loc()) = *__ctype_toupper_loc();
+	*SIZE_STORED((void**) __ctype_toupper_loc()) = 384 * sizeof (int);
+	*BASE_STORED((void**) __ctype_tolower_loc()) = *__ctype_tolower_loc();
+	*SIZE_STORED((void**) __ctype_tolower_loc()) = 384 * sizeof (int);
 }
