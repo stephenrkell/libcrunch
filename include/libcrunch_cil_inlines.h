@@ -1263,7 +1263,9 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_dere
 	++__libcrunch_ptr_derefs;
 #endif
 /* If we *are* using trap pointers, there's no need to do anything. */
-#ifndef LIBCRUNCH_USING_TRAP_PTRS
+#ifdef LIBCRUNCH_USING_TRAP_PTRS
+	return 1;
+#else
 	unsigned long base = (unsigned long) __libcrunch_get_base(ptr_bounds, ptr);
 	unsigned long size = __libcrunch_get_size(ptr_bounds, ptr);
 	if (likely((unsigned long) ptr - base < size))
