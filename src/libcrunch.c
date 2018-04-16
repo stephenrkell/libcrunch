@@ -450,7 +450,7 @@ static void print_exit_summary(void)
 	fprintf(crunch_stream_err, "       nontrivially passed:                % 11ld\n", __libcrunch_succeeded);
 	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 	fprintf(crunch_stream_err, "   of which hit __is_a cache:              % 11ld\n", __libcrunch_is_a_hit_cache);
-#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+#ifdef LIBCRUNCH_KEEP_EXPENSIVE_COUNTS
 	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 	fprintf(crunch_stream_err, "pointer dereferences:                      % 11ld\n", __libcrunch_ptr_derefs);
 	fprintf(crunch_stream_err, "   of which stored shadowed pointer values:% 11ld\n", __libcrunch_ptr_stores);
@@ -2803,7 +2803,7 @@ __libcrunch_bounds_t
 void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type);
 void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const void **dest, const void *srcval, __libcrunch_bounds_t val_bounds, struct uniqtype *static_guessed_srcval_pointee_type)
 {
-#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+#ifdef LIBCRUNCH_KEEP_EXPENSIVE_COUNTS
 	++__libcrunch_ptr_stores;
 #endif
 	/* This is like __store_pointer_nonlocal but the lvalue we're writing through has void* type.

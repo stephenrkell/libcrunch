@@ -1144,7 +1144,7 @@ extern __libcrunch_bounds_t (__attribute__((pure,__const__)) __fetch_bounds_ool_
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)));
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t derivedfrom_bounds, unsigned long t_sz __attribute__((unused)))
 {
-#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+#ifdef LIBCRUNCH_KEEP_EXPENSIVE_COUNTS
 	++__libcrunch_ptr_derivations;
 #endif
 #ifndef LIBCRUNCH_NOOP_INLINES
@@ -1259,7 +1259,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds);
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *ptr, __libcrunch_bounds_t ptr_bounds)
 {
-#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+#ifdef LIBCRUNCH_KEEP_EXPENSIVE_COUNTS
 	++__libcrunch_ptr_derefs;
 #endif
 /* If we *are* using trap pointers, there's no need to do anything. */
@@ -1304,6 +1304,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	unsigned long pre_detrap_addr = (unsigned long) *p_derived;
 	unsigned long addr = __libcrunch_detrap(*p_derived);
 	_Bool derivedfrom_trapped = __libcrunch_is_trap_ptr(derivedfrom);
+	/* NOTE: in the below we deliberately access *p_derivedfrom_bounds
+	 * even though they might be invalid. We correct this later. */
 #ifdef LIBCRUNCH_WORDSIZE_BOUNDS
 	derivedfrom = (const void*) __libcrunch_detrap(derivedfrom);
 	unsigned long naive_base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, *p_derived);
@@ -1312,8 +1314,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 #endif
 	unsigned long base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
 	unsigned long size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
+	/* We've failed a primary check, so tell the compiler what that means. */
 	if (!(pre_detrap_addr - naive_base >= size)) __builtin_unreachable();
-#ifndef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH /* FIXME: seems broken -- never true? we abort()ed above */
 	// ensure valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom))
 	{
@@ -1329,7 +1331,6 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	}
 	// tell the compiler that we always get back valid bounds
 	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
-#endif
 	// recompute base and size, from the new bounds
 	base = (unsigned long) __libcrunch_get_base(*p_derivedfrom_bounds, derivedfrom);
 	size = __libcrunch_get_size(*p_derivedfrom_bounds, derivedfrom);
@@ -1390,6 +1391,9 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 #else
 	return 1;
 #endif
+#ifndef LIBCRUNCH_WORDSIZE_BOUNDS
+#undef naive_base
+#endif
 }
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
@@ -1411,7 +1415,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3)
 		// tell the compiler this means our bounds are definitely valid
 		if (__libcrunch_bounds_invalid(*derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
 #ifndef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
-		// also tell it that derivedfrom is not a trap pointer
+		// also tell it that derivedfrom is not a trap pointer -- if it is, primary check fails
 		if (__libcrunch_is_trap_ptr(derivedfrom)) __builtin_unreachable();
 #endif
 		return 1;
@@ -1518,7 +1522,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __
 			(const void **dest, const void *val, __libcrunch_bounds_t val_bounds, 
 				struct uniqtype *val_pointee_type)
 {
-#ifndef LIBCRUNCH_SKIP_EXPENSIVE_COUNTS
+#ifdef LIBCRUNCH_KEEP_EXPENSIVE_COUNTS
 	++__libcrunch_ptr_stores;
 #endif
 #ifndef LIBCRUNCH_NO_SHADOW_SPACE
