@@ -1410,8 +1410,10 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3)
 	{
 		// tell the compiler this means our bounds are definitely valid
 		if (__libcrunch_bounds_invalid(*derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
+#ifndef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 		// also tell it that derivedfrom is not a trap pointer
 		if (__libcrunch_is_trap_ptr(derivedfrom)) __builtin_unreachable();
+#endif
 		return 1;
 	}
 	else return __secondary_check_derive_ptr(p_derived, derivedfrom, derivedfrom_bounds, t, t_sz);
