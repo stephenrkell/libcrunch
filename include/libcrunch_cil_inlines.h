@@ -1079,6 +1079,11 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __libcrunch_
 }
 
 extern void __ensure_bounds_in_cache(unsigned long ptr, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
+extern inline void ( __attribute__((always_inline,gnu_inline)) __prefill_cache_hint)(unsigned long ptr, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
+extern inline void ( __attribute__((always_inline,gnu_inline)) __prefill_cache_hint)(unsigned long ptr, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t)
+{
+	// __ensure_bounds_in_cache(ptr, ptr_bounds, t);
+}
 
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz);
 extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz)

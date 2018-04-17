@@ -55,7 +55,7 @@ type helperFunctionsRecord = {
  mutable fetchBoundsInl : fundec;
  mutable fetchBoundsOol : fundec;
  mutable fetchBoundsFull : fundec;
- mutable ensureBoundsInCache : fundec;
+ mutable prefillCacheHint : fundec;
  mutable makeBounds : fundec; 
  mutable pushLocalArgumentBounds : fundec; 
  mutable pushArgumentBoundsBaseLimit : fundec; 
@@ -1516,7 +1516,7 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
      fetchBoundsInl = emptyFunction "__fetch_bounds_inl";
      fetchBoundsOol = emptyFunction (if !noObjectTypeInfo then "__fetch_bounds_ool_via_dladdr" else "__fetch_bounds_ool");
      fetchBoundsFull = emptyFunction "__fetch_bounds_full";
-     ensureBoundsInCache = emptyFunction "__ensure_bounds_in_cache";
+     prefillCacheHint = emptyFunction "__prefill_cache_hint";
      makeBounds = emptyFunction "__make_bounds";
      pushLocalArgumentBounds = emptyFunction "__push_local_argument_bounds";
      pushArgumentBoundsBaseLimit = emptyFunction "__push_argument_bounds_base_limit";
@@ -1584,8 +1584,8 @@ class crunchBoundBasicVisitor = fun enclosingFile ->
                                  ], 
                             false, []))
     ;
-    helperFunctions.ensureBoundsInCache <- findOrCreateExternalFunctionInFile 
-                            enclosingFile "__ensure_bounds_in_cache" (TFun(voidType,
+    helperFunctions.prefillCacheHint <- findOrCreateExternalFunctionInFile 
+                            enclosingFile "__prefill_cache_hint" (TFun(voidType,
                             Some [
                                    ("ptrval", ulongType, []);
                                    ("bounds", boundsType, []);
@@ -3485,7 +3485,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             in
                             (* Cache prefill: the cast-from pointer *)
                             (preInstrs @ [Call(None,
-                            Lval(Var(helperFunctions.ensureBoundsInCache.svar), NoOffset),
+                            Lval(Var(helperFunctions.prefillCacheHint.svar), NoOffset),
                             [
                                 (* the pointer -- hmm, what if it's trapped? That's okay, it's void* and we barely use it.
                                  * Here, maybeDetrappedSubex could have either integer or ptr type, so cast to integer. *)
