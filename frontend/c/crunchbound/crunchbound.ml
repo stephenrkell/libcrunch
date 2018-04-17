@@ -3455,8 +3455,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         enclosingFile f !currentFuncAddressTakenLocalNames
                                         helperFunctions uniqtypeGlobals
                                         (* writtenToLval *) (Var(exprTmpVar), NoOffset)
-                                        (* writtenE *)      subex
-                                        (* derivedFromE *)  subex
+                                        (* writtenE *)      realPointerExpr
+                                        (* derivedFromE *)  realPointerExpr
                                         localLvalToBoundsFun !currentInst !tempLoadExprs]
                             else []
                     in
