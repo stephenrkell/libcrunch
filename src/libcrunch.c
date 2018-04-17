@@ -1174,18 +1174,18 @@ int __is_a_internal(const void *obj, const void *arg)
 	 * match, we can skip and pass. */
 	_Bool success;
 	if (UNIQTYPE_IS_ARRAY_TYPE(alloc_uniqtype) &&
-			UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype))
-	{
-		if (UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)->pos_maxoff
+		UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)
+		&& UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)->pos_maxoff
 			< test_uniqtype->pos_maxoff)
-		{
-			goto fail;
-		}
-		if (UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype) == test_uniqtype
+	{
+		goto fail;
+	}
+	else if (UNIQTYPE_IS_ARRAY_TYPE(alloc_uniqtype) &&
+		UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)
+		&& UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype) == test_uniqtype
 				&& target_offset_within_uniqtype == 0)
-		{
-			success = 1;
-		}
+	{
+		success = 1;
 	}
 	else
 	{
@@ -1197,11 +1197,11 @@ int __is_a_internal(const void *obj, const void *arg)
 				&target_offset_within_uniqtype, &cumulative_offset_searched,
 				&cur_containing_uniqtype, &cur_contained_pos);
 	}
-	
+
 	unsigned short period;// = (alloc_uniqtype->pos_maxoff > 0) ? alloc_uniqtype->pos_maxoff : 0;
 	void *range_base;
 	void *range_limit;
-	
+
 	if (__builtin_expect(a && a->is_cacheable, 1))
 	{
 		/* Calculate a typed memrange with which we can populate the cache.
