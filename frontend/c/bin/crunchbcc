@@ -27,17 +27,23 @@ class CrunchBCC(CrunchCC):
             return 'p'
     
     def getDefines(self):
+        to_return = []
         letter = self.getBoundsConfigLetter()
         self.debugMsg("Bounds config: " + letter + "\n")
-        filename = os.path.dirname(__file__) + "/../lib/bounds-config-" + letter
+        libpath = os.path.dirname(__file__) + "/../lib/"
+        filename = libpath + "bounds-config-" + letter
         try:
             with open(filename, 'r') as f:
-                to_return = [l.strip() for l in f]
-                self.debugMsg("Defines are: " + str(to_return) + "\n")
-                return to_return
+                to_return += [l.strip() for l in f]
+            with open(libpath + "bounds-abi") as f:
+                to_return += [l.strip() for l in f]
+            with open(libpath + "bounds-warnings") as f:
+                to_return += [l.strip() for l in f]
         except IOError, e:
             sys.stderr.write("Error: no bounds config file: " + filename + "\n")
             exit(2)
+        self.debugMsg("Defines are: " + str(to_return) + "\n")
+        return to_return
     
     def doPostLinkMetadataBuild(self, outputFile):
         # SoftBound doesn't need metadata (er, hopefully)
