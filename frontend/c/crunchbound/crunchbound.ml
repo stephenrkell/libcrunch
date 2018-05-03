@@ -49,6 +49,8 @@ module H = Hashtbl
 let voidPtrHasBounds = ref false
 let noObjectTypeInfo = ref false
 let skipSecondarySplit = ref false
+let trackIntptr = ref false
+
 let int128Type = TInt(IInt128, [])
 
 type helperFunctionsRecord = {
@@ -1429,53 +1431,6 @@ let makeBoundsWriteInstruction enclosingFile enclosingFunction currentFuncAddres
  * 
  * The derived ptr bounds may or may not be cached locally, depending on
  * what we're writing them into.
- * 
- * scanForAdjustedLocalsVisitor is trying to figure out which locals need
- * bounds. Short answer:
- * 
- * - any local non-address-taken pointer that is adjusted
- * - in fact, any pointer *within* a non-address-taken local
-          *if* that pointer is subject to address arithmetic.
-          -- this gets into alias analysis, it seems, even though we don't
-             consider address-taken locals, because of the possibility of 
-             non-static indexing of local arrays. 
-          -- BUT non-static indexing will get rewritten into indexing a temporary
-             local pointer
-          -- SO we don't have to worry about that
-          -- BUT we have to do that rewriting *first*? vsimpleaddr seems like a good idea
-             once more.
-          -- OR can we rely on ChangeDoChildrenPost to do the right thing? 
-             I don't think so, because we might get a local that is
- * 
- * What's the invariant we want
- * at the point where we do the bounds checking?
- * 
- * All non-constant indexing of local non-a-t'n arrays (at any depth) has been transformed
- * into a simple check against the locally known bounds.
- *
- * All indexing of other arrays and pointers has been transformed into pointer arithmetic.
- * 
- * All constant indexing of a local non-a-t'n array is checked statically (FIXME).
- * 
- * This is better than if we just said "if a local array is indexed by a non-constant expression,
- * treat it as address-taken, i.e. don't cache bounds".
- *)
-
-
-(* It's important not to confuse two things here.
- * 
- * - address calculations (pointer arith or array indexing)
-         that need checking;
- * 
- * - local pointers that have cached bounds.
- * 
- * We lift address calculations into temporaries, and check them. 
- * To avoid creating too many temporaries, we do the following:
- *
- * - lift address-calculation temporaries on demand;
- * 
- * - don't lift calculations of addresses which are statically 
- * safe.
  *)
  
 class addressTakenVisitor = fun seenAddressTakenLocalNames -> object(self) inherit nopCilVisitor
@@ -1495,10 +1450,8 @@ class addressTakenVisitor = fun seenAddressTakenLocalNames -> object(self) inher
                 ; DoChildren
            | _ -> DoChildren
     end
-end (* class *)
+end
 
-
- 
 class crunchBoundBasicVisitor = fun enclosingFile -> 
                                object(self)
   inherit nopCilVisitor
@@ -3368,9 +3321,9 @@ class crunchBoundVisitor = fun enclosingFile ->
               (* Casts not involving pointers are not interesting to us *)
               if (not (isPointerType subexT) && not (isPointerType targetT)) then e
               else
-              let maybeDetrappedSubex, maybeDetrappedSubexIsIntegral = 
-                  if (tsIsPointer subexTs) && (not (tsIsPointer targetTs)) 
-                    && (mightBeTrappedPointer subex)
+              let maybeDetrappedSubex, maybeDetrappedSubexIsIntegral =
+                  if (tsIsPointer subexTs) && (not (tsIsPointer targetTs))
+                    && (mightBeTrappedPointer subex) && (not !trackIntptr)
                     (* Making an integer from a pointer: need to de-trap.
                      * Go via a helper -- also handy for tracing this?
                      * ACTUALLY will make life more difficult for tracing
@@ -4017,7 +3970,10 @@ let feature : Feature.t =
     ), " do not use type information from liballocs (casts don't affect bounds)");
     ("--skip-secondary-split", Arg.Unit (fun _ -> 
         skipSecondarySplit := true
-    ), " abort on bounds check failure (do not create a secondary path)")
+    ), " do not rewrite function bodies into top (primary-only) and bottom (full) halves");
+    ("--track-intptr", Arg.Unit (fun _ -> 
+        trackIntptr := true
+    ), " preserve noncanonical pointer bits when converting to integer")
     ];
     fd_doit = 
     (function (fl: file) -> 
