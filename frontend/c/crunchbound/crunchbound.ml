@@ -540,49 +540,6 @@ let makeCallToMakeBounds outputLval baseExpr limitExpr loc makeBoundsFun =
             ],
             loc
         )
-let rec simplifyPtrExprs someE =
-  (* Try to see through AddrOf and Mems to get down to a local lval if possible. 
-   * Here we are applying the equivalences from the CIL documentation.
-   * We first simplify any nested pointer expressions
-   * (which may nest inside *non*-pointer expressions!)
-   * then simplify the whole. This is necessary to, say, turn
-   * "*&*&*&*&p" into "p". *)
-  let rec simplifyOffset offs = match offs with
-      NoOffset -> NoOffset
-    | Field(fi, rest) -> Field(fi, simplifyOffset rest)
-    | Index(intExp, rest) -> Index(simplifyPtrExprs intExp, simplifyOffset rest)
-  in
-  let withSubExprsSimplified = match someE with
-    |Lval(Var(vi), offs) -> Lval(Var(vi), simplifyOffset offs)
-    |Lval(Mem(subE), offs) -> Lval(Mem(simplifyPtrExprs subE), simplifyOffset offs)
-    |UnOp(op, subE, subT) -> UnOp(op, simplifyPtrExprs subE, subT)
-    |BinOp(op, subE1, subE2, subT) -> BinOp(op, simplifyPtrExprs subE1, simplifyPtrExprs subE2, subT)
-    |CastE(subT, subE) -> 
-        let simplifiedSubE = simplifyPtrExprs subE
-        in
-        if getConcreteType (Cil.typeSig subT) = getConcreteType (Cil.typeSig (Cil.typeOf simplifiedSubE))
-        then simplifiedSubE else CastE(subT, simplifiedSubE)
-    |AddrOf(Var(vi), offs) -> AddrOf(Var(vi), simplifyOffset offs)
-    |AddrOf(Mem(subE), offs) -> AddrOf(Mem(simplifyPtrExprs subE), simplifyOffset offs)
-    |StartOf(Var(vi), offs) -> StartOf(Var(vi), simplifyOffset offs)
-    |StartOf(Mem(subE), offs) -> StartOf(Mem(simplifyPtrExprs subE), offs)
-    |_ -> someE
-  in
-  match withSubExprsSimplified with
-     (* e.g.  (&p->foo)->bar           is   p->foo.bar      *)
-     Lval(Mem(AddrOf(Mem a, aoff)), off) -> 
-        Lval(Mem a, offsetFromList((offsetToList aoff) @ (offsetToList off)))
-     (* e.g.  (&v.baz)->bum            is   v.baz.bum       *)
-   | Lval(Mem(AddrOf(Var v, aoff)), off) -> 
-        Lval(Var v, offsetFromList((offsetToList aoff) @ (offsetToList off)))
-     (* e.g.  &*p                      is   p               *)
-   | AddrOf (Mem a, NoOffset)            -> a
-     (* note that unlike &( *p ),
-              &p->f   (i.e. with some offset)  cannot be simplified          *)
-   | StartOf (Mem s, NoOffset) -> s     (* likewise *)
-     (* note that unlike *p    (where p is of pointer-to-array type),
-              p->arr  (i.e. some offset) cannot be simplified      *)
-   | _ -> withSubExprsSimplified
 
 let rec multiplyAccumulateArrayBounds acc t = 
     match t with
@@ -1020,7 +977,7 @@ let ensureBoundsLocalLval ptrExpr boundsDescrForPtrExpr enclosingFunction bounds
             in
             (Var(bTemp), NoOffset)
 
-let boundsUpdateInstrs ?doFetchOol:(doFetchOol=true) blv ptrE boundsDescr helperFunctions loc enclosingFile pointeeUniqtypeExpr = 
+let localBoundsUpdateInstrs ?doFetchOol:(doFetchOol=true) blv ptrE boundsDescr helperFunctions loc enclosingFile pointeeUniqtypeExpr = 
     match boundsDescr with
         BoundsBaseLimitRvals(baseExpr, limitExpr) ->
             [makeCallToMakeBounds (Some(blv))
@@ -1189,7 +1146,7 @@ let hoistAndCheckAdjustment ~isBeingDerefed enclosingFile enclosingFunction help
                  * Note that we never emit an out-of-line fetch call;
                  * in a fully instrumented program we simply shouldn't need it, and
                  * in partially instrumented cases we're lazy about doing the fetch. *)
-                boundsUpdateInstrs (Var(exprTmpBoundsVar), NoOffset) ptrExp boundsDescrForAdjustedExpr 
+                localBoundsUpdateInstrs (Var(exprTmpBoundsVar), NoOffset) ptrExp boundsDescrForAdjustedExpr 
                    helperFunctions 
                    loc enclosingFile (pointeeUniqtypeGlobalPtr ptrExp enclosingFile uniqtypeGlobals)
             )
@@ -1344,7 +1301,7 @@ let hoistCast exprTmpVar enclosingFile enclosingFunction helperFunctions uniqtyp
 
 (* We're writing some pointer value to a *local* pointer, hence also 
  * to a local bounds var. *)
-let makeBoundsWriteInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (writtenToLval : lval) writtenE derivedFromE (localLvalToBoundsFun : lval -> lval) currentInst tempLoadExprs =
+let makeLocalBoundsWriteInstruction enclosingFile enclosingFunction currentFuncAddressTakenLocalNames helperFunctions uniqtypeGlobals (writtenToLval : lval) writtenE derivedFromE (localLvalToBoundsFun : lval -> lval) currentInst tempLoadExprs =
     let loc = instrLoc currentInst in
     (* Here we do the case analysis: 
      * do we copy bounds, 
@@ -1850,6 +1807,10 @@ let mapForAllPointerBoundsInExpr (forOne : Cil.exp -> bounds_expr -> Cil.exp -> 
 let concatMapForAllPointerBoundsInExprList f es currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile = 
         List.flatten (List.map (fun e -> mapForAllPointerBoundsInExpr f e currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile) es)
 
+(* In what way is this "non-local"?
+ * It's that the *destination* is non-local.
+ * We ensure that the source expression
+ * is a local/temporary having a local bounds var. *)
 let doNonLocalPointerStoreInstr ~useVoidPP ptrE pointeeUniqtypeExpr storeLv be l enclosingFile enclosingFunction uniqtypeGlobals helperFunctions = 
     (* __store_ptr_nonlocal(dest, written_val, maybe_known_bounds) *)
     let boundsType, boundsCompinfo, boundsBaseFi, boundsSizeFi = findBoundsType enclosingFile.globals
@@ -1866,7 +1827,7 @@ let doNonLocalPointerStoreInstr ~useVoidPP ptrE pointeeUniqtypeExpr storeLv be l
      *)
     let blv = ensureBoundsLocalLval ptrE be enclosingFunction boundsType
     in
-    let (boundsExpr, preInstrs) = (Lval(blv), boundsUpdateInstrs blv ptrE be 
+    let (boundsExpr, preInstrs) = (Lval(blv), localBoundsUpdateInstrs blv ptrE be 
                         helperFunctions l enclosingFile pointeeUniqtypeExpr)
     in
     preInstrs @ 
@@ -2591,27 +2552,31 @@ class crunchBoundVisitor = fun enclosingFile ->
                          *          -- if it's selecting a subobject from a variable
                          *          -- if it's selecting a subobject via a pointer we have bounds for.
                          *)
+                        let boundsDescr = boundsDescrForExpr writtenE !currentFuncAddressTakenLocalNames
+                                localLvalToBoundsFun !tempLoadExprs enclosingFile
+                        in
                         if hostIsLocal writtenToLh !currentFuncAddressTakenLocalNames
                         then (
                             debug_print 1 ("Saw write to a local non-void pointer lval: " ^ (
                                 lvalToString (writtenToLh, writtenToLo)
                             ) ^ ", so updating its bounds\n")
                             ;
-                            [makeBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames
+                            (*[makeLocalBoundsWriteInstruction enclosingFile f !currentFuncAddressTakenLocalNames
                                 helperFunctions uniqtypeGlobals (writtenToLh, writtenToLo) writtenE writtenE (* <-- derivedFrom *) 
-                                localLvalToBoundsFun !currentInst !tempLoadExprs]
+                                localLvalToBoundsFun !currentInst !tempLoadExprs]*)
+                            let blv = localLvalToBoundsFun (writtenToLh, writtenToLo) in
+                            localBoundsUpdateInstrs blv writtenE boundsDescr
+                                helperFunctions (instrLoc !currentInst) enclosingFile 
+                                (pointeeUniqtypeGlobalPtr writtenE enclosingFile uniqtypeGlobals)
                         )
                         else (
                             debug_print 1 ("Saw write to a non-local pointer lval: " ^ (
                                 lvalToString (writtenToLh, writtenToLo)
                             ) ^ ", so calling out the bounds-store hook\n")
                             ;
-                            let boundsExpr = boundsDescrForExpr writtenE !currentFuncAddressTakenLocalNames
-                                localLvalToBoundsFun !tempLoadExprs enclosingFile
-                            in
                             doNonLocalPointerStoreInstr ~useVoidPP:false writtenE
                                   (pointeeUniqtypeGlobalPtr writtenE enclosingFile uniqtypeGlobals)
-                                  (writtenToLh, writtenToLo) (boundsExpr) l enclosingFile f uniqtypeGlobals helperFunctions
+                                  (writtenToLh, writtenToLo) (boundsDescr) l enclosingFile f uniqtypeGlobals helperFunctions
                         )
                     )
                     in
@@ -3040,7 +3005,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 let blv = ensureBoundsLocalLval simplifiedMemExpr boundsDescrForMemExpr theFunc boundsType
                 in
                 let boundsLoadInstrs = 
-                    boundsUpdateInstrs blv simplifiedMemExpr boundsDescrForMemExpr 
+                    localBoundsUpdateInstrs blv simplifiedMemExpr boundsDescrForMemExpr 
                         helperFunctions currentLoc enclosingFile 
                         (pointeeUniqtypeGlobalPtr simplifiedMemExpr enclosingFile uniqtypeGlobals)
                 in
@@ -3404,13 +3369,20 @@ class crunchBoundVisitor = fun enclosingFile ->
                          * then our result shouldn't need bounds at all. So it's okay to use "subex"
                          * here. *)
                             if typeNeedsBounds exprTmpVar.vtype enclosingFile
-                            then [makeBoundsWriteInstruction
+                            then (*[makeLocalBoundsWriteInstruction
                                         enclosingFile f !currentFuncAddressTakenLocalNames
                                         helperFunctions uniqtypeGlobals
                                         (* writtenToLval *) (Var(exprTmpVar), NoOffset)
                                         (* writtenE *)      realPointerExpr
                                         (* derivedFromE *)  realPointerExpr
-                                        localLvalToBoundsFun !currentInst !tempLoadExprs]
+                                        localLvalToBoundsFun !currentInst !tempLoadExprs]*)
+                                let blv = localLvalToBoundsFun (Var(exprTmpVar), NoOffset) in
+                                let boundsDescr = boundsDescrForExpr realPointerExpr
+                                    !currentFuncAddressTakenLocalNames localLvalToBoundsFun
+                                    !tempLoadExprs enclosingFile in
+                                localBoundsUpdateInstrs blv realPointerExpr boundsDescr
+                                    helperFunctions (instrLoc !currentInst) enclosingFile 
+                                    (pointeeUniqtypeGlobalPtr realPointerExpr enclosingFile uniqtypeGlobals)
                             else []
                     in
                     let prefillCacheInstrs = if castWantsCachePrefill subex targetT enclosingFile then
@@ -3433,7 +3405,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 (*(decayArrayToCompatiblePointer subexTs)*) subexTs enclosingFile uniqtypeGlobals
                             in
                             let boundsExpr = (Lval(blv)) in
-                            let preInstrs = boundsUpdateInstrs ~doFetchOol:false blv subex be 
+                            let preInstrs = localBoundsUpdateInstrs ~doFetchOol:false blv subex be 
                                   helperFunctions (instrLoc !currentInst) enclosingFile pointeeUniqtypeExpr
                             in
                             (* Cache prefill: the cast-from pointer *)

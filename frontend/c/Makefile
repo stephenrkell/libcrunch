@@ -42,6 +42,9 @@ cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs $(t)/$(t).cma)
 %.cma: %.cmo
 	$(OCAMLFIND) ocamlc -o "$@" $(OCAMLFLAGS) -a $+
 
+# extra dependencies
+shadowtest/shadowtest.cmxs: OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/shadow
+
 # for testing
 %.cil.o: %.c
 	cd "$(dir $<)" && $(CILLY) --do$$( echo $(dir $<) | tr -d '/' ) --save-temps -c -o "$(notdir $@)" "$(notdir $<)"
