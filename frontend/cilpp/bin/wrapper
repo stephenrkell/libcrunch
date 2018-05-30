@@ -46,27 +46,40 @@ run_with_replacement_infile () {
     # for gcc we only need understand the options -E -quiet -imultiarch x86_64-linux-gnu
     # ... which (1) come first, and (2) cpp *doesn't* understand.
     replacement="$1"
+    echo "Trying to replace input file given args: $@" 1>&2
     shift
     declare -a args
-    args[0]="$1"
-    ctr=1
+    args[1]="$1"
+    ctr=2
     orig_infile=""
+    must_read_arg=""
+    handle_possible_infile () {
+        if [[ -z "$orig_infile" ]]; then
+            echo "We think the input file is $1" 1>&2
+            orig_infile="$1";
+            args[$ctr]="$replacement"
+        else
+            args[$ctr]="$1"
+        fi
+    }
     while shift; do
         ctr="$(( $ctr + 1 ))"
+        if [[ -n "$must_read_arg" ]]; then
+            args[$ctr]="$1"
+            must_read_arg=""
+            continue
+        fi
         if [[ -z "$1" ]]; then continue; fi
         case "$1" in
             (-E|-quiet) ;; # skip it!
-            (-imultiarch) shift ;; # skip it and its arg!
-            (*) if [[ -z "$orig_infile" ]]; then
-                    orig_infile="$1";
-                    args[$ctr]="$replacement"
-                else
-                    args[$ctr]="$1"
-                fi
-                ;;
+            (-D|-U) must_read_arg=1; args[$ctr]="$1" ;;
+            (-imultiarch) shift || break ;; # skip it and its arg!
+            (--) no_more_options=1 ;;
+            (-*) if [[ -z "$no_more_options" ]]; then args[$ctr]="$1"; else handle_possible_infile "$1"; fi ;;
+            (*) handle_possible_infile "$1" ;;
         esac
     done
-    echo "Running + replacement infile: ${args[@]}" 1>&2
+    echo "Running + replacement infile ($replacement): ${args[@]}" 1>&2
     "${args[@]}"
 }
 
