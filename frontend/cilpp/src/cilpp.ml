@@ -65,7 +65,32 @@ let () =
        with Not_found -> []
     in
     List.iter Feature.enable features;
-    let _ = Cil.dumpFile Cil.defaultCilPrinter chan str initialCilFile
+    let currentCilFile = initialCilFile in
+    (* PASTED from CIL's main.ml:
+     * Scan all the registered features and, if they are 
+     * enabled then run them on the current file *)
+    List.iter 
+      (fun fdesc -> 
+        if fdesc.Feature.fd_enabled then begin
+          if !Errormsg.verboseFlag then 
+            ignore (Errormsg.log "Running CIL feature %s (%s)\n" 
+                      fdesc.Feature.fd_name fdesc.Feature.fd_description);
+          (* Run the feature, and see how long it takes. *)
+          Stats.time fdesc.Feature.fd_name
+            fdesc.Feature.fd_doit currentCilFile;
+          (* See if we need to do some checking *)
+          if !Cilutil.doCheck && fdesc.Feature.fd_post_check then begin
+            ignore (Errormsg.log "CIL check after %s\n" fdesc.Feature.fd_name);
+            if not (Check.checkFile [] currentCilFile) && !Cilutil.strictChecking then begin
+              Errormsg.error ("Feature \"%s\" left CIL's internal data "
+                       ^^"structures in an inconsistent state. "
+                       ^^"(See the warnings above)") fdesc.Feature.fd_name
+            end
+          end
+        end)
+      (Feature.list_registered ());
+    Cil.printerForMaincil := Cil.defaultCilPrinter;
+    let _ = Cil.dumpFile Cil.defaultCilPrinter chan str currentCilFile
     in
     (* FIXME: delete temporary file! *)
     ()
