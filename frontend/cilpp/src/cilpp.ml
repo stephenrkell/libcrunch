@@ -6,13 +6,15 @@
  *)
 open Printf
 open Unix
+open Feature
+module D = Dynlink
 external mkstemp: string -> Unix.file_descr * string = "caml_mkstemp"
 
 let () =
     let minusOPos = ref None in
     let originalOutfile = ref None in
     let (newTempFd, newTempName) = mkstemp "/tmp/tmp.XXXXXX" in
-    let newArgs = Array.mapi (fun i -> fun arg -> 
+    let rewrittenArgs = Array.mapi (fun i -> fun arg -> 
         if i = 0 then "cpp" else
         match arg with
           | "-o" -> (minusOPos := Some(i); arg)
@@ -25,6 +27,11 @@ let () =
                   | _ -> arg
           )
         ) Sys.argv
+    in
+    let newArgs = match !minusOPos with
+        None -> (* there was no -o, so add one *)
+            Array.append rewrittenArgs [| "-o"; newTempName |]
+      | Some(i) -> rewrittenArgs
     in
     (* FIXME: we have left the fd open *)
     match fork () with
@@ -48,11 +55,16 @@ let () =
     (* Okay, run CIL; we need the post-preprocessing line directive style *)
     Cil.lineDirectiveStyle := Some Cil.LinePreprocessorOutput;
     let initialCilFile = Frontc.parse newTempName () in
-    (* FIXME: do passes according to environment variables *)
     let (chan, str) = match !originalOutfile with
             None -> Pervasives.stdout, "(stdout)"
           | Some(fname) -> (Pervasives.open_out fname, fname)
     in
+    (* do passes according to environment variables *)
+    Feature.loadFromEnv "CIL_PLUGINS" [];
+    let features = try Str.split (Str.regexp "[ ,]+") (Sys.getenv "CIL_PASSES")
+       with Not_found -> []
+    in
+    List.iter Feature.enable features;
     let _ = Cil.dumpFile Cil.defaultCilPrinter chan str initialCilFile
     in
     (* FIXME: delete temporary file! *)

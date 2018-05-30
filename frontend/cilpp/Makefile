@@ -9,7 +9,7 @@ OCAMLFIND ?= ocamlfind
 CIL_INSTALL ?= $(LIBALLOCS_BASE)/tools/lang/c/cil
 CILLY ?= $(CIL_INSTALL)/bin/cilly
 
-OCAMLFLAGS +=  -package findlib -I $(CIL_INSTALL)/lib/cil
+OCAMLFLAGS +=  -package findlib -package dynlink -I $(CIL_INSTALL)/lib/cil
 OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/cilallocs #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
 
 export LIBALLOCS_BASE
