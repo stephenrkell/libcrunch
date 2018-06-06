@@ -195,3 +195,17 @@ test/bounds-va_arg/*/bounds-va_arg
 test/softbound-multi-alloc/*/softbound-multi-alloc
 test/noquery-bounds-viacache/*/noquery-bounds-viacache
 frontend/cilpp/src/cilpp
+*.backup
+frontend/c/shadowprov/gold-plugin.so
+frontend/c/shadowprov/runtime.so
+frontend/c/shadowprov/shadowprov_weak.so
+frontend/c/shadowprov/shadowtest_weak.so
+frontend/c/shadowprov/test-hello
+frontend/c/shadowprov/test-malloc
+frontend/c/shadowprov/test-retptr
+frontend/c/shadowprov/wrap.ldopts
+*orig
+stashed*
+massive.out.*
+test/*/*+*
+test/*/dump*
