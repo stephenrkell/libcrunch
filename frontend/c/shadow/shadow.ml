@@ -120,7 +120,7 @@ type shadow_load_store_origin =
 
 type shadow_for_expr = 
     ShadowLocalLval of lval
-  | ShadowFreshFromRvals of Cil.exp list
+  | ShadowMakeFromRvals of Cil.exp list
   | ShadowFetch of shadow_load_store_origin
 
 let rec reverseMapOverInitializedLvalues revAcc f lhost lofflist (someInit : Cil.init option) someLocation = 
@@ -214,11 +214,25 @@ class helperFunctionsRecord = object(self)
     method getFetchAndPushResultShadow (_:unit) = fetchAndPushResultShadow
     method getPeekResultShadow (_:unit) = peekResultShadow
     method getCleanupShadowStack (_:unit) = cleanupShadowStack
+    
+    method initializeFromFile f =
+        pushLocalArgumentShadow <- findFunOrFail "__push_local_argument_shadow" f.globals;
+        pushArgumentShadowManifest <- findFunOrFail "__push_argument_shadow_manifest" f.globals;
+        fetchAndPushArgumentShadow <- findFunOrFail "__fetch_and_push_argument_shadow" f.globals;
+        pushArgumentShadowCookie <- findFunOrFail "__push_argument_shadow_cookie" f.globals;
+        tweakArgumentShadowCookie <- findFunOrFail "__tweak_argument_shadow_cookie" f.globals;
+        peekArgumentShadow <- findFunOrFail "__peek_argument_shadow" f.globals;
+        peekAndShadowStoreArgumentShadow <- findFunOrFail "__peek_and_shadow_store_argument_shadow" f.globals;
+        pushLocalResultShadow <- findFunOrFail "__push_local_result_shadow" f.globals;
+        pushResultShadowManifest <- findFunOrFail "__push_result_shadow_manifest" f.globals;
+        fetchAndPushResultShadow <- findFunOrFail "__fetch_and_push_result_shadow" f.globals;
+        peekResultShadow <- findFunOrFail "__peek_result_shadow" f.globals
 end
 
 class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             fun (primitiveTypeIsShadowed : Cil.typ -> bool)(* function *) ->
                             fun shadowCompName ->
+                            fun opaqueShadowableT -> (* see note in shadowprov_helpers.h __shadowed_value_t *)
                             fun helperHeaderNames ->
                             fun makeCallToMakeShadow ->
                             fun (makeCallToFetchShadow : lval -> shadow_load_store_origin -> Cil.exp -> Cil.location -> Cil.instr list) ->
@@ -235,9 +249,15 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         Cil.exp (* e *) ->
         shadow_for_expr
 
-    method varIsOurs vi = stringStartsWith vi.vname "__liballocs_" 
-                 || stringStartsWith vi.vname "__libcrunch_" 
-                  || (List.fold_left (fun acc -> fun x -> acc || stringEndsWith vi.vdecl.file x) false helperHeaderNames)
+    method varIsOurs vi =
+        let result =
+        stringStartsWith vi.vname "__liballocs_"
+         || stringStartsWith vi.vname "__libcrunch_"
+          || (List.fold_left (fun acc -> fun x -> acc || stringEndsWith vi.vdecl.file x) 
+                false helperHeaderNames)
+        in
+        if result then debug_print 1 ("Skipping our own varinfo " ^ vi.vname ^ "\n") else ();
+        result
 
     val currentInst : instr option ref = ref None
     val currentFunc : fundec option ref = ref None
@@ -498,7 +518,8 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
          in
          let newLocalVi = match !currentFunc with
             Some(f) -> Cil.makeTempVar f ~name:(("__cil_local" ^ shadowString ^ "_") ^ vi.vname ^ "_") bt
-          | None -> failwith "making shadow local when not inside a function"
+          | None -> failwith ("making shadow local when not inside a function; " ^
+                "location is (file: " ^ (instrLoc !currentInst).file ^ ", line: " ^ (string_of_int (instrLoc !currentInst).line) ^ ")")
          in
          let newShadowLocalsMap = (VarinfoMap.add vi newLocalVi !shadowLocals)
          in
@@ -588,13 +609,14 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                     self#getStoredShadowableLvalForPtrExp subE
             | _ -> None
 
-    method ensureShadowLocalLval ptrExpr shadowDescrForPtrExpr =
+    method ensureShadowLocalLval (ptrExpr : Cil.exp) (shadowDescrForPtrExpr: shadow_for_expr) : Cil.lval =
         match !currentFunc with
-            None -> failwith "making shadow local when not inside function"
+            None -> failwith ("making shadow local when not inside a function; " ^
+                "location is (file: " ^ (instrLoc !currentInst).file ^ ", line: " ^ (string_of_int (instrLoc !currentInst).line) ^ ")")
           | Some(f) ->
         match shadowDescrForPtrExpr with
             ShadowLocalLval(blv) -> blv
-          | ShadowFreshFromRvals(_)
+          | ShadowMakeFromRvals(_)
              -> let bTemp = Cil.makeTempVar f ~name:("__cil_" ^ shadowString ^ "rv_") shadowType
                 in
                 (Var(bTemp), NoOffset)
@@ -607,7 +629,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
 
     method localShadowUpdateInstrs slv valE shadowDescr loc = 
         match shadowDescr with
-            ShadowFreshFromRvals(exprs) ->
+            ShadowMakeFromRvals(exprs) ->
                 [makeCallToMakeShadow (Some(slv)) exprs valE loc]
           | ShadowLocalLval(otherSlv) ->
                 (* avoid cyclic comparison *)
@@ -725,11 +747,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
          * If we turn makeInvalidShadowFun into a make-invalid-or-fetch-fast?
          * THEN must distinguish makeInvalid from receiveArg
          *)
-        let slv = self#ensureShadowLocalLval valE sd
-        in
-        let (shadowExpr, preInstrs) = (Lval(slv), self#localShadowUpdateInstrs slv valE sd l)
-        in
-        preInstrs @ self#makeStoreHelperCall shadowExpr storeLv sd l
+        self#makeStoreHelperCall valE storeLv sd l
 
     method makeShadowSpaceInitializerCalls (initializerLocation: Cil.location) initializedShadowableLv initializationValExpr : Cil.instr list =
         (* The instructions we need to generate are like doNonLocalShadowableStoreInstr,
@@ -744,6 +762,10 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
             sd initializerLocation
 
     method prependShadowSpaceInitializer initializerLocation (initializedShadowableLv: Cil.lval) (maybeInitializationValExpr: Cil.exp option) =
+        match !currentFunc with
+            Some(_) -> failwith "doing initializer while also instrumenting function"
+          | None -> begin
+        currentFunc := Some(initFunc);
         let instrsToPrepend = match maybeInitializationValExpr with
             Some(initializationValExpr) ->
                 self#makeShadowSpaceInitializerCalls initializerLocation
@@ -763,6 +785,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 succs = [];
                 preds = []
             }]}
+        ;
+        currentFunc := None
+        end
 
     initializer
         (* Create a constructor function to hold the shadow write instructions
@@ -770,6 +795,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
          * we deliberately avoid using because CIL wants to put the call to it
          * in main(), which would be silly... we should use constructors instead. *)
         begin
+            helperFunctions#initializeFromFile enclosingFile;
             initFunc.svar <- findOrCreateFunc enclosingFile ("__libcrunch_crunch" ^ shadowString ^ "_init" )
                 (TFun(TVoid([]), Some([]), false, [Attr("constructor", [AInt(101)])]))
                 ;
@@ -848,12 +874,12 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 ],
                                 loc
                                 )
-                          | ShadowFreshFromRvals(ses) ->
+                          | ShadowMakeFromRvals(ses) ->
                                 Call( None,
                                 (Lval(Var((helperFunctions#getPushResultShadowManifest ()).svar),NoOffset)),
                                 [
                                     Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
-                                    valExp
+                                    CastE(opaqueShadowableT, valExp)
                                 ] @ ses,
                                 loc
                                 )
@@ -900,7 +926,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                     in
                     s.skind <- If(
                                 testForUninstCallerExpression, 
-                                (* true  *) mkReturnNoShadowBlock rs shadowReturnInstrList,
+                                (* true  *) mkReturnNoShadowBlock rs [] (* HMM; why did this use to say shadowReturnInstrList? *),
                                 (* false *) mkReturnShadowBlock rs shadowReturnInstrList,
                             loc);
                     s
@@ -961,7 +987,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
             ^ "]\n"));
         currentFuncAddressTakenLocalNames := !tempAddressTakenLocalNames
         ;
-        (* Don't instrument our own (liballocs/libcrunch) functions that get -include'd. *)
+        (* Don't instrument our own helper functions that get -include'd. *)
         if self#varIsOurs f.svar then (currentFunc := None; currentFuncCallerIsInstFlag := None; SkipChildren)
         else
         let currentFuncCallerIsInstFlagVar = Cil.makeTempVar f ~name:"__caller_is_inst_" boolType
@@ -1000,10 +1026,10 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
              * So we need to make a call to a helper.
              * We unroll all these calls. *)
             (* We reverse the formals, to generate an r-to-l order just like the caller
-             * uses. Then we reverse the whole lot, because we're popping not pushing. 
+             * uses. Then we reverse the whole lot, because we're popping not pushing.
              * Complication: actually we're peeking. So what offset are we peeking at?
              * The concatMapBlahBlah function doesn't give us what we want because it
-             * only does offsets within a single argument. Instead, abstract over the 
+             * only does offsets within a single argument. Instead, abstract over the
              * offset and then assign when we have the whole list. *)
             let (getFunForOne : Cil.exp -> shadow_for_expr -> Cil.exp -> int -> Cil.instr) = fun valExp -> fun shadowExp -> fun offsetExp ->
                 match shadowExp with
@@ -1018,7 +1044,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                   cookie -- the inline function has to do it, because
                                   shadows are not necessarily single words in size. *)
                                 (*  const void *ptr, the pointer value (for makeInvalidShadow) *)
-                                valExp;
+                                CastE(opaqueShadowableT, valExp);
                                 Const(CStr((expToString valExp) ^ ", offset " ^ (expToCilString offsetExp)))
                             ],
                             svar.vdecl (* loc *)
@@ -1036,7 +1062,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                   cookie -- the inline function has to do it, because
                                   shadows are not necessarily single words in size. *);
                                 (*  const void *ptr, the pointer value (for makeInvalidShadow) *)
-                                valExp;
+                                CastE(opaqueShadowableT, valExp);
                                 descriptorExprForShadowableExpr valExp;
                                 (* the debugging string for the shadow stack tracer *)
                                 Const(CStr((expToString valExp) ^ ", offset " ^ (expToCilString offsetExp)))
@@ -1072,8 +1098,195 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 } :: f.sbody.bstmts
             }
             ;
-            ChangeDoChildrenPost(f, fun x -> currentFunc := None; currentFuncCallerIsInstFlag := None; x)
+            ChangeDoChildrenPost(f, fun x -> currentFunc := None;
+                currentFuncCallerIsInstFlag := None; 
+                debug_print 1 ("Finished instrumenting call to " ^ f.svar.vname ^ "\n");
+                x)
         )
+        
+    method rewriteCall olv calledE es l changedInstrs =
+        let f = match !currentFunc with
+            Some(af) -> af
+          | None -> failwith "instruction outside function"
+        in
+        let passesShadows = List.fold_left (fun acc -> fun argExpr -> 
+            acc || (* isNonVoidPointerType (Cil.typeOf argExpr) *)
+                       not (list_empty (self#containedShadowedPrimitiveExprsForExpr argExpr))
+        ) false es
+        in      
+        let returnsShadows = match olv with Some(lv) -> 
+            (* isNonVoidPointerType (Cil.typeOf (Lval(lv))) *)
+            not (list_empty (self#containedShadowedPrimitiveExprsForExpr (Lval(lv))))
+          | None -> false
+        in
+        let realCalledE, newChangedInstrs = (* OVERRIDEME: pure helper callees *)(calledE, changedInstrs)
+        in            
+        let shadowSpExpr = match findGlobalVarInFile "__shadow_sp" enclosingFile with
+                    Some(sspv) -> Lval(Var(sspv), NoOffset)
+                  | None -> failwith "internal error: did not find shadow stack pointer"
+        in
+        let (maybeSavedShadowStackPtr, shadowSaveInstrs)
+         = if passesShadows || returnsShadows then 
+            let vi = Cil.makeTempVar f ~name:"__shadow_stack_ptr" ulongPtrType
+            in
+            (Some(vi), [Set((Var(vi), NoOffset), shadowSpExpr, instrLoc !currentInst)])
+            else (None, [])
+        in
+        begin
+            let shadowPassInstructions = if (not passesShadows) then [] else (
+                let callForOneOffset valExpr shadowExpr offsetExpr = 
+                    debug_print 1 ("Pushing shadow for shadowable-contained-in-argument expr " ^ (expToString valExpr) ^ "\n");
+                    match shadowExpr with
+                        ShadowLocalLval(slv) -> 
+                            Call( None,
+                            (Lval(Var((helperFunctions#getPushLocalArgumentShadow ()).svar),NoOffset)),
+                            [
+                                Lval(slv)
+                            ],
+                            instrLoc !currentInst
+                            )
+                      | ShadowMakeFromRvals(ses) ->
+                            Call( None,
+                            (Lval(Var((helperFunctions#getPushArgumentShadowManifest ()).svar),NoOffset)),
+                            [
+                                CastE(opaqueShadowableT, valExpr)
+                            ] @ ses,
+                            instrLoc !currentInst
+                            )
+                      | ShadowFetch(LoadedFrom(lh,lo)) ->
+                            Call( None,
+                            (Lval(Var((helperFunctions#getFetchAndPushArgumentShadow ()).svar),NoOffset)),
+                            [
+                                CastE(opaqueShadowableT, valExpr);
+                                mkAddrOf (lh,lo);
+                                descriptorExprForShadowableExpr valExpr
+                            ],
+                            instrLoc !currentInst
+                            )
+                      | ShadowFetch(_) ->
+                            Call( None,
+                            (Lval(Var((helperFunctions#getFetchAndPushArgumentShadow ()).svar),NoOffset)),
+                            [
+                                CastE(opaqueShadowableT, valExpr);
+                                nullPtr;
+                                descriptorExprForShadowableExpr valExpr
+                            ],
+                            instrLoc !currentInst
+                            )
+                in
+                self#concatMapForAllShadowsInExprList callForOneOffset
+                    (let l = (List.rev es) (* push r to l! *) in
+                    List.filter (fun e -> self#typeNeedsShadow (Cil.typeOf e)) l)
+            )
+            in
+            let cookieStackAddrVar = ref None
+            in
+            let calleeLval = match realCalledE with
+                        Lval(lv) -> lv
+                      | _ -> failwith "internal error: calling a non-lvalue"
+            in
+            let shadowPushCookieInstructions = 
+                if passesShadows || returnsShadows then (
+                let spVar = Cil.makeTempVar f ~name:"__cookie_stackaddr" ulongPtrType
+                in
+                spVar.vattr <- [Attr("unused", [])];
+                cookieStackAddrVar := Some(spVar);
+                [Call(None, 
+                    Lval(Var((helperFunctions#getPushArgumentShadowCookie ()).svar), NoOffset),
+                    [
+                        CastE(voidConstPtrType, mkAddrOf calleeLval);
+                        Const(CStr(expToString calledE))
+                    ], instrLoc !currentInst
+                 );
+                 (* also remember the cookie stackaddr *)
+                 Set((Var(spVar), NoOffset), shadowSpExpr, instrLoc !currentInst)
+                ]
+                ) else []
+            in
+            let returnShadowPeekOrStoreInstructions = 
+              (* OVERRIDEME: pure helper*) (
+              match olv with
+                None -> []
+              | Some(lhost, loff) -> (
+                    let writeOneLocal shadowLval valExpr _ offsetExpr = 
+                    [Call(
+                        Some(shadowLval),
+                        (Lval(Var((helperFunctions#getPeekResultShadow ()).svar),NoOffset)),
+                        [
+                            (* really? only if *)
+                            (match !cookieStackAddrVar with
+                                Some(vi) ->
+                                    BinOp(Ne, Lval(Mem(Lval(Var(vi), NoOffset)), NoOffset),
+                                        CastE(ulongType, mkAddrOf calleeLval), boolType)
+                              | None -> failwith "error: no saved shadow stack pointer for cookie"
+                            )
+                              ;
+                            (* offset? *)
+                            offsetExpr; 
+                            (*  const void *ptr *)
+                            CastE(opaqueShadowableT, valExpr) (* Lval(lhost, loff) *);
+                            Const(CStr("call to " ^ (expToString calledE)))
+                        ],
+                        instrLoc !currentInst
+                    )]
+                    in
+                    let callsForOneLocal valExpr blah offsetExpr = 
+                        writeOneLocal (self#shadowLvalForLocalLval (lhost, loff)) valExpr blah offsetExpr
+                    in
+                    let callsForOneNonLocal valExpr blah offsetExpr =
+                        let svi = Cil.makeTempVar f ~name:"__shadow_return_" shadowType
+                        in
+                        let lvExpr = (Lval(lhost, loff)) in
+                        (* write to a local temp, then do the shadow-space store *)
+                        (writeOneLocal (Var(svi), NoOffset) valExpr blah offsetExpr) @ (
+                         self#doNonLocalShadowableStoreInstr
+                            (* shadowable value *) lvExpr
+                            (* where it's been/being stored *) (lhost, loff)
+                            (* its shadow *) (ShadowLocalLval(Var(svi), NoOffset))
+                            (instrLoc !currentInst)
+                        )
+                    in
+                    if not (list_empty (self#containedShadowedPrimitiveExprsForExpr (Lval(lhost, loff))))
+                    then (
+                        debug_print 1 ("Saw call writing to [one or more] shadowable lval: " ^ (
+                            lvalToString (lhost, loff)
+                        ) ^ "\n")) else ();
+                    let instrFunc = if self#hostIsLocal lhost
+                        then (
+                            debug_print 1 "Local, so updating/invalidating its shadow.\n";
+                            callsForOneLocal
+                        ) else (
+                            debug_print 1 "Host is not local\n";
+                            callsForOneNonLocal
+                        )
+                    in
+                    (* we're popping/peeking, so reverse *)
+                    List.flatten (List.rev (self#mapForAllShadowsInExpr instrFunc (Lval(lhost, loff))))
+                )
+            )
+         in
+            let shadowCleanupInstructions = (
+                if passesShadows || returnsShadows then (
+                  match maybeSavedShadowStackPtr with
+                    Some(spvi) -> [Call( None,
+                                    (Lval(Var((helperFunctions#getCleanupShadowStack ()).svar),NoOffset)),
+                                    [
+                                        (* ptr *)
+                                        Lval(Var(spvi), NoOffset)
+                                    ],
+                                    (instrLoc !currentInst)
+                                    )]
+                  | None -> failwith "internal error: didn't save shadow stack pointer"
+                ) else []
+            )
+            in
+            shadowSaveInstrs @ 
+                shadowPassInstructions @ 
+                shadowPushCookieInstructions @
+                newChangedInstrs @ 
+                returnShadowPeekOrStoreInstructions @ 
+                shadowCleanupInstructions
+    end
 
   method vinst (outerI: instr) : instr list visitAction = begin
     currentInst := Some(outerI); (* used from vexpr *)
@@ -1089,253 +1302,78 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
          *)
         let finalI = List.nth changedInstrs ((List.length changedInstrs) - 1)
         in
-        let _ = begin match (finalI, outerI) with
+        let _ = match (finalI, outerI) with
             (Set(_, _, _), Set(_, _, _)) -> ()
            | (Call(_, _, _, _), Call(_, _, _, _)) -> ()
            | (Asm(_, _, _, _, _, _), Asm(_, _, _, _, _, _)) -> ()
            | _ -> failwith "internal: outerI did not match finalI"
-        end
         in
-        let instrsPlusShadowUpdates = begin
-            let f = match !currentFunc with
-                Some(af) -> af
-              | None -> failwith "instruction outside function"
-            in
-            match finalI with
-                Set((lhost, loff), e, l) ->
-                    let containedShadowedLvsL = List.map (fun e -> match e with
-                        Lval(lh, lo) -> (lh, lo)
-                      | _ -> failwith "impossible: lval yielded non-lv"
-                    ) (self#containedShadowedPrimitiveExprsForExpr (Lval(lhost, loff)))
+        let instrsPlusShadowUpdates = match finalI with
+            Set((lhost, loff), e, l) ->
+                let containedShadowedLvsL = List.map (fun e -> match e with
+                    Lval(lh, lo) -> (lh, lo)
+                  | _ -> failwith "impossible: lval yielded non-lv"
+                ) (self#containedShadowedPrimitiveExprsForExpr (Lval(lhost, loff)))
+                in
+                let containedShadowedExprsR = self#containedShadowedPrimitiveExprsForExpr e
+                in
+                let shadowableAssignments = List.combine containedShadowedLvsL containedShadowedExprsR
+                in
+                let getInstrsToPrepend ((writtenToLh, writtenToLo), writtenE) : instr list = (
+                    (* We might be writing one or more shadowables on the lhs. 
+                     *      If we're keeping a shadow, we need to write some shadow value.
+                     *      Sometimes we have to fetch it;
+                     *      Sometimes we can copy it;
+                     *      Sometimes we can *create* it ... depending on rules
+                     *)
+                    let shadowDescr = self#shadowDescrForExpr writtenE
                     in
-                    let containedShadowedExprsR = self#containedShadowedPrimitiveExprsForExpr e
-                    in
-                    let shadowableAssignments = List.combine containedShadowedLvsL containedShadowedExprsR
-                    in
-                    let getInstrsToPrepend ((writtenToLh, writtenToLo), writtenE) : instr list = (
-                        (* We might be writing one or more shadowables on the lhs. 
-                         *      If we're keeping a shadow, we need to write some shadow value.
-                         *      Sometimes we have to fetch it;
-                         *      Sometimes we can copy it;
-                         *      Sometimes we can *create* it ... depending on rules
-                         *)
-                        let shadowDescr = self#shadowDescrForExpr writtenE
-                        in
-                        if self#hostIsLocal writtenToLh
-                        then (
-                            debug_print 1 ("Saw write to a local non-void pointer lval: " ^ (
-                                lvalToString (writtenToLh, writtenToLo)
-                            ) ^ ", so updating its shadow\n")
-                            ;
-                            self#localShadowUpdateInstrs (self#shadowLvalForLocalLval (writtenToLh, writtenToLo))
-                                writtenE shadowDescr (instrLoc !currentInst)
-                        )
-                        else (
-                            debug_print 1 ("Saw write to a non-local shadowable lval: " ^ (
-                                lvalToString (writtenToLh, writtenToLo)
-                            ) ^ ", so calling out the shadow-store hook\n")
-                            ;
-                            self#doNonLocalShadowableStoreInstr writtenE
-                                  (writtenToLh, writtenToLo) shadowDescr (instrLoc !currentInst)
-                        )
+                    if self#hostIsLocal writtenToLh
+                    then (
+                        debug_print 1 ("Saw write to a local non-void pointer lval: " ^ (
+                            lvalToString (writtenToLh, writtenToLo)
+                        ) ^ ", so updating its shadow\n")
+                        ;
+                        self#localShadowUpdateInstrs (self#shadowLvalForLocalLval (writtenToLh, writtenToLo))
+                            writtenE shadowDescr (instrLoc !currentInst)
                     )
-                    in
-                    let instrsToPrepend = List.flatten (List.map getInstrsToPrepend shadowableAssignments)
-                    @
-                    (if (*!voidPtrHasShadow*) true then []
-                    else (* OVERRIDEME *) [] )
-                    (* This is a non-local write of a void* value. Problem: it may actually
-                     * be storing to a non-void*-holding lvalue, i.e. one that should have
-                     * shadow. We need to store something; doing nothing risks leaving stale
-                     * shadow behind. We'd like to store the shadow appropriate for the type it
-                     * *will* be used at, but can't predict this; as a "safe" default, we can
-                     * store invalid shadow. *)
-                    in begin
-                    debug_print 1 "Queueing some instructions\n";
-                    instrsToPrepend @ changedInstrs (* @ instrsToAppend *)
-                    end
-              | Call(olv, calledE, es, l) -> 
-                  (* Don't instrument calls to our own (liballocs/libcrunch) functions that get -include'd. *)
-                  (* Also don't instrument calls to __builtin_va_arg. *)
-                  if (match calledE with Lval(Var(fvi), NoOffset)
-                   when (self#varIsOurs fvi || fvi.vname = "__builtin_va_arg") -> true
-                    | _ -> false)
-                  then changedInstrs
-                  else
-                    let passesShadows = List.fold_left (fun acc -> fun argExpr -> 
-                        acc || (* isNonVoidPointerType (Cil.typeOf argExpr) *)
-                                   not (list_empty (self#containedShadowedPrimitiveExprsForExpr argExpr))
-                    ) false es
-                    in      
-                    let returnsShadows = match olv with Some(lv) -> 
-                        (* isNonVoidPointerType (Cil.typeOf (Lval(lv))) *)
-                        not (list_empty (self#containedShadowedPrimitiveExprsForExpr (Lval(lv))))
-                      | None -> false
-                    in
-                    let realCalledE, newChangedInstrs = (* OVERRIDEME: pure helper callees *)(calledE, changedInstrs)
-                    in            
-                    let shadowSpExpr = match findGlobalVarInFile "__shadow_sp" enclosingFile with
-                                Some(sspv) -> Lval(Var(sspv), NoOffset)
-                              | None -> failwith "internal error: did not find shadow stack pointer"
-                    in
-                    let (maybeSavedShadowStackPtr, shadowSaveInstrs)
-                     = if passesShadows || returnsShadows then 
-                        let vi = Cil.makeTempVar f ~name:"__shadow_stack_ptr" ulongPtrType
-                        in
-                        (Some(vi), [Set((Var(vi), NoOffset), shadowSpExpr, instrLoc !currentInst)])
-                        else (None, [])
-                    in
-                    begin
-                        let shadowPassInstructions = if (not passesShadows) then [] else (
-                            let callForOneOffset valExpr shadowExpr offsetExpr = 
-                                debug_print 1 ("Pushing shadow for shadowable-contained-in-argument expr " ^ (expToString valExpr) ^ "\n");
-                                match shadowExpr with
-                                    ShadowLocalLval(slv) -> 
-                                        Call( None,
-                                        (Lval(Var((helperFunctions#getPushLocalArgumentShadow ()).svar),NoOffset)),
-                                        [
-                                            Lval(slv)
-                                        ],
-                                        instrLoc !currentInst
-                                        )
-                                  | ShadowFreshFromRvals(ses) ->
-                                        Call( None,
-                                        (Lval(Var((helperFunctions#getPushArgumentShadowManifest ()).svar),NoOffset)),
-                                        [
-                                            valExpr
-                                        ] @ ses,
-                                        instrLoc !currentInst
-                                        )
-                                  | ShadowFetch(LoadedFrom(lh,lo)) ->
-                                        Call( None,
-                                        (Lval(Var((helperFunctions#getFetchAndPushArgumentShadow ()).svar),NoOffset)),
-                                        [
-                                            valExpr;
-                                            mkAddrOf (lh,lo);
-                                            descriptorExprForShadowableExpr valExpr
-                                        ],
-                                        instrLoc !currentInst
-                                        )
-                                  | ShadowFetch(_) ->
-                                        Call( None,
-                                        (Lval(Var((helperFunctions#getFetchAndPushArgumentShadow ()).svar),NoOffset)),
-                                        [
-                                            valExpr;
-                                            nullPtr;
-                                            descriptorExprForShadowableExpr valExpr
-                                        ],
-                                        instrLoc !currentInst
-                                        )
-                            in
-                            self#concatMapForAllShadowsInExprList callForOneOffset (List.rev es) (* push r to l! *)
-                        )
-                        in
-                        let cookieStackAddrVar = ref None
-                        in
-                        let calleeLval = match realCalledE with
-                                    Lval(lv) -> lv
-                                  | _ -> failwith "internal error: calling a non-lvalue"
-                        in
-                        let shadowPushCookieInstructions = 
-                            if passesShadows || returnsShadows then (
-                            let spVar = Cil.makeTempVar f ~name:"__cookie_stackaddr" ulongPtrType
-                            in
-                            spVar.vattr <- [Attr("unused", [])];
-                            cookieStackAddrVar := Some(spVar);
-                            [Call(None, 
-                                Lval(Var((helperFunctions#getPushArgumentShadowCookie ()).svar), NoOffset),
-                                [CastE(voidConstPtrType, mkAddrOf calleeLval)], instrLoc !currentInst);
-                             (* also remember the cookie stackaddr *)
-                             Set((Var(spVar), NoOffset), shadowSpExpr, instrLoc !currentInst)
-                            ]
-                            ) else []
-                        in
-                        let returnShadowPeekOrStoreInstructions = 
-                          (* OVERRIDEME: pure helper*) (
-                          match olv with
-                            None -> []
-                          | Some(lhost, loff) -> (
-                                let writeOneLocal shadowLval valExpr _ offsetExpr = 
-                                [Call(
-                                    Some(shadowLval),
-                                    (Lval(Var((helperFunctions#getPeekResultShadow ()).svar),NoOffset)),
-                                    [
-                                        (* really? only if *)
-                                        (match !cookieStackAddrVar with
-                                            Some(vi) ->
-                                                BinOp(Ne, Lval(Mem(Lval(Var(vi), NoOffset)), NoOffset),
-                                                    CastE(ulongType, mkAddrOf calleeLval), boolType)
-                                          | None -> failwith "error: no saved shadow stack pointer for cookie"
-                                        )
-                                          ;
-                                        (* offset? *)
-                                        offsetExpr; 
-                                        (*  const void *ptr *)
-                                        valExpr (* Lval(lhost, loff) *);
-                                        Const(CStr("call to " ^ (expToString calledE)))
-                                    ],
-                                    instrLoc !currentInst
-                                )]
-                                in
-                                let callsForOneLocal valExpr blah offsetExpr = 
-                                    writeOneLocal (self#shadowLvalForLocalLval (lhost, loff)) valExpr blah offsetExpr
-                                in
-                                let callsForOneNonLocal valExpr blah offsetExpr =
-                                    let svi = Cil.makeTempVar f ~name:"__shadow_return_" shadowType
-                                    in
-                                    let lvExpr = (Lval(lhost, loff)) in
-                                    (* write to a local temp, then do the shadow-space store *)
-                                    (writeOneLocal (Var(svi), NoOffset) valExpr blah offsetExpr) @ (
-                                     self#doNonLocalShadowableStoreInstr
-                                        (* shadowable value *) lvExpr
-                                        (* where it's been/being stored *) (lhost, loff)
-                                        (* its shadow *) (ShadowLocalLval(Var(svi), NoOffset))
-                                        (instrLoc !currentInst)
-                                    )
-                                in
-                                if not (list_empty (self#containedShadowedPrimitiveExprsForExpr (Lval(lhost, loff))))
-                                then (
-                                    debug_print 1 ("Saw call writing to [one or more] shadowable lval: " ^ (
-                                        lvalToString (lhost, loff)
-                                    ) ^ "\n")) else ();
-                                let instrFunc = if self#hostIsLocal lhost
-                                    then (
-                                        debug_print 1 "Local, so updating/invalidating its shadow.\n";
-                                        callsForOneLocal
-                                    ) else (
-                                        debug_print 1 "Host is not local\n";
-                                        callsForOneNonLocal
-                                    )
-                                in
-                                (* we're popping/peeking, so reverse *)
-                                List.flatten (List.rev (self#mapForAllShadowsInExpr instrFunc (Lval(lhost, loff))))
-                            )
-                        )
-                     in
-                        let shadowCleanupInstructions = (
-                            if passesShadows || returnsShadows then (
-                              match maybeSavedShadowStackPtr with
-                                Some(spvi) -> [Call( None,
-                                                (Lval(Var((helperFunctions#getCleanupShadowStack ()).svar),NoOffset)),
-                                                [
-                                                    (* ptr *)
-                                                    Lval(Var(spvi), NoOffset)
-                                                ],
-                                                (instrLoc !currentInst)
-                                                )]
-                              | None -> failwith "internal error: didn't save shadow stack pointer"
-                            ) else []
-                        )
-                        in
-                        shadowSaveInstrs @ 
-                            shadowPassInstructions @ 
-                            shadowPushCookieInstructions @
-                            newChangedInstrs @ 
-                            returnShadowPeekOrStoreInstructions @ 
-                            shadowCleanupInstructions
+                    else (
+                        debug_print 1 ("Saw write to a non-local shadowable lval: " ^ (
+                            lvalToString (writtenToLh, writtenToLo)
+                        ) ^ ", so calling out the shadow-store hook\n")
+                        ;
+                        self#doNonLocalShadowableStoreInstr writtenE
+                              (writtenToLh, writtenToLo) shadowDescr (instrLoc !currentInst)
+                    )
+                )
+                in
+                let instrsToPrepend = List.flatten (List.map getInstrsToPrepend shadowableAssignments)
+                @
+                (if (*!voidPtrHasShadow*) true then []
+                else (* OVERRIDEME *) [] )
+                (* This is a non-local write of a void* value. Problem: it may actually
+                 * be storing to a non-void*-holding lvalue, i.e. one that should have
+                 * shadow. We need to store something; doing nothing risks leaving stale
+                 * shadow behind. We'd like to store the shadow appropriate for the type it
+                 * *will* be used at, but can't predict this; as a "safe" default, we can
+                 * store invalid shadow. *)
+                in begin
+                debug_print 1 "Queueing some instructions\n";
+                instrsToPrepend @ changedInstrs (* @ instrsToAppend *)
                 end
-              | (* Asm(attrs, instrs, locs, u, v, l) -> *) _ -> changedInstrs
-        end (* let instrsWithCachedShadowUpdates = begin ... *)
+          | Call(olv, calledE, es, l) ->
+              (* Don't instrument calls to our own (liballocs/libcrunch) functions that get -include'd. *)
+              (* Also don't instrument calls to __builtin_va_arg (or any builtin?). *)
+              begin match calledE with 
+                Lval(Var(fvi), NoOffset) when (self#varIsOurs fvi || stringStartsWith fvi.vname "__builtin_") ->
+                    let _ = debug_print 1 ("Not instrumenting call to " ^ fvi.vname ^ "\n") in changedInstrs
+                | Lval(Var(fvi), NoOffset) ->
+                    let _ = debug_print 1 ("Instrumenting simple call to " ^ fvi.vname ^ " (vdecl filename: " ^ fvi.vdecl.file ^ ")\n") in
+                    self#rewriteCall olv calledE es l changedInstrs
+                | _ -> self#rewriteCall olv calledE es l changedInstrs
+              end
+          | (* Asm(attrs, instrs, locs, u, v, l) -> *) _ -> changedInstrs
+        (* end match finalI *)
         in instrsPlusShadowUpdates
   ) (* end ChangeDoChildrenPost *)
   end

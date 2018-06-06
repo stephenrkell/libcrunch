@@ -24,17 +24,18 @@ LIBALLOCS_BASE ?= $(realpath $(LIBALLOCS))
 OCAMLFIND ?= ocamlfind
 CIL_INSTALL ?= $(LIBALLOCS_BASE)/tools/lang/c/cil
 CILLY ?= $(CIL_INSTALL)/bin/cilly
-CIL_TOOLS := trumptr vsimplemem vsimpleaddr crunchbound dumpreftypes ptrintarith
+CIL_TOOLS := trumptr vsimplemem vsimpleaddr crunchbound dumpreftypes ptrintarith shadow shadowprov
 OCAMLFLAGS +=  -package findlib -I $(CIL_INSTALL)/lib/cil
 OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/cilallocs #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
+OCAMLFLAGS += -g
 
-default: src lib cil sanity-tests
+default: src lib cil sanity-tests shadowprov/shadowprov_weak.so
 
 .PHONY: cil
 cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs $(t)/$(t).cma)
 
 %.cmxs: %.cmx 
-	$(OCAMLFIND) ocamlopt -shared -o "$@" $(OCAMLOPTFLAGS) $(OCAMLFLAGS) $+
+	$(OCAMLFIND) ocamlopt -shared -o "$@" $(OCAMLOPTFLAGS) $(OCAMLFLAGS) "$<"
 %.cmx %.cmi: %.ml
 	$(OCAMLFIND) ocamlopt -o "$@" $(OCAMLOPTFLAGS) $(OCAMLFLAGS) -c "$<"
 %.cmo %.cmi: %.ml
@@ -43,7 +44,15 @@ cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs $(t)/$(t).cma)
 	$(OCAMLFIND) ocamlc -o "$@" $(OCAMLFLAGS) -a $+
 
 # extra dependencies
-shadowtest/shadowtest.cmxs: OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/shadow
+shadowprov/shadowprov.cmxs shadowprov/shadowprov.cma shadowprov/shadowprov.cmx: \
+    OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/shadow
+shadowprov/shadowprov.cmxs: shadow/shadow.cmxs
+
+# tool-specific mini-runtime
+shadowprov/shadowprov_weak.so: shadowprov/shadowprov_rtdecls.h
+	$(CC) -fPIC -shared -g -o "$@" -x c shadowprov/shadowprov_rtdecls.h -x none \
+        -Wl,-rpath,$(realpath $(dir $(THIS_MAKEFILE))/../../lib) \
+        $(realpath $(dir $(THIS_MAKEFILE))/../../lib)/libcrunch_stubs.so
 
 # for testing
 %.cil.o: %.c
@@ -55,7 +64,7 @@ clean:
 
 .PHONY: sanity-tests
 sanity-tests: | src lib cil
-	$(MAKE) -C ../../test FRONTEND=c cleanrun-hello cleanrun-hello-errno cleanrun-hello-static cleanrun-hello-stack cleanrun-hello-heap
+	$(MAKE) -C ../../test FRONTEND=c CONFIG=default cleanrun-hello cleanrun-hello-errno cleanrun-hello-static cleanrun-hello-stack cleanrun-hello-heap
 
 .PHONY: src
 src:
