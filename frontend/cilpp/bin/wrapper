@@ -7,6 +7,14 @@
 # NOTE: this whole thing is necessary only because the driver
 # does not want to run `cpp' ever... it uses cc1 -E.
 
+debug_print () {
+    lvl="$1"
+    shift
+    if [[ "$DEBUG_CC" -ge $lvl ]]; then
+        echo "$@"
+    fi
+}
+
 is_pp () {
     saw_pp=0
     outpos=0
@@ -34,7 +42,7 @@ run_with_replacement_outfile () {
          (*)  args[$ctr]="$1" ;;
         esac
     done
-    echo "Running + replacement outfile: ${args[@]}" 1>&2
+    debug_print 1 "Running + replacement outfile: ${args[@]}" 1>&2
     "${args[@]}"
 }
 
@@ -46,7 +54,7 @@ run_with_replacement_infile () {
     # for gcc we only need understand the options -E -quiet -imultiarch x86_64-linux-gnu
     # ... which (1) come first, and (2) cpp *doesn't* understand.
     replacement="$1"
-    echo "Trying to replace input file given args: $@" 1>&2
+    debug_print 1 "Trying to replace input file given args: $@" 1>&2
     shift
     declare -a args
     args[1]="$1"
@@ -55,7 +63,7 @@ run_with_replacement_infile () {
     must_read_arg=""
     handle_possible_infile () {
         if [[ -z "$orig_infile" ]]; then
-            echo "We think the input file is $1" 1>&2
+            debug_print 1 "We think the input file is $1" 1>&2
             orig_infile="$1";
             args[$ctr]="$replacement"
         else
@@ -72,18 +80,18 @@ run_with_replacement_infile () {
         if [[ -z "$1" ]]; then continue; fi
         case "$1" in
             (-E|-quiet) ;; # skip it!
-            (-D|-U) must_read_arg=1; args[$ctr]="$1" ;;
+            (-D|-U|-include) must_read_arg=1; args[$ctr]="$1" ;;
             (-imultiarch) shift || break ;; # skip it and its arg!
             (--) no_more_options=1 ;;
             (-*) if [[ -z "$no_more_options" ]]; then args[$ctr]="$1"; else handle_possible_infile "$1"; fi ;;
             (*) handle_possible_infile "$1" ;;
         esac
     done
-    echo "Running + replacement infile ($replacement): ${args[@]}" 1>&2
+    debug_print 1 "Running + replacement infile ($replacement): ${args[@]}" 1>&2
     "${args[@]}"
 }
 
-echo "\$1 is $1" 1>&2
+debug_print 1 "\$1 is $1" 1>&2
 
 case "$1" in
     (*/cc1)
@@ -91,21 +99,21 @@ case "$1" in
         exe="$1"
         # if we're only preprocessing, or if we have no explicit output file, just run cc1
         if is_pp "$@"; then
-            echo "outpos is $outpos" 1>&2
-            echo "outfile is $outfile" 1>&2
+            debug_print 1 "outpos is $outpos" 1>&2
+            debug_print 1 "outfile is $outfile" 1>&2
             # do the cpp, then run CIL
-            echo "We think we do have to substitute preprocessing." 1>&2
+            debug_print 1 "We think we do have to substitute preprocessing." 1>&2
             tmpfile="$(mktemp)" || exit 1
-            echo "Substituted $tmpfile in place of $outfile" 1>&2
+            debug_print 1 "Substituted $tmpfile in place of $outfile" 1>&2
             run_with_replacement_outfile "$tmpfile" "$@" && \
             shift && run_with_replacement_infile "$tmpfile" "$(dirname "$0")"/cilpp "$@"
         else
-            echo "We think we don't have to substitute preprocessing." 1>&2
-            echo "Running non-substituted: $@" 1>&2
+            debug_print 1 "We think we don't have to substitute preprocessing." 1>&2
+            debug_print 1 "Running non-substituted: $@" 1>&2
             exec "$@"
         fi
         ;;
-    (*) echo "Non-wrapping: $@" 1>&2
+    (*) debug_print 1 "Non-wrapping: $@" 1>&2
         exec "$@"
         ;;
 esac

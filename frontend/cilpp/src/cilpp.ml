@@ -66,10 +66,10 @@ let () =
     in
     List.iter Feature.enable features;
     let currentCilFile = initialCilFile in
-    (* PASTED from CIL's main.ml:
+    (* HACKED based on CIL's main.ml:
      * Scan all the registered features and, if they are 
      * enabled then run them on the current file *)
-    List.iter 
+    List.iter
       (fun fdesc -> 
         if fdesc.Feature.fd_enabled then begin
           if !Errormsg.verboseFlag then 
