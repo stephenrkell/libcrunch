@@ -1686,7 +1686,9 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	return bounds;
 }
 
-extern __thread unsigned long *volatile __bounds_sp;
+/* HACK about volatile: see softbound-heap test case. */
+extern __thread unsigned long *volatile __bounds_sp; /* alias of shadow_sp */
+extern __thread unsigned long *volatile __shadow_sp;
 extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __alloc_bounds_stack_space)(unsigned long nbytes);
 extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __alloc_bounds_stack_space)(unsigned long nbytes)
 {

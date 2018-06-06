@@ -145,7 +145,8 @@ void __wrap___liballocs_nudge_mmap(void **p_addr, size_t *p_length, int *p_prot,
 #undef is_in_range
 }
 
-__thread unsigned long *volatile __bounds_sp;
+__thread unsigned long *volatile __shadow_sp;
+extern __thread unsigned long *volatile __bounds_sp __attribute__((weak,alias("__shadow_sp")));
 /* HACK: volatile qualifier -- see libcrunch_cil_inlines.h and softbound-heap test case. */
 /* HACK -- but actually not useful in this object. */
 // _Bool __lookup_static_allocation_by_name(struct link_map *l, const char *name,
