@@ -70,7 +70,7 @@ class shadowProvVisitor
                CastE(ulongType, e);
                (* where did we load it from? *)
                (match descr with
-                    LoadedFrom(lh,lo) -> mkAddrOf (lh,lo)
+                    LoadedFrom(lh,lo) -> addrOfLv (lh,lo)
                   | UnknownOrigin -> failwith "unknown origin expr"
                   | ExternObject(v) -> failwith "don't use extern object"
                );
@@ -83,8 +83,15 @@ class shadowProvVisitor
     (* helperFunctions *) (helperFunctions :> helperFunctionsRecord)
     (* descriptorExprForShadowableExpr *) (fun e -> (CastE(voidPtrType, zero)))
     (* defaultShadowValueForType *) (fun t -> (CastE(charType, zero)))
-    (* shadowString *) "shadow"
+    (* shadowString *) "prov"
    as super
+
+   method canOmitShadowSpaceInitializerForValue (maybeInitializationValExpr: Cil.exp option) : bool =
+       match maybeInitializationValExpr with
+           None -> true
+         | Some(e) -> isStaticallyZero e || match Cil.typeOf e with
+               TPtr(_) -> false
+             | _ -> true
     
    method makeStoreHelperCall e lv descr l = 
         let slv = self#ensureShadowLocalLval e descr
@@ -95,26 +102,60 @@ class shadowProvVisitor
         [Call( None, 
               Lval(Var((helperFunctions#getStoreShadowNonLocal ()).svar), NoOffset),
               [ 
-                CastE(voidPtrType, mkAddrOf lv) ;
+                CastE(voidPtrType, addrOfLv lv) ;
                 CastE(ulongType, e);
                 sExpr;
                 CastE(voidPtrType, zero)
               ],
               l
         )]
+    
+    method vinst (i: instr) : instr list visitAction =
+        match super#vinst i with
+            ChangeDoChildrenPost(replacedIs, rewriteFunc) -> begin
+                (* We need to handle __builtin_alloca *)
+                match i with
+                    Call(Some(outLh, outLo), Lval(Var(fvi), NoOffset), args, l)
+                        when fvi.vname = "__builtin_alloca"
+                        -> (
+                            (* The ordinary instrumentation won't
+                             * touch this because it's a builtin.
+                             * We do whatever it wants to do, except
+                             * that we also bless the output with a
+                             * provenance. That might mean a local or
+                             * a non-local shadow store. *)
+                            let e = Lval(outLh, outLo) in
+                            let shadowDescr = ShadowMakeFromRvals([CastE(ulongType, e);
+                                Const(CInt64(Int64.zero, IInt, None))]) in
+                            let instrs =
+                            if self#hostIsLocal outLh
+                            then self#localShadowUpdateInstrs
+                                (self#shadowLvalForLocalLval (outLh, outLo))
+                                    e shadowDescr (instrLoc !currentInst)
+                            else self#doNonLocalShadowableStoreInstr e
+                                   (outLh, outLo) shadowDescr (instrLoc !currentInst)
+                            in
+                            ChangeDoChildrenPost(replacedIs,
+                                fun x -> let res = rewriteFunc x in
+                                    res @ instrs)
+                        )
+                  | _ -> ChangeDoChildrenPost(replacedIs, rewriteFunc)
+            end
+      | _ -> failwith "expected ChangeDoChildrenPost"
 
     val currentFrameAddressVar = ref None
     method vfunc (f: fundec) : fundec visitAction =
+        if self#varIsOurs f.svar then SkipChildren
+        else
+        let assignVid = (fun v -> (v.vid <- Cil.newVID ()))
+        in
+        List.iter assignVid f.sformals;
+        List.iter assignVid f.slocals;
         let tmpVar = Cil.makeTempVar f ~name:"__frame_address" ulongType
         in
-        let (retT, argTs, isVa) = Hashtbl.find Cil.builtinFunctions "__builtin_frame_address"
+        let helperFunc = materialiseBuiltin "__builtin_frame_address" 
         in
-        let helperFunc = emptyFunction "__builtin_frame_address"
-        in
-        helperFunc.svar.vtype <- (TFun(retT, 
-            Some(List.mapi (fun i -> fun t -> ("arg" ^ (string_of_int i), t, [])) argTs),
-            isVa, 
-            []));
+        (* let _ = output_string Pervasives.stderr ("Setting frame address var for " ^ f.svar.vname ^ "\n") in *)
         currentFrameAddressVar := Some(tmpVar);
         self#queueInstr [Call(Some(Var(tmpVar), NoOffset),
             Lval(Var(helperFunc.svar), NoOffset),
@@ -122,7 +163,24 @@ class shadowProvVisitor
             f.svar.vdecl
         )];
         let res = super#vfunc f in
-        currentFrameAddressVar := None; res
+        (* PROBLEM: we return ChangeDoChildrenPost(some_function)
+         * so the actual instrumentation has been delayed.
+         * Our solution is to wrap the ChangeDoChildrenPost.
+         * This is nasty. *)
+        match res with
+            ChangeDoChildrenPost(asIfF, fixupFunction) ->
+                (* Do the fixup, but also clear the frame address var. *)
+                ChangeDoChildrenPost(asIfF,
+                    fun x -> (
+                        let realRes = fixupFunction x in
+                        (* let _ = output_string Pervasives.stderr
+                            ("Clearing frame address var for " ^ f.svar.vname ^ "\n")
+                        in *)
+                        currentFrameAddressVar := None;
+                        realRes
+                    )
+                )
+          | _ -> failwith "expected ChangeDoChildrenPost"
 
     method shadowDescrForExpr outerE =
         let castIsRelevant targetT sourceT =
@@ -149,14 +207,16 @@ class shadowProvVisitor
         in
         let e = stripIrrelevantCasts (simplifyPtrExprs outerE) in
         let t = Cil.typeOf e in
-        if not (self#typeNeedsShadow t) then failwith "shadow for non-shadowable"
+        if not (self#typeNeedsShadow t) then let loc = instrLoc !currentInst in failwith (
+            "computing shadow for non-shadowable: type " ^ (typToString t) ^ ", expr " ^ (expToString e) ^ ", file: " ^ loc.file ^ ", line " ^ (string_of_int loc.line) ^ ", CIL dump of inst: " ^ (match !currentInst with Some(x) -> instToCilString x | None -> "(no inst)" ))
         else
         (* stripping irrelevant casts should never turn
          * a shadow-needing expression into a non-shadow-needing one. *)
         if self#typeNeedsShadow t <> self#typeNeedsShadow origT then failwith "cast-stripping affected shadowing"
         else
         let plainIntegerShadow = ShadowMakeFromRvals(let x = Const(CInt64(Int64.zero, IInt, None)) in [x; x]) in
-        let makePointerShadow = fun e -> fun offs -> ShadowMakeFromRvals([CastE(ulongType, e); Const(CInt64(Int64.of_int offs, IInt, None))]) in
+        let makePointerShadow = fun e -> ShadowMakeFromRvals([CastE(ulongType, e); CastE(ulongType, e)]) in
+        let makePointerShadowFromOffset = fun e -> fun offs -> ShadowMakeFromRvals([CastE(ulongType, e); Const(CInt64(Int64.of_int offs, IInt, None))]) in
         let isUnboundedArrayType t = (match Cil.unrollType t with TArray(_, None, _) -> true | _ -> false) in
         let rec offsetContainsField offs = match offs with
                 NoOffset -> false
@@ -176,9 +236,9 @@ class shadowProvVisitor
         in
         match (e, t) with
             (Const _, TInt(_)) -> plainIntegerShadow
-          | (Const(CStr(s)), _) ->  makePointerShadow e 0 (* FIXME: doesn't account for string merge/dedup in linker *)
-          | (Const(CWStr(s)), _) -> makePointerShadow e 0
-          | (Const _, TPtr(_,_)) -> makePointerShadow e 0
+          | (Const(CStr(s)), _) ->  makePointerShadow e (* FIXME: doesn't account for string merge/dedup in linker *)
+          | (Const(CWStr(s)), _) -> makePointerShadow e
+          | (Const _, TPtr(_,_)) -> makePointerShadow e
           | (Const _, _) -> failwith "shadow for literal non-shadowable"
           | (Lval(lh, lo), _) when self#hostIsLocal lh ->
                 ShadowLocalLval(self#shadowLvalForLocalLval (lh,lo))
@@ -191,44 +251,44 @@ class shadowProvVisitor
                 ShadowFetch(LoadedFrom((lh, lo)))
           | (AddrOf(Var(someVi), someOffset), _) when not someVi.vglob ->
                 let currentFrameAddressExpr = match !currentFrameAddressVar with
-                    None -> failwith "no current frame address var"
+                    None -> failwith ("no current frame address var, taking address of " ^ someVi.vname)
                     | Some(cfa) -> (Lval(Var(cfa), NoOffset))        
                 in
-                makePointerShadow currentFrameAddressExpr someVi.vid
-          | (AddrOf(Var(someVi), someOffset), _) (* vglob *) -> makePointerShadow e 0
+                makePointerShadowFromOffset currentFrameAddressExpr someVi.vid
+          | (AddrOf(Var(someVi), someOffset), _) (* vglob *) -> makePointerShadow e
           | (StartOf(Var(someVi), someOffset), _) when (* by implication, not local *)
                 (* is it an extern array of unknown dimensions? *)
                 someVi.vstorage = Extern && isUnboundedArrayType someVi.vtype
                 (* OVERRIDEME: the crunchbound code tries handleAddrOfVarOrField here,
                  * then does MustFetch. We can just create a fresh shadow, because
                  * we don't need to know the bounds. *)
-                -> makePointerShadow e 0
+                -> makePointerShadow e
           | (StartOf(Var(someVi), someOffset), _) when self#hostIsLocal (Var(someVi)) ->
                 (* array-to-pointer decay on a local var's array. *)
                 let currentFrameAddressExpr = match !currentFrameAddressVar with
-                    None -> failwith "no current frame address var"
+                    None -> failwith ("no current frame address var, taking start of " ^ someVi.vname)
                     | Some(cfa) -> (Lval(Var(cfa), NoOffset))        
                 in
-                makePointerShadow currentFrameAddressExpr someVi.vid
+                makePointerShadowFromOffset currentFrameAddressExpr someVi.vid
           | (StartOf(Var(someVi), someOffset), _) -> (* the "normal" StartOf case *)
                 (* Even when the offset does not contain a field,
                  * here StartOf is always making a new pointer,
                  * i.e. taking address of an array.
                  * We rewrote the cases that aren't, e.g. *p_arr,
                  * into CastE of an original pointer. *)
-                makePointerShadow e 0
+                makePointerShadow e
           | (AddrOf(Mem(memExp), someOffset), _) when offsetContainsField someOffset ->
                 (* taking a non-local subobject's address, + possibly array-indexing into it *)
-                makePointerShadow (AddrOf(Mem(memExp), offsetUpToField someOffset)) 0
+                makePointerShadow (AddrOf(Mem(memExp), offsetUpToField someOffset))
           | (AddrOf(Mem(memExp), someOffset), _) (* someOffset does *not* contain field *) ->
                 (* indexing into some array offset within *memExp
                  * ... shadow is whatever the shadow for memExp was,
                  *     so make a recursive call *)
                 self#shadowDescrForExpr memExp
           | (StartOf(Mem(memExp), someOffset), _) when offsetContainsField someOffset ->
-                makePointerShadow (AddrOf(Mem(memExp), offsetUpToField someOffset)) 0 (* see above *)
+                makePointerShadow (AddrOf(Mem(memExp), offsetUpToField someOffset)) (* see above *)
           | (StartOf(Mem(memExp), someOffset), _) (* no field in offset; offset yields an array *) ->
-                makePointerShadow (StartOf(Mem(memExp), stripTrailingIndexes someOffset)) 0
+                makePointerShadow (StartOf(Mem(memExp), stripTrailingIndexes someOffset))
           | (BinOp(PlusPI, Lval(Var(someVi), someOffset), someIntExp, somePtrT), _) when self#hostIsLocal (Var(someVi)) ->
                 (* This is an adjustment of a locally shadowed ptr.
                  * Does it have the same shadow as the original one?
@@ -236,8 +296,15 @@ class shadowProvVisitor
                  * In our case, we just say yes.
                  * Provenance gets interesting here if the integer also has a provenance. *)
                 ShadowLocalLval(self#shadowLvalForLocalLval (Var(someVi), someOffset))
-          | (BinOp(op, e1, _, _), _) -> self#shadowDescrForExpr e1
-          | (UnOp(op, someE, _), _) -> self#shadowDescrForExpr someE
+          | (BinOp(MinusPI, Lval(Var(someVi), someOffset), someIntExp, somePtrT), _) when self#hostIsLocal (Var(someVi)) ->
+                ShadowLocalLval(self#shadowLvalForLocalLval (Var(someVi), someOffset)) (* as above *)
+          | (BinOp(MinusPP, ep, ei, _), _) -> plainIntegerShadow
+          | (BinOp(op, e1, _, _), _) -> if self#typeNeedsShadow (Cil.typeOf e1)
+                then self#shadowDescrForExpr e1
+                else plainIntegerShadow (* FIXME: not quite right *)
+          | (UnOp(op, someE, _), _) -> if self#typeNeedsShadow (Cil.typeOf someE)
+                then self#shadowDescrForExpr someE
+                else plainIntegerShadow (* FIXME: not quite right *)
           | (CastE(targetT, subE), _) ->
                 (* We stripped the irrelevant casts, so this must be a relevant one,
                  * i.e. from non-shadowed to shadowed. *)
@@ -258,20 +325,27 @@ class shadowProvVisitor
         | SizeOfE(subE) -> SizeOf(Cil.typeOf subE)
         | _ -> initialSimplifiedE
         in
+        (* What about &x->y->z?     AddrOf(Mem(Lval(Mem(x), Field(y))), Field(z))
+         * We are "under addrOf" only for the second '->'.
+         * The nested Lval should not count as "under AddrOf".
+         * We will clear "underAddrOf" when we see a non-AddrOf expression.
+         * So if we descend to the Lval(...) expression, we will
+         * set it to false.
+         * In other words, I think the system works as it is. *)
         match simplifiedE with
         AddrOf(lv) -> underAddrOf := true
           | StartOf(lv) -> underAddrOf := true (* necessary? *)
           | _ -> underAddrOf := false
 
     method vexpr (outerE: exp) : exp visitAction =
+        let _ = match !currentFunc with
+            None -> (* output_string Pervasives.stderr ("Warning: expr '" ^ (expToString outerE) ^ "' seen outside any function\n") *) ()
+          | Some(f) -> ()
+        in
         self#latchAddrOf outerE; super#vexpr outerE
     
     method vlval outerLv = 
         currentLval := Some(outerLv);
-        let theFunc = match !currentFunc with
-            None -> failwith "lvalue outside function"
-          | Some(f) -> f
-        in
         let currentLoc = match !currentInst with
             Some(i) -> get_instrLoc i
           | None -> locUnknown
@@ -285,34 +359,34 @@ class shadowProvVisitor
              * because Index(_) offsets are always acting within
              * a subobject; it is the Mem(_) host that embodies
              * a pointer deref. *)
-             let hoistDeref memExpr offsetList =
-                let simplifiedMemExpr = foldConstants memExpr
-                in
-                (* If we have an expr using PlusPI, like "ptr + 1", our BoundsDescrForExpr
-                 * should just use the bounds of the input pointer. *)
-                let shadowDescr = self#shadowDescrForExpr simplifiedMemExpr
-                in
-                let slv = self#ensureShadowLocalLval simplifiedMemExpr shadowDescr
-                in
-                let (shadowLoadInstrs : Cil.instr list)
-                = self#localShadowUpdateInstrs slv simplifiedMemExpr shadowDescr currentLoc
-                in
-                let checkResultVar = Cil.makeTempVar ~name:"__cil_derefcheck_" theFunc boolType in
-                (checkResultVar.vattr <- [Attr("unused", [])];
-                self#queueInstr (shadowLoadInstrs @ [Call(Some(Var(checkResultVar), NoOffset),
-                    (Lval(Var((helperFunctions#getCheckDeref ()).svar),NoOffset)),
-                    [ simplifiedMemExpr
-                    ; (* what are the bounds of memExpr? *)
-                      Lval(slv)
-                    ], currentLoc
-                )]));
-                (* the same lval *)
-                (Mem(memExpr), offsetFromList offsetList)
-             in
-             match lhost with
-                 Mem(memExpr) when not weAreUnderAddrOf ->
-                     hoistDeref memExpr (offsetToList loff)
-                   | _ -> (lhost,loff)
+            let hoistDeref memExpr offsetList =
+               let simplifiedMemExpr = foldConstants memExpr
+               in
+               (* If we have an expr using PlusPI, like "ptr + 1", our BoundsDescrForExpr
+                * should just use the bounds of the input pointer. *)
+               let shadowDescr = self#shadowDescrForExpr simplifiedMemExpr
+               in
+               let slv = self#ensureShadowLocalLval simplifiedMemExpr shadowDescr
+               in
+               let (shadowLoadInstrs : Cil.instr list)
+               = self#localShadowUpdateInstrs slv simplifiedMemExpr shadowDescr currentLoc
+               in
+               let checkResultVar = Cil.makeTempVar ~name:"__cil_derefcheck_" (self#getFunc ()) boolType in
+               (checkResultVar.vattr <- [Attr("unused", [])];
+               self#queueInstr (shadowLoadInstrs @ [Call(Some(Var(checkResultVar), NoOffset),
+                   (Lval(Var((helperFunctions#getCheckDeref ()).svar),NoOffset)),
+                   [ simplifiedMemExpr
+                   ; (* what are the bounds of memExpr? *)
+                     Lval(slv)
+                   ], currentLoc
+               )]));
+               (* the same lval *)
+               (Mem(memExpr), offsetFromList offsetList)
+            in
+            match lhost with
+                Mem(memExpr) when not weAreUnderAddrOf ->
+                    hoistDeref memExpr (offsetToList loff)
+                  | _ -> (lhost,loff)
         )
     
 

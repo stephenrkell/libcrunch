@@ -24,12 +24,12 @@ LIBALLOCS_BASE ?= $(realpath $(LIBALLOCS))
 OCAMLFIND ?= ocamlfind
 CIL_INSTALL ?= $(LIBALLOCS_BASE)/tools/lang/c/cil
 CILLY ?= $(CIL_INSTALL)/bin/cilly
-CIL_TOOLS := trumptr vsimplemem vsimpleaddr crunchbound dumpreftypes ptrintarith shadow shadowprov
+CIL_TOOLS := trumptr vsimplemem vsimpleaddr crunchbound dumpreftypes ptrintarith shadow shadowprov alloclocals
 OCAMLFLAGS +=  -package findlib -I $(CIL_INSTALL)/lib/cil
 OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/lib -I $(LIBALLOCS_BASE)/tools/lang/c/cilallocs #-I $(dir $(wildcard $(shell which $(CILLY))/../lib/ocaml/*/cil))
 OCAMLFLAGS += -g
 
-default: src lib cil sanity-tests shadowprov/shadowprov_weak.so
+default: src lib cil sanity-tests shadowprov/shadowprov_weak.so shadowprov
 
 .PHONY: cil
 cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs $(t)/$(t).cma)
@@ -47,7 +47,11 @@ cil: $(foreach t,$(CIL_TOOLS),$(t)/$(t).cmxs $(t)/$(t).cma)
 shadowprov/shadowprov.cmxs shadowprov/shadowprov.cma shadowprov/shadowprov.cmx: \
     OCAMLFLAGS += -I $(dir $(THIS_MAKEFILE))/shadow
 shadowprov/shadowprov.cmxs: shadow/shadow.cmxs
+shadowprov/shadowprov.cmx: shadow/shadow.cmx
 
+.PHONY: shadowprov
+shadowprov:
+	$(MAKE) -C shadowprov
 # tool-specific mini-runtime
 shadowprov/shadowprov_weak.so: shadowprov/shadowprov_rtdecls.h
 	$(CC) -fPIC -shared -g -o "$@" -x c shadowprov/shadowprov_rtdecls.h -x none \

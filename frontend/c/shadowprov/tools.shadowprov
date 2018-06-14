@@ -1,0 +1,5 @@
+[{cmd: "env", 
+  args: "CIL_PLUGINS='/home/stephen/work/devel/liballocs.hg/tools/lang/c/cilallocs/cilallocs.cmxs /home/stephen/work/devel/libcrunch.hg/frontend/c/shadow/shadow.cmxs /home/stephen/work/devel/libcrunch.hg/frontend/c/shadowprov/shadowprov.cmxs' CIL_PASSES=shadowprov gcc-4.9 -wrapper /home/stephen/work/devel/libcrunch.hg/frontend/cilpp/bin/wrapper -O2 -std=gnu11 -Wno-unused-variable -pthread -include /home/stephen/work/devel/libcrunch.hg/frontend/c/shadowprov/shadowprov_helpers.h -g -save-temps -Wl,-plugin,/home/stephen/work/devel/libcrunch.hg/frontend/c/shadowprov/gold-plugin.so -Wl,-rpath,/home/stephen/work/devel/libcrunch.hg/lib -Wl,@/home/stephen/work/devel/libcrunch.hg/frontend/c/shadowprov/wrap.ldopts",
+  name: "gcc-4.9-shadowprov"
+  run_prefix: "LD_PRELOAD=/home/stephen/work/devel/libcrunch.hg/lib/libcrunch_preload.so "
+}]

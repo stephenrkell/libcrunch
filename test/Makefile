@@ -1,6 +1,5 @@
-CFLAGS += -D_GNU_SOURCE # HACK
+CFLAGS += -D_GNU_SOURCE # HACK -- but why?
 CFLAGS += -g3 -gstrict-dwarf -std=c99 -fno-eliminate-unused-debug-types -O2 #-no-pie
-CFLAGS += -DUSE_STARTUP_BRK
 
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 TESTDIR := $(realpath $(dir $(THIS_MAKEFILE)))

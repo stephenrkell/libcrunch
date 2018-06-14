@@ -92,25 +92,6 @@ let rec simplifyPtrExprs someE =
               p->arr  (i.e. some offset) cannot be simplified      *)
    | _ -> withSubExprsSimplified
 
-class addressTakenVisitor = fun seenAddressTakenLocalNames -> object(self) inherit nopCilVisitor
-    method vexpr (e: exp) : exp visitAction = begin
-        match e with
-             AddrOf(Var(vi), _) when not vi.vglob ->
-                seenAddressTakenLocalNames :=
-                    if List.mem vi.vname !seenAddressTakenLocalNames
-                    then !seenAddressTakenLocalNames
-                    else vi.vname :: !seenAddressTakenLocalNames
-                ; DoChildren
-           | StartOf(Var(vi), _) when not vi.vglob -> 
-                seenAddressTakenLocalNames :=
-                    if List.mem vi.vname !seenAddressTakenLocalNames 
-                    then !seenAddressTakenLocalNames
-                    else vi.vname :: !seenAddressTakenLocalNames
-                ; DoChildren
-           | _ -> DoChildren
-    end
-end
-
 type shadow_load_store_origin =
     UnknownOrigin
   | LoadedFrom of Cil.lval (* the loaded-from address of the value whose shadow
@@ -229,6 +210,16 @@ class helperFunctionsRecord = object(self)
         peekResultShadow <- findFunOrFail "__peek_result_shadow" f.globals
 end
 
+
+type instrumented_function = {
+    callerIsInstFlagVar : varinfo;
+    addressTakenLocalNames : string list;
+    savedShadowStackPtrVar : varinfo;
+    mutable shadowLocals : Cil.varinfo VarinfoMap.t;
+    mutable tempLoadExprs : Cil.varinfo VarinfoMap.t;
+    shadowReturnVar : varinfo;
+    cookieStackAddrVar : varinfo;
+}
 class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             fun (primitiveTypeIsShadowed : Cil.typ -> bool)(* function *) ->
                             fun shadowCompName ->
@@ -263,29 +254,20 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
     val currentFunc : fundec option ref = ref None
     val currentLval : lval option ref = ref None
     val currentBlock : block option ref = ref None
-    val currentFuncAddressTakenLocalNames : string list ref = ref []
-    (* Remember the mapping from locals to their shadows. We zap this on each
-    * vfunc. *)
-    val shadowLocals : (Cil.varinfo VarinfoMap.t) ref = ref VarinfoMap.empty
-    (* Remember the mapping from expressions to the location
-    * where the original expression was loaded from, if any. We zap this on each
-    * vfunc. Each loaded-from addr is latched into its own temporary var, because
-    * the lvalue's meaning might change from where we do the load to where
-    * we use the shadow (consider "e = e->next" -- we want to fetch the shadow
-    * of e, loaded from "e->next"). FIXME: I'm not convinced this is necessary,
-    * so long as we fetch shadows (of e->next) before we do the actual program
-    * statement (modifying e). *)
-    val tempLoadExprs : (Cil.lval option) VarinfoMap.t ref = ref VarinfoMap.empty
 
-    (* In each function we *may* create a flag to remember whether we detected, at 
-    * entry, that the caller was instrumented. We use this to decide whether to
-    * pass shadow back or not. *)
-    val currentFuncCallerIsInstFlag : Cil.varinfo option ref = ref None
+    val instrumContext : instrumented_function option ref = ref None
 
-    val initFunc : fundec = emptyFunction "__libcrunch_crunchbound_init" 
+    val initFunc : fundec = emptyFunction ("__libcrunch_shadow" ^ shadowString ^ "bound_init")
+
+    method getContext () = match !instrumContext with
+        None -> failwith "getContext called with no context"
+      | Some(ctxt) -> ctxt
+    method getFunc () = match !currentFunc with
+        None -> failwith "getFunc called with no current function"
+      | Some(f) -> f
 
     method varinfoIsLocal vi = not vi.vglob && 
-    ( let isAT = (List.mem vi.vname !currentFuncAddressTakenLocalNames)
+    ( let isAT = (List.mem vi.vname ((self#getContext()).addressTakenLocalNames))
       in
         (if isAT then () (* debug_print 1 ("Local var " ^ vi.vname ^ " would count as local " ^ 
         "but is address-taken\n")*) else ())
@@ -310,9 +292,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 (* An array of the shadow struct. *)
                 begin match constInt64ValueOfExpr boundExpr with
                     Some(x) -> x
-                  | None -> failwith (shadowString ^ " array type does not have constant bound")
+                  | None -> failwith ("shadow array type does not have constant bound")
                 end
-          | _ -> failwith "not a shadow type (asNumber)"
+          | Some(t) -> failwith ((typToString t) ^ " is not a shadow type (asNumber)")
 
     method shadowTTimesN maybeShadowT (n : int64) =
         (* debug_print 1 ((Int64.to_string n) ^ " times shadow type " ^ 
@@ -333,7 +315,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                           []
                     )
                 )
-          | _ -> failwith "not a shadow type (*)"
+          | Some(t) -> failwith ((typToString t) ^ " is not a shadow type (*)")
         in
         (* debug_print 1 ((match prod with Some(shadowT) -> typToString shadowT | _ -> "(none)") ^ 
             "\n"); flush stderr; *)
@@ -347,7 +329,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
             None -> if n = Int64.of_int 0 then None
                     else if n = Int64.of_int 1 then Some(shadowType)
                     else Some(TArray(shadowType, Some(makeIntegerConstant n), []))
-          | Some(TComp(ci, attrs)) when ci.cname = "__libcrunch_shadow_s" -> 
+          | Some(TComp(ci, attrs)) when ci.cname = shadowCompName -> 
                 if n = Int64.of_int 0 then Some(shadowType)
                 else Some(TArray(shadowType, Some(makeIntegerConstant ((Int64.add n (Int64.of_int 1)))), []))
           | Some(TArray(TComp(ci, attrs), Some(boundExpr), [])) when ci.cname = shadowCompName ->
@@ -359,7 +341,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                         ))),
                     []
                 ))
-          | _ -> failwith "not a shadow type (+)"
+          | Some(t) -> failwith ((typToString t) ^ " is not a shadow type (+)")
         in
         (* debug_print 1 ((match sum with Some(shadowT) -> typToString shadowT | _ -> "(none)") ^ 
             "\n"); *)
@@ -377,7 +359,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 )
                 in
                 self#shadowTPlusN maybeShadowT1 m
-          | _ -> failwith "not a shadow type (T plus T)"
+          | Some(t) -> failwith ((typToString t) ^ " is not a shadow type (T plus T)")
         in
         (* debug_print 1 ("Sum of shadow types " ^ 
             (match maybeShadowT1 with Some(shadowT) -> typToString shadowT | _ -> "(none)") ^ 
@@ -501,9 +483,10 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         indexExpr
 
     method getOrCreateShadowLocal vi =
+        let ctxt = self#getContext () in
         debug_print 1 ("Ensuring we have shadow local for " ^ vi.vname ^ "\n");
         try  
-            let found = VarinfoMap.find vi !shadowLocals
+            let found = VarinfoMap.find vi ctxt.shadowLocals
             in 
             debug_print 1 ("Already exists\n");
             found
@@ -521,9 +504,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
           | None -> failwith ("making shadow local when not inside a function; " ^
                 "location is (file: " ^ (instrLoc !currentInst).file ^ ", line: " ^ (string_of_int (instrLoc !currentInst).line) ^ ")")
          in
-         let newShadowLocalsMap = (VarinfoMap.add vi newLocalVi !shadowLocals)
+         let newShadowLocalsMap = (VarinfoMap.add vi newLocalVi ctxt.shadowLocals)
          in
-         shadowLocals := newShadowLocalsMap;
+         ctxt.shadowLocals <- newShadowLocalsMap;
          newLocalVi
 
     method shadowLvalForLocalLval ((lh, loff) : lval) : lval =
@@ -761,17 +744,24 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         self#doNonLocalShadowableStoreInstr initializationValExpr initializedShadowableLv
             sd initializerLocation
 
+    (* CIL can generate really huge output if we naively assign to every single
+     * global that might be shadowable. *)
+    method virtual canOmitShadowSpaceInitializerForValue : (Cil.exp option -> bool)
+
     method prependShadowSpaceInitializer initializerLocation (initializedShadowableLv: Cil.lval) (maybeInitializationValExpr: Cil.exp option) =
         match !currentFunc with
             Some(_) -> failwith "doing initializer while also instrumenting function"
           | None -> begin
         currentFunc := Some(initFunc);
-        let instrsToPrepend = match maybeInitializationValExpr with
-            Some(initializationValExpr) ->
-                self#makeShadowSpaceInitializerCalls initializerLocation
-                    (initializedShadowableLv: Cil.lval) initializationValExpr
-          | None -> self#makeShadowSpaceInitializerCalls initializerLocation
-                    (initializedShadowableLv: Cil.lval) (defaultShadowValueForType (Cil.typeOf (Lval(initializedShadowableLv))))
+        let instrsToPrepend = if self#canOmitShadowSpaceInitializerForValue
+                maybeInitializationValExpr 
+            then []
+            else match maybeInitializationValExpr with
+                Some(initializationValExpr) ->
+                    self#makeShadowSpaceInitializerCalls initializerLocation
+                        (initializedShadowableLv: Cil.lval) initializationValExpr
+              | None -> self#makeShadowSpaceInitializerCalls initializerLocation
+                        (initializedShadowableLv: Cil.lval) (defaultShadowValueForType (Cil.typeOf (Lval(initializedShadowableLv))))
         in
         if instrsToPrepend = [] then ()
         else
@@ -796,7 +786,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
          * in main(), which would be silly... we should use constructors instead. *)
         begin
             helperFunctions#initializeFromFile enclosingFile;
-            initFunc.svar <- findOrCreateFunc enclosingFile ("__libcrunch_crunch" ^ shadowString ^ "_init" )
+            initFunc.svar <- findOrCreateFunc enclosingFile ("__libcrunch_shadow" ^ shadowString ^ "_init" )
                 (TFun(TVoid([]), Some([]), false, [Attr("constructor", [AInt(101)])]))
                 ;
             initFunc.svar.vstorage <- Static;
@@ -818,6 +808,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         match !currentFunc with
             None -> (* statement outside function? *) DoChildren
           | Some f ->
+        let ctxt = self#getContext () in
         (* We need to instrument returns. *)
         match outerS.skind with 
             Return(Some(returnExp), loc) -> (
@@ -828,9 +819,6 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 ChangeDoChildrenPost(outerS, fun s -> match s.skind with
                     Return(Some(returnExp), loc) ->
                     begin
-                    match !currentFuncCallerIsInstFlag with
-                        None -> failwith "internal error: did not create caller-is-instrumented flag"
-                      | Some callerIsInstrumentedFlagVar ->
                     (* OVERRIDEME: pure helpers require special handling here *)
                     let mkReturnShadowBlock rs instrs = {
                         battrs = [];
@@ -869,7 +857,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 Call( None,
                                 (Lval(Var((helperFunctions#getPushLocalResultShadow ()).svar),NoOffset)),
                                 [
-                                    Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
+                                    Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
                                     Lval(slv);
                                 ],
                                 loc
@@ -878,7 +866,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 Call( None,
                                 (Lval(Var((helperFunctions#getPushResultShadowManifest ()).svar),NoOffset)),
                                 [
-                                    Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
+                                    Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
                                     CastE(opaqueShadowableT, valExp)
                                 ] @ ses,
                                 loc
@@ -887,9 +875,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 Call( None,
                                 (Lval(Var((helperFunctions#getFetchAndPushResultShadow ()).svar),NoOffset)),
                                 [
-                                    Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
+                                    Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
                                     valExp;
-                                    mkAddrOf (lh,lo);
+                                    addrOfLv (lh,lo);
                                     descriptorExprForShadowableExpr valExp
                                 ],
                                 loc
@@ -898,7 +886,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 Call( None,
                                 (Lval(Var((helperFunctions#getFetchAndPushResultShadow ()).svar),NoOffset)),
                                 [
-                                    Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
+                                    Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
                                     valExp;
                                     nullPtr;
                                     descriptorExprForShadowableExpr valExp
@@ -918,11 +906,8 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                      * We do this by mutating s. 
                      * Effectively, 's' is updated from being a Return statement
                      * into being an If statement. It keeps the same labels. *)
-                    match !currentFuncCallerIsInstFlag with 
-                        None -> failwith "internal error: have not created caller-is-instrumented flag"
-                     |  Some(callerIsInstVar) ->
                     let testForUninstCallerExpression = 
-                        UnOp(LNot, Lval(Var(callerIsInstVar), NoOffset), boolType)
+                        UnOp(LNot, Lval(Var(ctxt.callerIsInstFlagVar), NoOffset), boolType)
                     in
                     s.skind <- If(
                                 testForUninstCallerExpression, 
@@ -968,34 +953,49 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
 
     method vfunc (f: fundec) : fundec visitAction = 
         currentFunc := Some(f);
-        currentFuncCallerIsInstFlag := None;
+        (* Don't instrument our own helper functions that get -include'd. *)
+        if self#varIsOurs f.svar then
+            (instrumContext := None; SkipChildren)
+        else
+        (* currentFuncCallerIsInstFlag := None;
         shadowLocals := VarinfoMap.empty;
         tempLoadExprs := VarinfoMap.empty;
+        let tempAddressTakenLocalNames = ref []
+        in
+        *)
+        let ctxt = {
+            callerIsInstFlagVar (* : varinfo *) =
+                Cil.makeTempVar f ~name:"__caller_is_inst_" boolType;
+            addressTakenLocalNames (* : string list *) =
+                (let tmp = ref [] in (ignore (visitCilBlock (new addressTakenVisitor tmp) f.sbody); !tmp));
+            savedShadowStackPtrVar (* : varinfo *) =
+                Cil.makeTempVar f ~name:"__shadow_stack_ptr" ulongPtrType;
+            shadowLocals (* : varinfo VarinfoMap.t *) =
+                VarinfoMap.empty;
+           (* Remember the mapping from expressions to the location
+            * where the original expression was loaded from, if any. We zap this on each
+            * vfunc. Each loaded-from addr is latched into its own temporary var, because
+            * the lvalue's meaning might change from where we do the load to where
+            * we use the shadow (consider "e = e->next" -- we want to fetch the shadow
+            * of e, loaded from "e->next"). FIXME: I'm not convinced this is necessary,
+            * so long as we fetch shadows (of e->next) before we do the actual program
+            * statement (modifying e). *)
+            tempLoadExprs (* : varinfo VarinfoMap.t *) =
+                VarinfoMap.empty;
+            shadowReturnVar (* : varinfo *) =
+                Cil.makeTempVar f ~name:"__shadow_return_" shadowType;
+            cookieStackAddrVar (* : varinfo *) =
+                Cil.makeTempVar f ~name:"__cookie_stackaddr" ulongPtrType;
+        }
+        in
+        instrumContext := Some(ctxt);
         (* (debug_print 1 ("CIL dump of function `" ^ f.svar.vname ^ "': ");
         Cil.dumpBlock (new plainCilPrinterClass) stderr 0 f.sbody;
         debug_print 1 "\n"); *)
-        (* Do our own scan for AddrOf and StartOf. 
-        * The CIL one is not trustworthy, because any array subexpression
-        * has internally been tripped via a StartOf (perhaps now rewritten? FIXME)
-        * meaning it contains false positives. *)
-        let tempAddressTakenLocalNames = ref []
-        in
-        let _ = visitCilBlock (new addressTakenVisitor tempAddressTakenLocalNames) f.sbody
-        in
-        debug_print 1 ("Address-taken locals in `" ^ f.svar.vname ^ "' : [" ^ (
+        (* debug_print 1 ("Address-taken locals in `" ^ f.svar.vname ^ "' : [" ^ (
             List.fold_left (fun l -> fun r -> l ^ (if l = "" then "" else ", ") ^ r) "" !tempAddressTakenLocalNames
-            ^ "]\n"));
-        currentFuncAddressTakenLocalNames := !tempAddressTakenLocalNames
-        ;
-        (* Don't instrument our own helper functions that get -include'd. *)
-        if self#varIsOurs f.svar then (currentFunc := None; currentFuncCallerIsInstFlag := None; SkipChildren)
-        else
-        let currentFuncCallerIsInstFlagVar = Cil.makeTempVar f ~name:"__caller_is_inst_" boolType
-        in 
-        currentFuncCallerIsInstFlag := Some(currentFuncCallerIsInstFlagVar);
+            ^ "]\n")); *)
         (
-            let varNeedsLocalShadow = (fun v -> self#varinfoIsLocal v)
-            in
             let maybeCreateShadow = fun vi -> 
                 let shadowT = self#shadowTForT vi.vtype
                 in
@@ -1008,7 +1008,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                         Some(shadowT, created)
                   | None -> None
             in
-            let _ = ignore (List.map maybeCreateShadow (List.filter varNeedsLocalShadow f.slocals))
+            let _ = ignore (List.map maybeCreateShadow (List.filter self#varinfoIsLocal f.slocals))
             in
             let formalsNeedingShadows =  (List.filter (fun fvi -> 
                 match self#shadowTForT fvi.vtype
@@ -1016,7 +1016,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                   | _ -> false
             ) f.sformals)
             in
-            let _ = ignore (List.map maybeCreateShadow (List.filter varNeedsLocalShadow f.sformals))
+            let _ = ignore (List.map maybeCreateShadow (List.filter self#varinfoIsLocal f.sformals))
             in
             (* The shadowTs were added by side-effect. 
              * What we haven't done is initialise the ones that correspond to formals.
@@ -1038,7 +1038,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             (Lval(Var((helperFunctions#getPeekArgumentShadow ()).svar),NoOffset)),
                             [
                                 (* really do it? only if cookie was okay *)
-                                Lval(Var(currentFuncCallerIsInstFlagVar), NoOffset);
+                                Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
                                 (* offset on stack *)
                                 makeIntegerConstant (Int64.of_int (idx)); (* DON'T adjust for the 
                                   cookie -- the inline function has to do it, because
@@ -1054,9 +1054,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             (Lval(Var((helperFunctions#getPeekAndShadowStoreArgumentShadow ()).svar),NoOffset)),
                             [
                                 (* really do it? only if cookie was okay *)
-                                Lval(Var(currentFuncCallerIsInstFlagVar), NoOffset);
-                                (* address of the stored pointer *)
-                                mkAddrOf (lh,lo);
+                                Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
+                                (* address of the stored shadowable *)
+                                addrOfLv (lh,lo);
                                 (* offset on stack of the shadow that was passed *)
                                 makeIntegerConstant (Int64.of_int (idx)) (* DON'T adjust for the 
                                   cookie -- the inline function has to do it, because
@@ -1083,9 +1083,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 (List.rev formalShadowInitFunReverseList)
             in
             let writeCallerInstFlag
-             = [Call(Some(Var(currentFuncCallerIsInstFlagVar), NoOffset),
+             = [Call(Some(Var(ctxt.callerIsInstFlagVar), NoOffset),
                 Lval(Var((helperFunctions#getTweakArgumentShadowCookie ()).svar), NoOffset), 
-                [CastE(voidConstPtrType, mkAddrOf (Var(f.svar), NoOffset))], instrLoc !currentInst)]
+                [CastE(voidConstPtrType, addrOfLv (Var(f.svar), NoOffset))], instrLoc !currentInst)]
             in
             f.sbody <- { 
                 battrs = f.sbody.battrs; 
@@ -1099,7 +1099,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
             }
             ;
             ChangeDoChildrenPost(f, fun x -> currentFunc := None;
-                currentFuncCallerIsInstFlag := None; 
+                instrumContext := None;
                 debug_print 1 ("Finished instrumenting call to " ^ f.svar.vname ^ "\n");
                 x)
         )
@@ -1108,6 +1108,10 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         let f = match !currentFunc with
             Some(af) -> af
           | None -> failwith "instruction outside function"
+        in
+        let ctxt = match !instrumContext with
+            Some(ctxt) -> ctxt
+          | None -> failwith "instruction outside context"
         in
         let passesShadows = List.fold_left (fun acc -> fun argExpr -> 
             acc || (* isNonVoidPointerType (Cil.typeOf argExpr) *)
@@ -1127,9 +1131,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         in
         let (maybeSavedShadowStackPtr, shadowSaveInstrs)
          = if passesShadows || returnsShadows then 
-            let vi = Cil.makeTempVar f ~name:"__shadow_stack_ptr" ulongPtrType
-            in
-            (Some(vi), [Set((Var(vi), NoOffset), shadowSpExpr, instrLoc !currentInst)])
+            (Some(ctxt.savedShadowStackPtrVar), [Set((Var(ctxt.savedShadowStackPtrVar), NoOffset), shadowSpExpr, instrLoc !currentInst)])
             else (None, [])
         in
         begin
@@ -1158,7 +1160,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             (Lval(Var((helperFunctions#getFetchAndPushArgumentShadow ()).svar),NoOffset)),
                             [
                                 CastE(opaqueShadowableT, valExpr);
-                                mkAddrOf (lh,lo);
+                                addrOfLv (lh,lo);
                                 descriptorExprForShadowableExpr valExpr
                             ],
                             instrLoc !currentInst
@@ -1179,27 +1181,21 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                     List.filter (fun e -> self#typeNeedsShadow (Cil.typeOf e)) l)
             )
             in
-            let cookieStackAddrVar = ref None
-            in
             let calleeLval = match realCalledE with
                         Lval(lv) -> lv
                       | _ -> failwith "internal error: calling a non-lvalue"
             in
             let shadowPushCookieInstructions = 
                 if passesShadows || returnsShadows then (
-                let spVar = Cil.makeTempVar f ~name:"__cookie_stackaddr" ulongPtrType
-                in
-                spVar.vattr <- [Attr("unused", [])];
-                cookieStackAddrVar := Some(spVar);
                 [Call(None, 
                     Lval(Var((helperFunctions#getPushArgumentShadowCookie ()).svar), NoOffset),
                     [
-                        CastE(voidConstPtrType, mkAddrOf calleeLval);
+                        CastE(voidConstPtrType, addrOfLv calleeLval);
                         Const(CStr(expToString calledE))
                     ], instrLoc !currentInst
                  );
                  (* also remember the cookie stackaddr *)
-                 Set((Var(spVar), NoOffset), shadowSpExpr, instrLoc !currentInst)
+                 Set((Var(ctxt.cookieStackAddrVar), NoOffset), shadowSpExpr, instrLoc !currentInst)
                 ]
                 ) else []
             in
@@ -1214,13 +1210,8 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                         (Lval(Var((helperFunctions#getPeekResultShadow ()).svar),NoOffset)),
                         [
                             (* really? only if *)
-                            (match !cookieStackAddrVar with
-                                Some(vi) ->
-                                    BinOp(Ne, Lval(Mem(Lval(Var(vi), NoOffset)), NoOffset),
-                                        CastE(ulongType, mkAddrOf calleeLval), boolType)
-                              | None -> failwith "error: no saved shadow stack pointer for cookie"
-                            )
-                              ;
+                            BinOp(Ne, Lval(Mem(Lval(Var(ctxt.cookieStackAddrVar), NoOffset)), NoOffset),
+                                        CastE(ulongType, addrOfLv calleeLval), boolType);
                             (* offset? *)
                             offsetExpr; 
                             (*  const void *ptr *)
@@ -1234,15 +1225,13 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                         writeOneLocal (self#shadowLvalForLocalLval (lhost, loff)) valExpr blah offsetExpr
                     in
                     let callsForOneNonLocal valExpr blah offsetExpr =
-                        let svi = Cil.makeTempVar f ~name:"__shadow_return_" shadowType
-                        in
                         let lvExpr = (Lval(lhost, loff)) in
                         (* write to a local temp, then do the shadow-space store *)
-                        (writeOneLocal (Var(svi), NoOffset) valExpr blah offsetExpr) @ (
+                        (writeOneLocal (Var(ctxt.shadowReturnVar), NoOffset) valExpr blah offsetExpr) @ (
                          self#doNonLocalShadowableStoreInstr
                             (* shadowable value *) lvExpr
                             (* where it's been/being stored *) (lhost, loff)
-                            (* its shadow *) (ShadowLocalLval(Var(svi), NoOffset))
+                            (* its shadow *) (ShadowLocalLval(Var(ctxt.shadowReturnVar), NoOffset))
                             (instrLoc !currentInst)
                         )
                     in
@@ -1310,7 +1299,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         in
         let instrsPlusShadowUpdates = match finalI with
             Set((lhost, loff), e, l) ->
-                let containedShadowedLvsL = List.map (fun e -> match e with
+                let containedShadowedLvsL = List.map (fun innerE -> match innerE with
                     Lval(lh, lo) -> (lh, lo)
                   | _ -> failwith "impossible: lval yielded non-lv"
                 ) (self#containedShadowedPrimitiveExprsForExpr (Lval(lhost, loff)))
@@ -1326,24 +1315,25 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                      *      Sometimes we can copy it;
                      *      Sometimes we can *create* it ... depending on rules
                      *)
-                    let shadowDescr = self#shadowDescrForExpr writtenE
+                    (* delay this so that we can see the debug printout before it fails *)
+                    let shadowDescr = fun () -> self#shadowDescrForExpr writtenE
                     in
                     if self#hostIsLocal writtenToLh
                     then (
-                        debug_print 1 ("Saw write to a local non-void pointer lval: " ^ (
+                        debug_print 1 ("Saw write to a local non-void shadowable lval: " ^ (
                             lvalToString (writtenToLh, writtenToLo)
-                        ) ^ ", so updating its shadow\n")
+                        ) ^ ", so updating its shadow (written value: " ^ (expToString writtenE) ^ ", written type: " ^ (typToString (Cil.typeOf writtenE)) ^ ")\n")
                         ;
                         self#localShadowUpdateInstrs (self#shadowLvalForLocalLval (writtenToLh, writtenToLo))
-                            writtenE shadowDescr (instrLoc !currentInst)
+                            writtenE (shadowDescr ()) (instrLoc !currentInst)
                     )
                     else (
                         debug_print 1 ("Saw write to a non-local shadowable lval: " ^ (
                             lvalToString (writtenToLh, writtenToLo)
-                        ) ^ ", so calling out the shadow-store hook\n")
+                        ) ^ "(written value: " ^ (expToString writtenE) ^ ", written type: " ^ (typToString (Cil.typeOf writtenE)) ^ ") so calling out the shadow-store hook\n")
                         ;
                         self#doNonLocalShadowableStoreInstr writtenE
-                              (writtenToLh, writtenToLo) shadowDescr (instrLoc !currentInst)
+                              (writtenToLh, writtenToLo) (shadowDescr ()) (instrLoc !currentInst)
                     )
                 )
                 in
@@ -1376,7 +1366,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         (* end match finalI *)
         in instrsPlusShadowUpdates
   ) (* end ChangeDoChildrenPost *)
-  end
+  end (* end vinst *)
 
   method vlval outerLv =
         currentLval := Some(outerLv);
@@ -1388,6 +1378,13 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
     (* let l = instrLoc !currentInst in *)
     match !currentFunc with
         None -> (* expression outside function *) SkipChildren
-      | Some(f) -> 
-            DoChildren (* OVERRIDEME *)
+      | Some(f) ->
+            (* eliminate SizeofE because it causes us problems:
+             * apparent dereferencing exprs, like "sizeof a->b",
+             * don't actually do derefs. *)
+            let initiallyChangedE = match outerE with
+                SizeOfE(e) -> SizeOf(Cil.typeOf e)
+              | x -> x
+            in
+            ChangeDoChildrenPost(initiallyChangedE, fun i -> i)
 end

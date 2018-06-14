@@ -3,7 +3,15 @@
 -include $(dir $(lastword $(MAKEFILE_LIST)))/../../../config.mk
 LIBCRUNCH_BASE ?= ../../..
 
+export USE_LD=ld.gold
+
 default: runtime.so stubs.o gold-plugin.so wrap.ldopts
+
+C_SRC := shadowprov_libc_wrappers.c
+C_DEPS := $(patsubst %.c,.%.d,$(C_SRC))
+$(C_DEPS): .%.d : %.c
+	$(CC) -MM $(CFLAGS) $(CPPFLAGS) "$<"  > "$@" || (rm -f "$@"; false)
+-include $(C_DEPS)
 
 CPPFLAGS += -I$(LIBRUNT)/include
 
@@ -17,8 +25,8 @@ stubs.o: shadowprov_libc_wrappers.o
 	ln -sf "$<" "$@"
 shadowprov_libc_wrappers.o: shadowprov_libc_wrappers.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o "$@" "$<"
-shadowprov_libc_wrappers.o: CFLAGS += -g -fPIC -std=c11
-shadowprov_libc_wrappers.o: CFLAGS += -I$(LIBCRUNCH_BASE)/include \
+shadowprov_libc_wrappers.o .shadowprov_libc_wrappers.d: CFLAGS += -g -fPIC -std=c11
+shadowprov_libc_wrappers.o .shadowprov_libc_wrappers.d: CFLAGS += -I$(LIBCRUNCH_BASE)/include \
   -I$(LIBCRUNCH_BASE)/src \
   -I$(LIBALLOCS)/include \
   -I$(LIBALLOCS)/src \
@@ -40,6 +48,16 @@ export CIL_PLUGINS := $(LIBALLOCS)/tools/lang/c/cilallocs/cilallocs.cmxs \
 export CIL_PASSES := shadowprov
 
 tests := $(wildcard test-*.c)
+vpath %.c defacto_tarball/tests/de_facto_memory_model
+extra_tests := $(patsubst defacto_tarball/tests/de_facto_memory_model/%.c,%.c,$(wildcard defacto_tarball/tests/de_facto_memory_model/*.c))
+$(info found extra tests $(extra_tests))
+# sort to remove duplicates, for copied .c files that show up twice
+tests := $(sort $(tests) $(patsubst %.c,test-%.c,$(extra_tests)))
+$(patsubst %.c,test-%.c,$(extra_tests)): test-%.c: %.c
+	cp "$<" "$@"
+# never build straight from .c
+%: %.c
+
 $(patsubst %.c,%.o,$(tests)): CFLAGS += -wrapper $(LIBCRUNCH_BASE)/frontend/cilpp/bin/wrapper \
    -include $(LIBCRUNCH_BASE)/frontend/c/shadowprov/shadowprov_helpers.h \
    -save-temps
@@ -47,8 +65,11 @@ $(patsubst %.c,%,$(tests)): LDFLAGS += -Wl,-plugin,$(LIBCRUNCH_BASE)/frontend/c/
    -Wl,-rpath,$(LIBCRUNCH_BASE)/lib \
    -Wl,@$(LIBCRUNCH_BASE)/frontend/c/shadowprov/wrap.ldopts
 
-# never build straight from .c
-%: %.c
+test-fail-materialise: LDFLAGS += -Wl,-Ttext,0x410000
+
+#./charon-run/charon_run --compile_only --tools tools.gcc8 --tests tests.charon \
+#                        --test_src_dir tests/de_facto_memory_model/ --test_bin_dir tests.bin/ --test_int_dir tests.int \
+#                        --int tests.int/int_gcc8.log
 
 #%.o: %.c
 #	OCAMLRUNPARAM=b \

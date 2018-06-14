@@ -209,3 +209,5 @@ stashed*
 massive.out.*
 test/*/*+*
 test/*/dump*
+frontend/c/shadowprov/defacto*
+frontend/c/shadowprov/test-*

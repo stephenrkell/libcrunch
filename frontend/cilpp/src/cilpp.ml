@@ -9,33 +9,48 @@ open Unix
 open Feature
 module D = Dynlink
 external mkstemp: string -> Unix.file_descr * string = "caml_mkstemp"
+external mkstemps: string -> int -> Unix.file_descr * string = "caml_mkstemps"
+
+type extra_arg =
+    OutputFile
+  | Plugin
 
 let () =
     let minusOPos = ref None in
+    let saveTemps = ref false in
+    let readingExtraArg = ref None in
     let originalOutfile = ref None in
-    let (newTempFd, newTempName) = mkstemp "/tmp/tmp.XXXXXX" in
-    let rewrittenArgs = Array.mapi (fun i -> fun arg -> 
-        if i = 0 then "cpp" else
+    let cilPluginsToLoadReverse = ref [] in
+    let cilPassesToRunReverse = ref [] in
+    let (newTempFd, newTempName) = mkstemps "/tmp/tmp.XXXXXX.cpp.i" 6 in
+    let rewrittenArgs = List.flatten (List.mapi (fun i -> fun arg -> 
+        if i = 0 then ["cpp"] else
         match arg with
-          | "-o" -> (minusOPos := Some(i); arg)
+          | "-o" -> (minusOPos := Some(i); readingExtraArg := Some(OutputFile); [arg])
+          | "-save-temps" -> saveTemps := true; [arg]
+          | "-plugin" -> (readingExtraArg := Some(Plugin); [])
+          | s when String.length s > String.length "-fpass-"
+                && String.sub s 0 (String.length "-fpass-") = "-fpass-" ->
+                let passName = String.sub s (String.length "-fpass-") (String.length s - String.length "-fpass-")
+                in cilPassesToRunReverse := passName :: !cilPassesToRunReverse; []
           | _ -> (
-            match !minusOPos with
-                Some(pos) when pos + 1 = i -> (
-                    originalOutfile := Some(arg);
-                    newTempName
-                    )
-                  | _ -> arg
+            let replacement = match !readingExtraArg with
+                None -> [arg]
+              | Some(OutputFile) -> originalOutfile := Some(arg); [newTempName]
+              | Some(Plugin) -> cilPluginsToLoadReverse := arg :: !cilPluginsToLoadReverse; []
+            in
+            readingExtraArg := None; replacement
           )
-        ) Sys.argv
+        ) (Array.to_list Sys.argv))
     in
     let newArgs = match !minusOPos with
         None -> (* there was no -o, so add one *)
-            Array.append rewrittenArgs [| "-o"; newTempName |]
+            rewrittenArgs @ [ "-o"; newTempName ]
       | Some(i) -> rewrittenArgs
     in
     (* FIXME: we have left the fd open *)
     match fork () with
-        | 0 -> (try execvp newArgs.(0) newArgs
+        | 0 -> (try execvp (List.hd newArgs) (Array.of_list newArgs)
             with Unix_error(err, _, _) ->
                 output_string Pervasives.stderr ("cannot exec cpp: " ^ (error_message err) ^ "\n");
                 exit 255
@@ -59,11 +74,9 @@ let () =
             None -> Pervasives.stdout, "(stdout)"
           | Some(fname) -> (Pervasives.open_out fname, fname)
     in
-    (* do passes according to environment variables *)
-    Feature.loadFromEnv "CIL_PLUGINS" [];
-    let features = try Str.split (Str.regexp "[ ,]+") (Sys.getenv "CIL_PASSES")
-       with Not_found -> []
-    in
+    (* do passes *)
+    List.iter Feature.loadWithDeps (List.rev !cilPluginsToLoadReverse);
+    let features = List.rev !cilPassesToRunReverse in
     List.iter Feature.enable features;
     let currentCilFile = initialCilFile in
     (* HACKED based on CIL's main.ml:
@@ -92,5 +105,5 @@ let () =
     Cil.printerForMaincil := Cil.defaultCilPrinter;
     let _ = Cil.dumpFile Cil.defaultCilPrinter chan str currentCilFile
     in
-    (* FIXME: delete temporary file! *)
-    ()
+    (* delete temporary file unless -save-temps; FIXME: we don't see -save-temps? *)
+    if !saveTemps then () else Unix.unlink newTempName

@@ -2,13 +2,15 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-void *f(void *arg)
+char *f(void *arg)
 {
-	return (char*) arg + 1;
+	char *pc = (char*) arg + 1;
+	*pc = 42;
+	return pc;
 }
 
 int main(void)
 {
-	void *block = f(malloc(42));
-	return ((intptr_t) block) % 256;
+	char *ret = f(malloc(42));
+	return ((intptr_t) ret) % *ret;
 }

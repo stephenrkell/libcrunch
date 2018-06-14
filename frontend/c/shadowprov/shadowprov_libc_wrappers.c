@@ -7,7 +7,11 @@
 #include <dirent.h>
 #include <ctype.h>
 #include <err.h>
+#include <time.h>
+#include <assert.h>
 #include "shadowprov_helpers.h"
+#define RELF_DEFINE_STRUCTURES
+#include "relf.h" /* for the auxv stuff */
 
 #define NULL_PROV NULL_SHADOW
 #define SPECIAL_PROV SPECIAL_SHADOW
@@ -34,11 +38,11 @@
 #define RETURN_FRESH_NULL_POINTER \
 		__push_result_shadow_explicit(caller_is_inst, NULL, NULL_PROV); \
 		return NULL
-#define GENERATE_FRESH(v) \
-	(__make_shadow((unsigned long) v, rand()))
+#define GENERATE_FROM_BASE(v) \
+	(__make_shadow((unsigned long) v, 0))
 #define RETURN_SHADOWABLE_FRESH(t, v) \
 		__push_result_shadow_manifest( \
-			caller_is_inst, (__shadowed_value_t)(v), (unsigned long)(v), rand()); \
+			caller_is_inst, (__shadowed_value_t)(v), (unsigned long)(v), 0); \
 		return (t)(v)
 #define RETURN_SHADOWABLE_EXPLICIT(t, v, c) \
 		__push_result_shadow_explicit( \
@@ -86,7 +90,7 @@ DECLARE(int*, __errno_location, void)
 	BEGIN(__errno_location);
 	static char shadow;
 	int *ret = REAL(__errno_location)();
-	if (!shadow) shadow = GENERATE_FRESH(ret).byte;
+	if (!shadow) shadow = GENERATE_FROM_BASE(ret).byte;
 	RETURN_SHADOWABLE_EXPLICIT(int*, ret, shadow);
 }
 
@@ -97,7 +101,7 @@ DECLARE(short const **, __ctype_b_loc, void)
 	BEGIN(__ctype_b_loc);
 	short const** ret_shadowable = REAL(__ctype_b_loc)();
 	static char shadow;
-	if (!shadow) shadow = GENERATE_FRESH(ret_shadowable).byte;
+	if (!shadow) shadow = GENERATE_FROM_BASE(ret_shadowable).byte;
 	RETURN_SHADOWABLE_EXPLICIT(short const **, ret_shadowable, shadow);
 }
 
@@ -106,7 +110,7 @@ DECLARE(int **, __ctype_toupper_loc, void)
 	BEGIN(__ctype_toupper_loc);
 	int ** ret_shadowable = REAL(__ctype_toupper_loc)();
 	static char shadow;
-	if (!shadow) shadow = GENERATE_FRESH(ret_shadowable).byte;
+	if (!shadow) shadow = GENERATE_FROM_BASE(ret_shadowable).byte;
 	RETURN_SHADOWABLE_EXPLICIT(int**, ret_shadowable, shadow);
 }
 
@@ -115,7 +119,7 @@ DECLARE(int **, __ctype_tolower_loc, void)
 	BEGIN(__ctype_tolower_loc);
 	int ** ret_shadowable = REAL(__ctype_tolower_loc)();
 	static char shadow;
-	if (!shadow) shadow = GENERATE_FRESH(ret_shadowable).byte;
+	if (!shadow) shadow = GENERATE_FROM_BASE(ret_shadowable).byte;
 	RETURN_SHADOWABLE_EXPLICIT(int**, ret_shadowable, shadow);
 }
 
@@ -152,7 +156,7 @@ DECLARE(char *, strstr, const char *haystack, const char *needle)
 {
 	BEGIN(strstr);
 	char *ret_shadowable = REAL(strstr)(haystack, needle);
-	RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, ret_shadowable, 1, haystack);
+	RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, ret_shadowable, 0, haystack);
 }
 
 DECLARE(char*, strdup, const char *s)
@@ -202,13 +206,143 @@ DECLARE(void*, realloc, void *p, size_t size)
 	if (ret_shadowable == p)
 	{
 		RETURN_SHADOWABLE_WITH_ARGSHADOW(
-			void*, ret_shadowable, 1, p);
+			void*, ret_shadowable, 0, p);
 	}
-	if (p)
+	if (ret_shadowable)
 	{
 		RETURN_SHADOWABLE_FRESH(void*, ret_shadowable);
 	}
 	RETURN_NULL;
 }
+DECLARE(void*, dlsym, void *handle, const char *symbol)
+{
+	BEGIN(dlsym);
+	void *ret = REAL(dlsym)(handle, symbol);
+	if (ret)
+	{
+		/* Assume we get the base address of some object. */
+		RETURN_SHADOWABLE_FRESH(void*, ret);
+	}
+	RETURN_NULL;
+}
+DECLARE(char*, strrchr, const char *s, int c)
+{
+	BEGIN(strrchr);
+	char *ret = REAL(strrchr)(s, c);
+	if (ret)
+	{
+		RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, ret, 0, s);
+	}
+	RETURN_NULL;
+}
+DECLARE(struct tm*, localtime, const time_t *timep)
+{
+	BEGIN(localtime);
+	static char shadow;
+	struct tm *ret = REAL(localtime)(timep);
+	if (ret)
+	{
+		if (!shadow) shadow = GENERATE_FROM_BASE(ret).byte;
+		RETURN_SHADOWABLE_EXPLICIT(struct tm*, ret, shadow);
+	}
+	RETURN_NULL;
+}
+DECLARE(void*, dlopen, const char *filename, int flag)
+{
+	BEGIN(dlopen);
+	void *ret = REAL(dlopen)(filename, flag);
+	if (ret)
+	{
+		RETURN_SHADOWABLE_EXPLICIT(void *, ret, GENERATE_FROM_BASE(ret).byte);
+	}
+	RETURN_NULL;
+}
+DECLARE(char*, strcat, char *dest, char *src)
+{
+	BEGIN(strcat);
+	char *ret = REAL(strcat)(dest, src);
+	RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, dest, 0, dest);
+}
+DECLARE(char*, getcwd, char *buf, size_t size)
+{
+	BEGIN(getcwd);
+	char *ret = REAL(getcwd)(buf, size);
+	if (ret)
+	{
+		RETURN_SHADOWABLE_WITH_ARGSHADOW(char *, buf, 0, buf);
+	}
+	RETURN_NULL;
+}
+DECLARE(FILE*, fdopen, int fd, const char *mode)
+{
+	BEGIN(fdopen);
+	FILE *ret_shadowable = REAL(fdopen)(fd, mode);
+	RETURN_SHADOWABLE_FRESH(FILE*, ret_shadowable);
+}
+DECLARE(void*, memset, void *s, int c, size_t n)
+{
+	BEGIN(memset);
+	void *ret = REAL(memset)(s, c, n);
+	RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, s, 0, s);
+}
+DECLARE(char *, strcpy, char *dest, const char *src)
+{
+	BEGIN(strcpy);
+	char *ret = REAL(strcpy)(dest, src);
+	RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, dest, 0, dest);
+}
 
 // we don't need to init the libc/auxv shadow space here -- shadow.c does it
+// OH, but it initialises things with bounds -- we want provenances.
+#define STORED_PTR(ptr) warnx("Set up stored shadowable at %p: %02x", &ptr, __make_shadow((unsigned long) ptr, 0)); __store_shadow_nonlocal(&ptr, (unsigned long) ptr, __make_shadow((unsigned long) ptr, 0), (void*)0)
+#define STORE_IT2(x, y) __store_shadow_nonlocal(&x, (unsigned long) y, __make_shadow((unsigned long) y, 0), (void*)0)
+#define STORE_IT_AT(place, val) __store_shadow_nonlocal(place, (unsigned long) val, __make_shadow((unsigned long) val, 0), (void*)0)
+extern int main(int, char**) __attribute__((weak));
+static void init_shadow_entries(void) __attribute__((constructor));
+static void init_shadow_entries(void)
+{
+	// from gdb:
+	// printf "%lx\n", *(unsigned char*) ((void*(*)(void*)) __libcrunch_ool_base_stored_addr)( & shadowable )
+	/* It's not just about wrapping functions. Initialise the globals.
+	 * FIXME: not sure why SoftBound doesn't do this. */
+	Elf64_auxv_t *auxv_array_start = get_auxv((const char **) environ, environ[0]);
+	if (!auxv_array_start) return;
+
+	struct auxv_limits lims = get_auxv_limits(auxv_array_start);
+
+	for (const char **argvi = lims.argv_vector_start; argvi != lims.argv_vector_terminator; ++argvi)
+	{
+		/* We're pointing at a stored pointer. */
+		STORED_PTR(*argvi);
+	}
+	for (const char **envi = lims.env_vector_start; envi != lims.env_vector_terminator; ++envi)
+	{
+		/* We're pointing at a stored pointer. */
+		STORED_PTR(*envi);
+	}
+	STORE_IT2(environ, lims.env_vector_start); // in case environ is not init'd yet?
+	
+
+	STORED_PTR(stdin);
+	STORED_PTR(stdout);
+	STORED_PTR(stderr);
+		
+	/* HACK: some glibc-specific stuff. */
+	STORE_IT_AT((void**) __ctype_b_loc(), *(void**) __ctype_b_loc());
+	STORE_IT_AT((void**) __ctype_toupper_loc(), *(void**) __ctype_toupper_loc());
+	STORE_IT_AT((void**) __ctype_tolower_loc(), *(void**) __ctype_tolower_loc());
+	/* END glibc-specific */
+	
+	struct link_map *exe_handle = get_exe_handle();
+	void *main_addr;
+	if (&main) main_addr = &main;
+	else main_addr = fake_dlsym(exe_handle, "main");
+	if (!main_addr || main_addr == (void*) -1) warnx("Could not get address of main; initial cookie will be invalid");
+	// FIXME: also look at static alloc records
+	/* Leave shadows for argc and argv there on the shadow stack for main() to pick up. */
+	__push_argument_shadow_manifest((unsigned long) lims.argv_vector_start,
+		(unsigned long) lims.argv_vector_start, 0);
+	/* This is for argc */
+	__push_argument_shadow_manifest((unsigned long) 0, (unsigned long) 0, 0);
+	__push_argument_shadow_cookie(main_addr, "main");
+}

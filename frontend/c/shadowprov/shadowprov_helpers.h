@@ -13,6 +13,7 @@ extern __thread unsigned long */*volatile*/ __shadow_sp;
 #define NULL_SHADOW ((char)0)
 #define SPECIAL_SHADOW ((char)255) /* FIXME: do I need this? */
 
+void (__attribute__((noreturn)) abort)(void);
 /* FIXME: in places where we memcpy bytes, we assume little-endianness. */
 
 /* GNU extensions "&&label" and gnu_inline might be better, but that sadly
@@ -103,8 +104,8 @@ extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __all
 #define SHADOW_STACK_TRACE_LEVEL 0
 #endif
 
-#define PRISHADOW "%ld"
-#define PRINT_SHADOW_EXPR(s) (long)*(char*)&s
+#define PRISHADOW "%02x"
+#define PRINT_SHADOW_EXPR(s) (unsigned char)(long)*(char*)&s
 #define TRACE_SHADOW(lvl, descr, val, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): shadow " PRISHADOW " " descr, __shadow_sp, PRINT_SHADOW_EXPR(val), ## args ))
 #define TRACE_WORD(lvl, descr, w, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): word %lx " descr, __shadow_sp, w, ## args ))
 #define TRACE_STRING(lvl, descr, s, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): %s " descr, __shadow_sp, s, ## args ))
@@ -163,7 +164,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_argume
 {
 	unsigned long *c = __alloc_shadow_stack_space(sizeof (unsigned long));
 	__builtin_memcpy(c, &callee, sizeof callee);
-	TRACE_STRING(1, "about to call (cookie %p)", callee_name, callee);
+	TRACE_STRING(1, "about to be called (cookie %p)", callee_name, callee);
 }
 
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __tweak_argument_shadow_cookie)
@@ -194,7 +195,7 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure)) __
 			(char*) __shadow_sp + sizeof (unsigned long) + (offset * (sizeof (unsigned long)))
 		);
 		__builtin_memcpy(&b, b_addr, sizeof b);
-		TRACE_SHADOW(1, "peeked for argument", b);
+		TRACE_SHADOW(1, "peeked for argument at offset %d", b, offset);
 		return b;
 	}
 	TRACE_STRING(0, "no shadow for shadowed arg expr", debugstr);
@@ -268,7 +269,7 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure)) __
 	{
 		__shadow_t b;
 		__builtin_memcpy(&b, (char*) __shadow_sp + (offset * (sizeof (unsigned long))), sizeof (__shadow_t));
-		TRACE_SHADOW(1, "peeked as result", b);
+		TRACE_SHADOW(1, "peeked as result at offset %d", b, offset);
 		return b;
 	}
 	TRACE_STRING(0, " : callee returned no shadow (callee address %p)", calleestr, __get_pc());
@@ -279,10 +280,13 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_sha
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_shadow_stack)(void *saved_ptr)
 {
 	__shadow_sp = (unsigned long *) saved_ptr;
+	TRACE_STRING(0, "call sequence finished", "");
 }
 
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t s);
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t s)
 {
-	return 1;
+	if (s.byte != 0 && s.byte != (char)255) return 1;
+	warnx("Bad provenance for %p: %x", addr, (unsigned) s.byte);
+	abort();
 }

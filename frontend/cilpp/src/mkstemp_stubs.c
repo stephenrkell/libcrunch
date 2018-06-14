@@ -57,3 +57,34 @@ caml_mkstemp(value templ)
 	CAMLreturn(out);
 	//return out; /* HACK: assuming it's a mere int */
 }
+
+CAMLprim value
+caml_mkstemps(value templ, value suffixlen)
+{
+	CAMLparam2(templ, suffixlen);
+	const char *s = String_val(templ);
+	int suffixl = Int_val(suffixlen);
+	char *s_dup = strdup(s);
+	int fd = mkstemps(s_dup, suffixl);
+	if (fd == -1)
+	{
+		/* see comment in caml_mkstemp */
+		CAMLlocal1(tup);
+		tup = caml_alloc(3, 0);
+		Store_field(tup, 0, unix_error_of_code(errno));
+		Store_field(tup, 1, caml_copy_string("mkstemps"));
+		Store_field(tup, 2, templ);
+		value exn = *caml_named_value("Unix.Unix_error");
+
+		free(s_dup);
+		caml_raise_with_arg(exn, Val_int(errno));
+	}
+	
+	CAMLlocal1(out);
+	out = caml_alloc(2, 0);
+	Store_field(out, 0, fd);
+	Store_field(out, 1, caml_copy_string(s_dup));
+	free(s_dup);
+	CAMLreturn(out);
+	//return out; /* HACK: assuming it's a mere int */
+}
