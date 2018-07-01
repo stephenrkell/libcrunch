@@ -20,6 +20,5 @@ kernel:
 clean:
 	$(MAKE) -C src clean
 	$(MAKE) -C frontend clean
-	$(MAKE) -C test clean
 	$(MAKE) -C kernel clean
 	$(MAKE) -C lib clean
