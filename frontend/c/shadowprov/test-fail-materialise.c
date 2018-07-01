@@ -5,5 +5,7 @@ int main(void)
 	printf("Got as far as reading one byte: %d\n", *safe_byte);
 	fflush(stdout);
 	char *a_byte = (char*) 0x410000;
-	return *a_byte;
+	char c = *a_byte;
+	printf("We should not get *this* far\n");
+	return c;
 }
