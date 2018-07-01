@@ -275,6 +275,7 @@ all_symbols_read_handler (void)
 	/* Also add the extra input files. */
 	add_input_file(stubs.c_str());
 	add_input_file(runtime.c_str());
+	add_input_library("dl");
 	
 	return LDPS_OK;
 }
