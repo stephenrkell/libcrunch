@@ -17,6 +17,7 @@ open Unix
  * Casts, arithmetic and all other expressions simply propagate shadows,
  * choosing the leftmost in the case of binary operations.
  *)
+let minusOne = Const(CInt64(Int64.minus_one, IInt, None))
 
 (* Will fill these in during initializer *) 
 class helperFunctionsFull = object(self)
@@ -75,13 +76,14 @@ class shadowProvVisitor
                   | ExternObject(v) -> failwith "don't use extern object"
                );
                (* what's the pointee type? *)
-               (CastE(voidPtrType, zero))
+               (CastE(voidPtrType, if isPointerType (Cil.typeOf e) then zero else minusOne))
            ],
            l
         )
     ])
     (* helperFunctions *) (helperFunctions :> helperFunctionsRecord)
-    (* descriptorExprForShadowableExpr *) (fun e -> (CastE(voidPtrType, zero)))
+    (* descriptorExprForShadowableExpr *) (fun e -> (CastE(voidPtrType, 
+        if isPointerType (Cil.typeOf e) then zero else minusOne)))
     (* defaultShadowValueForType *) (fun t -> (CastE(charType, zero)))
     (* shadowString *) "prov"
    as super
@@ -105,7 +107,7 @@ class shadowProvVisitor
                 CastE(voidPtrType, addrOfLv lv) ;
                 CastE(ulongType, e);
                 sExpr;
-                CastE(voidPtrType, zero)
+                CastE(voidPtrType, if isPointerType (Cil.typeOf e) then zero else minusOne)
               ],
               l
         )]
@@ -116,10 +118,11 @@ class shadowProvVisitor
                 (* We need to handle __builtin_alloca *)
                 match i with
                     Call(Some(outLh, outLo), Lval(Var(fvi), NoOffset), args, l)
-                        when fvi.vname = "__builtin_alloca"
+                        when fvi.vname = "__builtin_alloca" || fvi.vname = "__liballocs_alloca"
                         -> (
                             (* The ordinary instrumentation won't
-                             * touch this because it's a builtin.
+                             * touch this because it's a builtin
+                             * or a liballocs alloca.
                              * We do whatever it wants to do, except
                              * that we also bless the output with a
                              * provenance. That might mean a local or
@@ -215,8 +218,14 @@ class shadowProvVisitor
         if self#typeNeedsShadow t <> self#typeNeedsShadow origT then failwith "cast-stripping affected shadowing"
         else
         let plainIntegerShadow = ShadowMakeFromRvals(let x = Const(CInt64(Int64.zero, IInt, None)) in [x; x]) in
-        let makePointerShadow = fun e -> ShadowMakeFromRvals([CastE(ulongType, e); CastE(ulongType, e)]) in
-        let makePointerShadowFromOffset = fun e -> fun offs -> ShadowMakeFromRvals([CastE(ulongType, e); Const(CInt64(Int64.of_int offs, IInt, None))]) in
+        let makePointerShadow = fun e -> ShadowMakeFromRvals([CastE(ulongType, e); CastE(ulongType, zero)]) in
+        (* We did have this trick for giving locals an "offset" that was XORed 
+         * into the shadow value, corresponding to their place in the stack
+         * frame. But that's not compatible with bounds checking where the
+         * shadow value is always derived from the object base address, so I
+         * have reverted to simply using the base address and accepting that
+         * we will run after an alloclocals pass. *)
+        let makePointerShadowFromOffset = fun e -> fun offs -> ShadowMakeFromRvals([CastE(ulongType, e); Const(CInt64( (*Int64.of_int offs*) Int64.zero, IInt, None))]) in
         let isUnboundedArrayType t = (match Cil.unrollType t with TArray(_, None, _) -> true | _ -> false) in
         let rec offsetContainsField offs = match offs with
                 NoOffset -> false
@@ -255,14 +264,14 @@ class shadowProvVisitor
                     | Some(cfa) -> (Lval(Var(cfa), NoOffset))        
                 in
                 makePointerShadowFromOffset currentFrameAddressExpr someVi.vid
-          | (AddrOf(Var(someVi), someOffset), _) (* vglob *) -> makePointerShadow e
+          | (AddrOf(Var(someVi), someOffset), _) (* vglob *) -> makePointerShadow (AddrOf(Var(someVi), NoOffset))
           | (StartOf(Var(someVi), someOffset), _) when (* by implication, not local *)
                 (* is it an extern array of unknown dimensions? *)
                 someVi.vstorage = Extern && isUnboundedArrayType someVi.vtype
                 (* OVERRIDEME: the crunchbound code tries handleAddrOfVarOrField here,
                  * then does MustFetch. We can just create a fresh shadow, because
                  * we don't need to know the bounds. *)
-                -> makePointerShadow e
+                -> makePointerShadow (StartOf(Var(someVi), NoOffset))
           | (StartOf(Var(someVi), someOffset), _) when self#hostIsLocal (Var(someVi)) ->
                 (* array-to-pointer decay on a local var's array. *)
                 let currentFrameAddressExpr = match !currentFrameAddressVar with
@@ -276,19 +285,19 @@ class shadowProvVisitor
                  * i.e. taking address of an array.
                  * We rewrote the cases that aren't, e.g. *p_arr,
                  * into CastE of an original pointer. *)
-                makePointerShadow e
+                makePointerShadow (StartOf(Var(someVi), NoOffset))
           | (AddrOf(Mem(memExp), someOffset), _) when offsetContainsField someOffset ->
                 (* taking a non-local subobject's address, + possibly array-indexing into it *)
-                makePointerShadow (AddrOf(Mem(memExp), offsetUpToField someOffset))
+                self#shadowDescrForExpr memExp
           | (AddrOf(Mem(memExp), someOffset), _) (* someOffset does *not* contain field *) ->
                 (* indexing into some array offset within *memExp
                  * ... shadow is whatever the shadow for memExp was,
                  *     so make a recursive call *)
                 self#shadowDescrForExpr memExp
           | (StartOf(Mem(memExp), someOffset), _) when offsetContainsField someOffset ->
-                makePointerShadow (AddrOf(Mem(memExp), offsetUpToField someOffset)) (* see above *)
+                self#shadowDescrForExpr memExp
           | (StartOf(Mem(memExp), someOffset), _) (* no field in offset; offset yields an array *) ->
-                makePointerShadow (StartOf(Mem(memExp), stripTrailingIndexes someOffset))
+                self#shadowDescrForExpr memExp
           | (BinOp(PlusPI, Lval(Var(someVi), someOffset), someIntExp, somePtrT), _) when self#hostIsLocal (Var(someVi)) ->
                 (* This is an adjustment of a locally shadowed ptr.
                  * Does it have the same shadow as the original one?

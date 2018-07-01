@@ -1,3 +1,9 @@
+// #define LIBALLOCS_NO_INLCACHE /* to be 'safe' from this experimental optimisation for now */
+// #include <liballocs.h>
+// don't do this... pull in too much
+
+void *(__attribute__((pure)) __liballocs_get_alloc_base)(const void *obj); // better
+
 /* FIXME: if I don't do the definition in two stages like this,
  * starting with the opaque declaration, CIL forks into two struct
  * defs, one of them alpha-renamed to shadow_byte___0... WHY? */
@@ -12,6 +18,12 @@ typedef unsigned long __shadowed_value_t;
 extern __thread unsigned long */*volatile*/ __shadow_sp;
 #define NULL_SHADOW ((char)0)
 #define SPECIAL_SHADOW ((char)255) /* FIXME: do I need this? */
+
+void __assert_fail(const char *, const char *, unsigned int, const char *);
+#ifndef assert
+#define assert(cond) \
+	if (!(cond)) __assert_fail(#cond, __FILE__, __LINE__, __func__)
+#endif
 
 void (__attribute__((noreturn)) abort)(void);
 /* FIXME: in places where we memcpy bytes, we assume little-endianness. */
@@ -53,7 +65,10 @@ extern inline void
 	unsigned long dest_addr __attribute__((unused)) = (unsigned long) dest;
 	unsigned long shadow_stored_addr __attribute__((unused))
 	 = (unsigned long) __shadow_stored_addr(dest);
-	
+	if (v && !arg && !shadow.byte)
+	{
+		warnx("Storing non-null pointer with no provenance");
+	}
 	*(__raw_shadow_t *) shadow_stored_addr = (__raw_shadow_t) shadow.byte;
 }
 
@@ -62,7 +77,12 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure))
 {
 	if (loaded_from)
 	{
-		return (__shadow_t) { *(__raw_shadow_t *) __shadow_stored_addr(loaded_from) };
+		__shadow_t s = (__shadow_t) { *(__raw_shadow_t *) __shadow_stored_addr(loaded_from) };
+		if (v && !t && !s.byte)
+		{
+			warnx("Loaded non-null pointer with no provenance");
+		}
+		return s;
 	}
 	return __make_invalid_shadow(v);
 }
@@ -81,7 +101,7 @@ extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __all
 	/* First align the sp to the alignment we need. */
 	//warnx("Allocating (bsp %p) shadow stack space: %d bytes, %d-aligned", __shadow_sp, nbytes, align);
 	unsigned alignment_delta = ((unsigned long) __shadow_sp) % align;
-	if (!(alignment_delta == 0)) abort();
+	assert(alignment_delta == 0);
 	__shadow_sp = (unsigned long *) ((char*) __shadow_sp - alignment_delta);
 	/* Then allocate. */
 	__shadow_sp = (unsigned long *) ((char*) __shadow_sp - 
@@ -110,6 +130,16 @@ extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __all
 #define TRACE_WORD(lvl, descr, w, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): word %lx " descr, __shadow_sp, w, ## args ))
 #define TRACE_STRING(lvl, descr, s, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): %s " descr, __shadow_sp, s, ## args ))
 
+extern inline __raw_shadow_t (__attribute__((always_inline,gnu_inline,pure,__const__))
+		__shadow_from_word)(unsigned long arg)
+{
+	if (!arg) return NULL_SHADOW;
+	__raw_shadow_t s = (char) (1 + 
+			((arg >> 8) ^ (arg & 0xff))
+				 % 254);
+	return s;
+}
+
 extern inline __shadow_t (__attribute__((always_inline,gnu_inline,pure,__const__))
 		__make_shadow)(__shadowed_value_t arg1, __shadowed_value_t arg2)
 {
@@ -117,10 +147,16 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,pure,__const__
 	 * of the allocation, and (2) an opaque word-sized value that refines this
 	 * to denote the allocation uniquely. It might be zero.
 	 * We take the second-from-bottom byte of the pointer and XOR it with the offset. */
+	assert(arg2 == 0);
 	if (!arg1) return (__shadow_t) { NULL_SHADOW };
-	__raw_shadow_t s = (char) (1 + ((arg1 >> 8) ^ arg2) % 254);
-	TRACE_SHADOW(1, "made fresh from pointer %p", s, (void*) arg1);
-	return (__shadow_t) { (char) (1 + ((arg1 >> 8) ^ arg2) % 254) };
+	__raw_shadow_t made =__shadow_from_word(arg1);
+	TRACE_SHADOW(1, "made fresh from pointer %p", made, (void*) arg1);
+	/* CHECK against what liballocs thinks */
+	void *base = __liballocs_get_alloc_base((void*) arg1);
+	__raw_shadow_t expected = __shadow_from_word((unsigned long) base);
+	assert(made == expected);
+	
+	return (__shadow_t) { made };
 }
 
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_argument_shadow)
@@ -283,10 +319,17 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_sha
 	TRACE_STRING(0, "call sequence finished", "");
 }
 
-extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t s);
-extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t s)
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t derefed_shadow);
+extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t derefed_shadow)
 {
-	if (s.byte != 0 && s.byte != (char)255) return 1;
-	warnx("Bad provenance for %p: %x", addr, (unsigned) s.byte);
+	if (derefed_shadow.byte != 0 && derefed_shadow.byte != (char)255)
+	{
+		void *base = __liballocs_get_alloc_base((void*) addr);
+		__raw_shadow_t base_shadow = __shadow_from_word((unsigned long) base);
+		if (base_shadow == derefed_shadow.byte) return 1;
+		warnx("Pointer with value %p has provenance %02x but points to non-matching object base %p (%02x)",
+			addr, (unsigned)(unsigned char)derefed_shadow.byte, base, (unsigned)(unsigned char) base_shadow);
+	}
+	warnx("Bad provenance for %p: %x", addr, (unsigned)(unsigned char) derefed_shadow.byte);
 	abort();
 }

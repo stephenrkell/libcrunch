@@ -101,7 +101,7 @@ DECLARE(short const **, __ctype_b_loc, void)
 	BEGIN(__ctype_b_loc);
 	short const** ret_shadowable = REAL(__ctype_b_loc)();
 	static char shadow;
-	if (!shadow) shadow = GENERATE_FROM_BASE(ret_shadowable).byte;
+	if (!shadow) shadow = GENERATE_FROM_BASE(__liballocs_get_alloc_base(ret_shadowable)).byte;
 	RETURN_SHADOWABLE_EXPLICIT(short const **, ret_shadowable, shadow);
 }
 
@@ -110,7 +110,7 @@ DECLARE(int **, __ctype_toupper_loc, void)
 	BEGIN(__ctype_toupper_loc);
 	int ** ret_shadowable = REAL(__ctype_toupper_loc)();
 	static char shadow;
-	if (!shadow) shadow = GENERATE_FROM_BASE(ret_shadowable).byte;
+	if (!shadow) shadow = GENERATE_FROM_BASE(__liballocs_get_alloc_base(ret_shadowable)).byte;
 	RETURN_SHADOWABLE_EXPLICIT(int**, ret_shadowable, shadow);
 }
 
@@ -119,7 +119,7 @@ DECLARE(int **, __ctype_tolower_loc, void)
 	BEGIN(__ctype_tolower_loc);
 	int ** ret_shadowable = REAL(__ctype_tolower_loc)();
 	static char shadow;
-	if (!shadow) shadow = GENERATE_FROM_BASE(ret_shadowable).byte;
+	if (!shadow) shadow = GENERATE_FROM_BASE(__liballocs_get_alloc_base(ret_shadowable)).byte;
 	RETURN_SHADOWABLE_EXPLICIT(int**, ret_shadowable, shadow);
 }
 
@@ -179,10 +179,18 @@ DECLARE(char*, getenv, const char *s)
 	
 }
 
+extern __thread void *__current_allocsite;
 DECLARE(void*, malloc, size_t s)
 {
 	BEGIN(malloc);
+	_Bool we_set_allocsite = 0;
+	if (!__current_allocsite)
+	{
+		we_set_allocsite = 1;
+		__current_allocsite = __builtin_return_address(0);
+	}
 	void *ret_shadowable = REAL(malloc)(s);
+	if (we_set_allocsite) __current_allocsite = NULL;
 	if (ret_shadowable)
 	{
 		RETURN_SHADOWABLE_FRESH(void*, ret_shadowable);
@@ -192,7 +200,14 @@ DECLARE(void*, malloc, size_t s)
 DECLARE(void*, calloc, size_t nmemb, size_t size)
 {
 	BEGIN(calloc);
+	_Bool we_set_allocsite = 0;
+	if (!__current_allocsite)
+	{
+		we_set_allocsite = 1;
+		__current_allocsite = __builtin_return_address(0);
+	}
 	void *ret_shadowable = REAL(calloc)(nmemb, size);
+	if (we_set_allocsite) __current_allocsite = NULL;
 	if (ret_shadowable)
 	{
 		RETURN_SHADOWABLE_FRESH(void*, ret_shadowable);
@@ -202,7 +217,14 @@ DECLARE(void*, calloc, size_t nmemb, size_t size)
 DECLARE(void*, realloc, void *p, size_t size)
 {
 	BEGIN(realloc);
+	_Bool we_set_allocsite = 0;
+	if (!__current_allocsite)
+	{
+		we_set_allocsite = 1;
+		__current_allocsite = __builtin_return_address(0);
+	}
 	void *ret_shadowable = REAL(realloc)(p, size);
+	if (we_set_allocsite) __current_allocsite = NULL;
 	if (ret_shadowable == p)
 	{
 		RETURN_SHADOWABLE_WITH_ARGSHADOW(
@@ -313,12 +335,12 @@ static void init_shadow_entries(void)
 	for (const char **argvi = lims.argv_vector_start; argvi != lims.argv_vector_terminator; ++argvi)
 	{
 		/* We're pointing at a stored pointer. */
-		STORED_PTR(*argvi);
+		STORE_IT2(*argvi, lims.asciiz_start);
 	}
 	for (const char **envi = lims.env_vector_start; envi != lims.env_vector_terminator; ++envi)
 	{
 		/* We're pointing at a stored pointer. */
-		STORED_PTR(*envi);
+		STORE_IT2(*envi, lims.asciiz_start);
 	}
 	STORE_IT2(environ, lims.env_vector_start); // in case environ is not init'd yet?
 	
@@ -328,9 +350,9 @@ static void init_shadow_entries(void)
 	STORED_PTR(stderr);
 		
 	/* HACK: some glibc-specific stuff. */
-	STORE_IT_AT((void**) __ctype_b_loc(), *(void**) __ctype_b_loc());
-	STORE_IT_AT((void**) __ctype_toupper_loc(), *(void**) __ctype_toupper_loc());
-	STORE_IT_AT((void**) __ctype_tolower_loc(), *(void**) __ctype_tolower_loc());
+	STORE_IT_AT((void**) __ctype_b_loc(), __liballocs_get_alloc_base(*(void**) __ctype_b_loc()));
+	STORE_IT_AT((void**) __ctype_toupper_loc(), __liballocs_get_alloc_base(*(void**) __ctype_toupper_loc()));
+	STORE_IT_AT((void**) __ctype_tolower_loc(), __liballocs_get_alloc_base(*(void**) __ctype_tolower_loc()));
 	/* END glibc-specific */
 	
 	struct link_map *exe_handle = get_exe_handle();
