@@ -3499,63 +3499,82 @@ class checkStatementLabelVisitor = fun labelPrefix ->
         labelCounter <- labelCounter + 1;
         ident
       in
+      (* A block is a sequence of statements.
+       * A statement may be an Instrs, which is a sequence of Instrs.
+       * Given a sequence of Instrs
+       * and the stmt that contains it (an Instrs statement),
+       * we create a new stmt
+       * that is itself a Block,
+       * containing many stmts,
+       * each an element of  groupedInstrs. *)
+      let restructureInstrsStatement
+          (groupAndLabel : Cil.instr list -> (Cil.instr list * label option) list)
+          (originalStmt : Cil.stmt)
+          : Cil.stmt
+       = match originalStmt.skind with
+           Instr(instrs) -> let groupedInstrs = groupAndLabel instrs in
+           {
+              labels = (match groupedInstrs with
+                [(singletonGroup, Some(newLabel))] ->
+                    newLabel :: originalStmt.labels 
+                 | _ -> originalStmt.labels);
+              skind = (match groupedInstrs with
+                [(singletonGroup, maybeLabel)] ->
+                    Instr(singletonGroup)
+                 | _ ->
+                    Block(
+                      let stmts = (List.map (fun (group, maybeLabel) -> (* begin stmt *) {
+                          labels = (match maybeLabel with Some(lbl) -> [lbl] | None -> []);
+                          skind = Instr(group);
+                          sid = 0;
+                          succs = [];
+                          preds = []
+                      } (* end stmt *)) groupedInstrs) in
+                      let b = mkBlock stmts in
+                      (* Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 b; *)
+                      b
+                  ));
+              sid = originalStmt.sid;
+              succs = originalStmt.succs;
+              preds = originalStmt.preds;
+           }
+        | _ -> failwith "not an Instrs statement"
+    in
+    let groupAndLabelInstrs (instrs : Cil.instr list) : (Cil.instr list * label option) list =
+        (* This is the labelling logic *)
+        let labelGroup group = (if List.length group = 1 
+        &&  None <> (try Some(List.find (fun checkFun -> instrIsCallTo checkFun (List.hd group)) checkFuns) with Not_found -> None) 
+        then
+            let loc = match List.hd group with
+                Call(_, _, _, loc) -> loc
+              | _ -> failwith "impossible: check not a call"
+            in
+            (group, Some(Label(mkLabelIdent labelPrefix, loc, false)))
+        else (group, None))
+        in
+        (* This is the grouping logic *)
+        let rec maybeSplitInstrs (rev_acc : instr list list) (cur : instr list) instrs = 
+            match instrs with
+              [] -> List.rev (cur :: rev_acc)
+            | x :: more when None <> (try Some(List.find (fun checkFun -> instrIsCallTo checkFun x) checkFuns) with Not_found -> None) ->
+                  (* debug_print 1 "Saw a check\n"; *)
+                  (* accumulate a singleton, then start a new run of instrs *)
+                  let new_singleton = [x] in
+                  let acc_with_cur = cur :: rev_acc in
+                  let new_rev_acc = new_singleton :: acc_with_cur in
+                  maybeSplitInstrs new_rev_acc [] more
+            | x :: more -> (* it's some other instr *)
+                  let new_cur = cur @ [x] in
+                  maybeSplitInstrs rev_acc new_cur more
+        in
+        let groups = maybeSplitInstrs [] [] instrs
+        in
+        List.map labelGroup groups
+      in
       match outerS.skind with
-            |  Instr(is) -> ChangeDoChildrenPost(outerS, fun s ->
-                    match is with
-                        [] -> s
-                      | firstI :: moreIs ->
-                            (* Here we want a split so that check calls are in a separate run. *)
-                            let rec maybeSplitInstrs (rev_acc : instr list list) (cur : instr list) instrs = 
-                                match instrs with
-                                  [] -> List.rev (cur :: rev_acc)
-                                | x :: more when None <> (try Some(List.find (fun checkFun -> instrIsCallTo checkFun x) checkFuns) with Not_found -> None) ->
-                                      (* debug_print 1 "Saw a check\n"; *)
-                                      (* accumulate a singleton, then start a new run of instrs *)
-                                      let new_singleton = [x]
-                                      in
-                                      let acc_with_cur = cur :: rev_acc
-                                      in
-                                      let new_rev_acc = new_singleton :: acc_with_cur
-                                      in
-                                      maybeSplitInstrs new_rev_acc [] more
-                                | x :: more -> (* it's some other instr *)
-                                      let new_cur = cur @ [x]
-                                      in
-                                      maybeSplitInstrs rev_acc new_cur more
-                            in
-                            let accRuns = maybeSplitInstrs [] [] is
-                            in
-                            (* debug_print 1 ("Split an Instr sequence into " ^ (string_of_int (List.length accRuns)) ^ "\n"); *)
-                            (* Okay, now we have the runs, make a block. *)
-                            {
-                                labels = s.labels;
-                                skind = Block(
-                                      let b = 
-                                      mkBlock (List.map (fun accRun -> {
-                                        labels = (if List.length accRun = 1 
-                                            &&  None <> (try Some(List.find (fun checkFun -> instrIsCallTo checkFun (List.hd accRun)) checkFuns) with Not_found -> None) 
-                                            then
-                                                let loc = match List.hd accRun with
-                                                    Call(_, _, _, loc) -> loc
-                                                  | _ -> failwith "impossible: check not a call"
-                                                in
-                                                [Label(mkLabelIdent labelPrefix, loc, false)]
-                                            else []
-                                        );
-                                        skind = Instr(accRun);
-                                        sid = 0;
-                                        succs = [];
-                                        preds = []
-                                    }) accRuns)
-                                    in
-                                    (* Cil.dumpBlock (new defaultCilPrinterClass) Pervasives.stderr 0 b; *)
-                                    b
-                                    );
-                                sid = s.sid;
-                                succs = s.succs;
-                                preds = s.preds;
-                            }
-               ) (* end ChangeDoChildrenPost *)
+            | Instr(is) -> 
+                ChangeDoChildrenPost(outerS,
+                    fun s -> restructureInstrsStatement groupAndLabelInstrs s)
          (* |   Return(maybeE, loc)
             |   Goto(stmtRef, loc)
             |   Break(loc)
@@ -3565,8 +3584,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
             |   Loop(blk, loc, unusedContinueLabel, unusedBreakLabel)
             |   Block(blk)
             |   TryFinally(blkTry, blkFinally, loc)
-            |   TryExcept(blk, instrsWithExprs, loc)       
-      *)
+            |   TryExcept(blk, instrsWithExprs, loc)       *)
             | _ -> DoChildren
 end
 
