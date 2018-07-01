@@ -876,7 +876,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 (Lval(Var((helperFunctions#getFetchAndPushResultShadow ()).svar),NoOffset)),
                                 [
                                     Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
-                                    valExp;
+                                    CastE(opaqueShadowableT, valExp);
                                     addrOfLv (lh,lo);
                                     descriptorExprForShadowableExpr valExp
                                 ],
@@ -887,7 +887,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 (Lval(Var((helperFunctions#getFetchAndPushResultShadow ()).svar),NoOffset)),
                                 [
                                     Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
-                                    valExp;
+                                    CastE(opaqueShadowableT, valExp);
                                     nullPtr;
                                     descriptorExprForShadowableExpr valExp
                                 ],
