@@ -109,7 +109,7 @@ libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
 # stick with stubs!
 
 libcrunch_preload.so libcrunch_stubs.so: LDFLAGS += -L$(LIBDLBIND)/lib
-libcrunch_preload.so: LDLIBS += $(LIBUNWIND_LDLIBS) -ldlbind 
+libcrunch_preload.so: LDLIBS += $(LIBUNWIND_LDLIBS) -ldlbind -ldl
 libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBDLBIND)/lib/libdlbind.a $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %libdlbind.a,$(filter-out %allocs_preload.a,$+)) \
 $(LDFLAGS) \
