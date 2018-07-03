@@ -381,17 +381,14 @@ unsigned long __libcrunch_ptr_derivations;
 unsigned long __libcrunch_ptr_derefs;
 unsigned long __libcrunch_ptr_stores;
 
-struct __libcrunch_cache /* __thread */ __libcrunch_is_a_cache = {
-	.size_plus_one = 1 + LIBCRUNCH_MAX_IS_A_CACHE_SIZE,
-	.next_victim = 1
-};
 /* We maintain a *separate* cache of "fake bounds" that remember ranges 
  * over which we've let arithmetic go ahead because we had no type info
  * for the allocation. Without this, many programs will repeatedly report
  * failures getting bounds. We keep it separate to avoid interference with
  * the main cache. */
-struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache = {
-	.size_plus_one = 1 + LIBCRUNCH_MAX_IS_A_CACHE_SIZE,
+// FIXME: this should be thread-local but my gdb can't grok that
+struct __liballocs_memrange_cache /* __thread */ __libcrunch_fake_bounds_cache = {
+	.size_plus_one = 1 + LIBALLOCS_MEMRANGE_CACHE_MAX_SIZE,
 	.next_victim = 1
 };
 
@@ -884,151 +881,6 @@ int __libcrunch_global_init(void)
 	return 0;
 }
 
-static void check_cache_sanity(struct __libcrunch_cache *cache)
-{
-	__libcrunch_check_cache_sanity(cache);
-}
-
-static void cache_is_a(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	_Bool result, unsigned short period, const void *alloc_base)
-{
-	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-#ifdef LIBCRUNCH_CACHE_REPLACE_FIFO
-	unsigned pos = __libcrunch_is_a_cache.next_victim;
-#else
-	// "one plus the index of the least significant 0-bit" of validity
-	unsigned pos = __builtin_ffs(~(__libcrunch_is_a_cache.validity));
-	assert(pos <= __libcrunch_is_a_cache.size_plus_one);
-	if (pos == __libcrunch_is_a_cache.size_plus_one)
-	{
-		pos = __libcrunch_is_a_cache.tail_mru;
-		assert(pos != 0);
-	}
-#endif
-	// unsigned pos = __libcrunch_is_a_cache.next_victim;
-	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
-		.obj_base = obj_base,
-		.obj_limit = obj_limit,
-		.uniqtype = (void*) t,
-		.period = period,
-		.result = result,
-		.prev_mru = __libcrunch_is_a_cache.entries[pos].prev_mru,
-		.next_mru = __libcrunch_is_a_cache.entries[pos].next_mru
-	};
-	// bump us to the top
-	__libcrunch_cache_bump_mru(&__libcrunch_is_a_cache, pos);
-	__libcrunch_cache_bump_victim(&__libcrunch_is_a_cache, pos);
-	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-}
-
-static void cache_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	_Bool result, unsigned short period, const void *alloc_base)
-{
-	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-#ifdef LIBCRUNCH_CACHE_REPLACE_FIFO
-	unsigned pos = __libcrunch_is_a_cache.next_victim;
-#else
-	unsigned pos = __builtin_ffs(~(__libcrunch_is_a_cache.validity));
-	assert(pos <= __libcrunch_is_a_cache.size_plus_one);
-	if (pos == __libcrunch_is_a_cache.size_plus_one)
-	{
-		pos = __libcrunch_is_a_cache.tail_mru;
-		assert(pos != 0);
-	}
-#endif
-	__libcrunch_is_a_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
-		.obj_base = obj_base,
-		.obj_limit = obj_limit,
-		.uniqtype = (void*) t,
-		.period = period,
-		.result = 1 /* FIXME */,
-		/* don't touch the list -- cache_bump will do it. */
-		.prev_mru = __libcrunch_is_a_cache.entries[pos].prev_mru,
-		.next_mru = __libcrunch_is_a_cache.entries[pos].next_mru
-	};
-	// bump us to the top (inserting us if we're invalid)
-	__libcrunch_cache_bump_mru(&__libcrunch_is_a_cache, pos);
-	__libcrunch_cache_bump_victim(&__libcrunch_is_a_cache, pos);
-	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-}
-
-static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	_Bool result, unsigned short period, const void *alloc_base)
-{
-	assert((check_cache_sanity(&__libcrunch_fake_bounds_cache), 1));
-#ifdef LIBCRUNCH_CACHE_REPLACE_FIFO
-	unsigned pos = __libcrunch_fake_bounds_cache.next_victim;
-#else
-	unsigned pos = __builtin_ffs(~(__libcrunch_fake_bounds_cache.validity));
-	assert(pos <= __libcrunch_fake_bounds_cache.size_plus_one);
-	if (pos == __libcrunch_fake_bounds_cache.size_plus_one)
-	{
-		pos = __libcrunch_fake_bounds_cache.tail_mru;
-		assert(pos != 0);
-	}
-#endif
-	/* Create the new entry and put it at the head. */
-	debug_println(1, "Creating fake bounds %p-%p", obj_base, obj_limit);
-	__libcrunch_fake_bounds_cache.entries[pos] = (struct __libcrunch_cache_entry_s) {
-		.obj_base = obj_base,
-		.obj_limit = obj_limit,
-		.uniqtype = (void*) t,
-		.period = period,
-		.result = 1 /* FIXME */,
-		/* don't touch the list -- cache_bump will do it */
-		.prev_mru = __libcrunch_fake_bounds_cache.entries[pos].prev_mru,
-		.next_mru = __libcrunch_fake_bounds_cache.entries[pos].next_mru
-	};
-	// bump us to the top
-	__libcrunch_cache_bump_mru(&__libcrunch_fake_bounds_cache, pos);
-	__libcrunch_cache_bump_victim(&__libcrunch_fake_bounds_cache, pos);
-	assert((check_cache_sanity(&__libcrunch_fake_bounds_cache), 1));
-}
-
-void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
-void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t)
-{
-	/* We ensure in crunchbound.ml that ptr is never trapped.
-	 * It follows that it might be pointing one-past-the-end... FIXME: do we deal with that? */
-	const void *ptr = (const void *) ptrval;
-	/* Never cache invalid bounds or max bounds. */
-	if (__libcrunch_bounds_invalid(ptr_bounds, ptr)) return;
-	if (__libcrunch_get_limit(ptr_bounds, ptr) == (void*) -1) return;
-	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(ptr, ptr, t, t->pos_maxoff);
-	if (__libcrunch_bounds_invalid(from_cache, ptr))
-	{
-		cache_bounds(__libcrunch_get_base(ptr_bounds, ptr), __libcrunch_get_limit(ptr_bounds, ptr),
-				t, 1, t->pos_maxoff, NULL);
-	}
-}
-
-/* FIXME: rewrite these */
-void __libcrunch_uncache_all(const void *allocptr, size_t size)
-{
-	__libcrunch_uncache_is_a(allocptr, size);
-}
-void __libcrunch_uncache_is_a(const void *allocptr, size_t size)
-{
-	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-	for (unsigned i = 1; i < __libcrunch_is_a_cache.size_plus_one; ++i)
-	{
-		if (__libcrunch_is_a_cache.validity & (1u << (i-1)))
-		{
-			assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-			/* Uncache any object beginning anywhere within the passed-in range. */
-			if ((char*) __libcrunch_is_a_cache.entries[i].obj_base >= (char*) allocptr
-					 && (char*) __libcrunch_is_a_cache.entries[i].obj_base < (char*) allocptr + size)
-			{
-				// unset validity and make this the next victim
-				__libcrunch_cache_unlink(&__libcrunch_is_a_cache, i);
-				__libcrunch_is_a_cache.next_victim = i;
-			}
-			assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-		}
-	}
-	assert((check_cache_sanity(&__libcrunch_is_a_cache), 1));
-}
-
 enum check_kind
 {
 	IS_A,
@@ -1108,6 +960,46 @@ static void report_failure(const void *site,
 		last_failed_check.opaque_decider /* deepest_subobject_type */ = found_uniqtype;
 	}
 	va_end(ap);
+}
+
+static void cache_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
+	unsigned short period, const void *alloc_base)
+{
+	__liballocs_cache_with_type(&__liballocs_ool_cache,
+		obj_base, obj_limit,
+		t, 1, period, alloc_base);
+}
+static void cache_is_a(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
+	_Bool result, unsigned short period, const void *alloc_base)
+{
+	__liballocs_cache_with_type(&__liballocs_ool_cache,
+		obj_base, obj_limit,
+		t, result, period, alloc_base);
+}
+static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
+	_Bool result, unsigned short period, const void *alloc_base)
+{
+	debug_println(1, "Creating fake bounds %p-%p", obj_base, obj_limit);
+	__liballocs_cache_with_type(&__libcrunch_fake_bounds_cache,
+		obj_base, obj_limit,
+		t, result, period, alloc_base);
+}
+
+void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
+void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t)
+{
+	/* We ensure in crunchbound.ml that ptr is never trapped.
+	 * It follows that it might be pointing one-past-the-end... FIXME: do we deal with that? */
+	const void *ptr = (const void *) ptrval;
+	/* Never cache invalid bounds or max bounds. */
+	if (__libcrunch_bounds_invalid(ptr_bounds, ptr)) return;
+	if (__libcrunch_get_limit(ptr_bounds, ptr) == (void*) -1) return;
+	__libcrunch_bounds_t from_cache = __fetch_bounds_from_cache(ptr, ptr, t, t->pos_maxoff);
+	if (__libcrunch_bounds_invalid(from_cache, ptr))
+	{
+		cache_bounds(__libcrunch_get_base(ptr_bounds, ptr), __libcrunch_get_limit(ptr_bounds, ptr),
+				t, 1, NULL);
+	}
 }
 
 #define CHECK_INIT \
@@ -2503,7 +2395,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 					: (char*) alloc_start + arg.innermost_containing_array_type_span_start_offset
 						+ (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) * t->pos_maxoff);
 			unsigned period = UNIQTYPE_ARRAY_ELEMENT_TYPE(arg.innermost_containing_array_t)->pos_maxoff;
-			if (a && a->is_cacheable) cache_bounds(lower, upper, t, 1, period, alloc_start);
+			if (a && a->is_cacheable) cache_bounds(lower, upper, t, period, alloc_start);
 			return __make_bounds(
 				(unsigned long) lower,
 				(unsigned long) upper
@@ -2511,7 +2403,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		}
 		// bounds are just this object
 		char *limit = (char*) obj + (t->pos_maxoff > 0 ? t->pos_maxoff : 1);
-		if (a && a->is_cacheable) cache_bounds(obj, limit, t, 1, alloc_uniqtype->pos_maxoff, alloc_start);
+		if (a && a->is_cacheable) cache_bounds(obj, limit, t, alloc_uniqtype->pos_maxoff, alloc_start);
 		return __make_bounds((unsigned long) obj, (unsigned long) limit);
 	}
 	else
@@ -2523,7 +2415,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	}
 
 return_min_bounds:
-	if (a && a->is_cacheable) cache_bounds(obj, (char*) obj + 1, NULL, 0, 1, alloc_start);
+	if (a && a->is_cacheable) cache_bounds(obj, (char*) obj + 1, NULL, 1, alloc_start);
 	return __make_bounds((unsigned long) obj, (unsigned long) obj + 1);
 
 return_alloc_bounds:
@@ -2538,7 +2430,6 @@ return_alloc_bounds:
 		if (a && a->is_cacheable) cache_bounds(base, 
 			limit, 
 			alloc_uniqtype, 
-			alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1, 
 			alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1,
 			alloc_start);
 		return __make_bounds(
@@ -2702,8 +2593,7 @@ out_fail:
 		__builtin_return_address(0));
 	return __libcrunch_trap(derived, LIBCRUNCH_TRAP_INVALID);
 }
-#endif
-
+#endif /* end believed dead */
 void __libcrunch_bounds_error_at(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds, const void *addr)
 {
@@ -2839,7 +2729,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 	__libcrunch_bounds_t dest_alloc_ptrwise_bounds = __peek_argument_bounds(
 		/* really */ 1, /* offset */ 0, /* val */ srcval, "fake peek in " __FILE__);
 
-	struct uniqtype *toplevel_cached_target_alloc_type = __libcrunch_get_cached_object_type(dest);
+	struct uniqtype *toplevel_cached_target_alloc_type = __liballocs_get_cached_object_type(dest);
 	struct uniqtype *cached_target_alloc_type = toplevel_cached_target_alloc_type;
 	if (cached_target_alloc_type)
 	{
@@ -2864,7 +2754,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 		{
 			/* Okay, try the cache for that too. We don't officially need the type
 			 * of the srcval, but for now I'm more comfortable if we check it agrees. */
-			static_guessed_srcval_pointee_type = __libcrunch_get_cached_object_type(srcval);
+			static_guessed_srcval_pointee_type = __liballocs_get_cached_object_type(srcval);
 		}
 		if (!static_guessed_srcval_pointee_type
 			/* If it really is a void* object, we can go ahead  */
@@ -2910,27 +2800,26 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 __thread unsigned long *volatile __shadow_sp __attribute__((weak));
 extern __thread unsigned long *volatile __bounds_sp __attribute__((weak,alias("__shadow_sp")));
 
-
 /* Provide out-of-line versions of all the (useful) inlines in libcrunch_cil_inlines.h. */
 
-void __libcrunch_ool_check_cache_sanity(struct __libcrunch_cache *cache)
+void __libcrunch_ool_check_cache_sanity(struct __liballocs_memrange_cache *cache)
 {
-	__libcrunch_check_cache_sanity(cache);
+	__liballocs_check_cache_sanity(cache);
 }
 
-struct __libcrunch_cache_entry_s *__libcrunch_ool_cache_lookup(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
+struct __liballocs_memrange_cache_entry_s *__libcrunch_ool_cache_lookup(struct __liballocs_memrange_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
 {
-	return __libcrunch_cache_lookup(cache, obj, t, require_period);
+	return __liballocs_memrange_cache_lookup(cache, obj, t, require_period);
 }
 
-struct __libcrunch_cache_entry_s *__libcrunch_ool_cache_lookup_notype(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period)
+struct __liballocs_memrange_cache_entry_s *__libcrunch_ool_cache_lookup_notype(struct __liballocs_memrange_cache *cache, const void *obj, unsigned long require_period)
 {
-	return __libcrunch_cache_lookup_notype(cache, obj, require_period);
+	return __liballocs_memrange_cache_lookup_notype(cache, obj, require_period);
 }
 
 struct uniqtype * __libcrunch__ool_get_cached_object_type(const void *addr)
 {
-	return __libcrunch_get_cached_object_type(addr);
+	return __liballocs_get_cached_object_type(addr);
 }
 
 void *__libcrunch_ool_trap(const void *ptr, unsigned short tag)

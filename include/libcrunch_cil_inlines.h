@@ -1,11 +1,16 @@
 #ifndef LIBCRUNCH_CIL_INLINES_H_
 #define LIBCRUNCH_CIL_INLINES_H_
 
-// #define LIBCRUNCH_WORDSIZE_BOUNDS 1 /* HACK temporary */
+#include "liballocs_cil_inlines.h"
 
-/* NO -- assume uniqtype is already defined, e.g. by -include */
-// #include "uniqtype.h"
-
+#ifndef unlikely
+#define __libcrunch_defined_unlikely
+#define unlikely(cond) (__builtin_expect( (cond), 0 ))
+#endif
+#ifndef likely
+#define __libcrunch_defined_likely
+#define likely(cond)   (__builtin_expect( (cond), 1 ))
+#endif
 #ifndef assert
 #define __libcrunch_defined_assert
 //#ifdef DEBUG
@@ -15,6 +20,12 @@
 //#define assert(cond)
 //#endif
 #endif
+
+// #define LIBCRUNCH_WORDSIZE_BOUNDS 1 /* HACK temporary */
+
+/* NO -- assume uniqtype is already defined, e.g. by -include */
+// #include "uniqtype.h"
+
 /* Inside pure check/fetch logic, we don't want calls to warnx to prevent
  * the whole check/fetch from being dropped if we don't use the result.
  * So pretend that we have a pure warnx. We only use this in cases where
@@ -82,15 +93,6 @@ extern unsigned long *__libcrunch_bounds_sizes_region_00;
 extern unsigned long *__libcrunch_bounds_sizes_region_2a;
 extern unsigned long *__libcrunch_bounds_sizes_region_7a;
 
-#ifndef unlikely
-#define __libcrunch_defined_unlikely
-#define unlikely(cond) (__builtin_expect( (cond), 0 ))
-#endif
-#ifndef likely
-#define __libcrunch_defined_likely
-#define likely(cond)   (__builtin_expect( (cond), 1 ))
-#endif
-
 /* Our functions are *not* weak -- they're defined in the noop library. 
  * (We would like the noop library not to be necessary.) */
 
@@ -128,7 +130,6 @@ const void *__libcrunch_typestr_to_uniqtype (const char *) __attribute__((weak))
 /* This is not weak. */
 void __assert_fail(const char *__assertion, const char *__file,
     unsigned int __line, const char *__function);
-void abort(void) __attribute__((noreturn));
 
 extern _Bool __libcrunch_is_initialized __attribute__((weak));
 extern unsigned long __libcrunch_begun __attribute__((weak));
@@ -144,45 +145,7 @@ extern unsigned long __libcrunch_ptr_derivations __attribute__((weak));
 extern unsigned long __libcrunch_ptr_derefs __attribute__((weak));
 extern unsigned long __libcrunch_ptr_stores __attribute__((weak));
 
-/* tentative cache entry redesign to integrate bounds and types:
- * 
- * - lower
- * - upper     (one-past)
- * - t         (may be null, i.e. bounds only)
- * - sz        (size of t)
- * - period    (need not be same as period, i.e. if T is int, alloc is array of stat, say)
- *                 ** ptr arithmetic is only valid if sz == period
- *                 ** entries with sz != period are still useful for checking types 
- * - results   (__is_a, __like_a, __locally_like_a, __is_function_refining, ... others?)
- */
-
-struct __libcrunch_cache_entry_s
-{
-	const void *obj_base;
-	const void *obj_limit;
-	struct uniqtype *uniqtype;
-	unsigned period;
-	unsigned short result;
-	unsigned char prev_mru;
-	unsigned char next_mru;
-	/* TODO: do inline uniqtype cache word check? */
-} __attribute__((aligned(64)));
-
-#ifndef LIBCRUNCH_MAX_IS_A_CACHE_SIZE
-#define LIBCRUNCH_MAX_IS_A_CACHE_SIZE 8
-#endif
-struct __libcrunch_cache
-{
-	unsigned int validity; /* does *not* include the null entry */
-	const unsigned short size_plus_one; /* i.e. including the null entry */
-	unsigned short next_victim;
-	unsigned char head_mru;
-	unsigned char tail_mru;
-	/* We use index 0 to mean "unused" / "null". */
-	struct __libcrunch_cache_entry_s entries[1 + LIBCRUNCH_MAX_IS_A_CACHE_SIZE];
-};
-extern struct __libcrunch_cache /* __thread */ __libcrunch_is_a_cache;
-extern struct __libcrunch_cache /* __thread */ __libcrunch_fake_bounds_cache;
+extern struct __liballocs_memrange_cache /* __thread */ __libcrunch_fake_bounds_cache;
 
 #ifndef LIBCRUNCH_TRAP_TAG_SHIFT
 #define LIBCRUNCH_TRAP_TAG_SHIFT 49 /* FIXME: good for x86-64, less good for others */
@@ -349,187 +312,6 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_t
 #endif
 }
 
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache __attribute__((unused)));
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_check_cache_sanity )(struct __libcrunch_cache *cache __attribute__((unused)))
-{
-#ifdef DEBUG
-	unsigned visited_linear = 0u;
-	for (int i = 1; i < cache->size_plus_one; ++i)
-	{
-		if (cache->validity & (1<<(i-1)))
-		{
-			visited_linear |= (1<<(i-1));
-		}
-	}
-	unsigned visited_mru = 0u;
-	for (unsigned char i = cache->head_mru; i != 0; i = cache->entries[i].next_mru)
-	{
-		assert(cache->validity & (1<<(i-1)));
-		// assert we haven't been here before
-		assert(!(visited_mru & (1<<(i-1))));
-		visited_mru |= (1<<(i-1));
-	}
-	assert(visited_linear == visited_mru);
-	// go the other way too
-	unsigned visited_lru = 0u;
-	for (unsigned char i = cache->tail_mru; i != 0; i = cache->entries[i].prev_mru)
-	{
-		assert(cache->validity & (1<<(i-1)));
-		// assert we haven't been here before
-		assert(!(visited_lru & (1<<(i-1))));
-		visited_lru |= (1<<(i-1));
-	}
-	assert(visited_linear == visited_lru);
-#endif
-}
-
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_unlink )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_unlink )(struct __libcrunch_cache *cache, unsigned i)
-{
-	__libcrunch_check_cache_sanity(cache);
-	// unset validity and make this the next victim
-	cache->validity &= ~(1u<<(i-1));
-	cache->next_victim = i;
-	// unhook us from the mru list
-	unsigned char our_next = cache->entries[i].next_mru;
-	unsigned char our_prev = cache->entries[i].prev_mru;
-	if (our_prev) cache->entries[our_prev].next_mru = our_next;
-	if (our_next) cache->entries[our_next].prev_mru = our_prev;
-	if (cache->head_mru == i) cache->head_mru = our_next;
-	if (cache->tail_mru == i) cache->tail_mru = our_prev;
-	/* We're definitely invalid. */
-	cache->validity &= ~(1u<<(i-1));
-	__libcrunch_check_cache_sanity(cache);
-}
-
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_push_head_mru )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_push_head_mru )(struct __libcrunch_cache *cache, unsigned i)
-{
-	__libcrunch_check_cache_sanity(cache);
-	/* Put us at the head of the LRU chain. */
-	cache->entries[i].prev_mru = 0;
-	cache->entries[i].next_mru = cache->head_mru;
-	/* Link us in at the head. */
-	if (cache->head_mru != 0) cache->entries[cache->head_mru].prev_mru = (unsigned char) i;
-	cache->head_mru = (unsigned char) i;
-	/* Set the tail, if we didn't already have one. */
-	if (cache->tail_mru == 0) cache->tail_mru = i;
-	/* We're definitely valid. */
-	cache->validity |= (1u<<(i-1));
-	/* Should be sane again now. */
-	__libcrunch_check_cache_sanity(cache);
-}	
-
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_victim )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_victim )(struct __libcrunch_cache *cache, unsigned i)
-{
-	__libcrunch_check_cache_sanity(cache);
-	// make sure we're not the next victim
-	if (unlikely(cache->next_victim == i))
-	{
-		if (cache->size_plus_one > 1)
-		{
-			cache->next_victim = 1 + ((i + 1 - 1) % (cache->size_plus_one - 1));
-		}
-	}
-	__libcrunch_check_cache_sanity(cache);
-}
-
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_mru )(struct __libcrunch_cache *cache, unsigned i);
-extern inline void (__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_bump_mru )(struct __libcrunch_cache *cache, unsigned i)
-{
-	__libcrunch_check_cache_sanity(cache);
-	if (cache->head_mru != i)
-	{
-		if (cache->validity & (1u<<(i-1))) __libcrunch_cache_unlink(cache, i);
-		__libcrunch_cache_push_head_mru(cache, i);
-	}
-	__libcrunch_check_cache_sanity(cache);
-}
-
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup )(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period);
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup )(struct __libcrunch_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
-{
-#ifndef LIBCRUNCH_NOOP_INLINES
-	__libcrunch_check_cache_sanity(cache);
-#ifdef LIBCRUNCH_CACHE_LINEAR
-	for (unsigned char i = 1; i < cache->size_plus_one; ++i)
-#else
-	for (unsigned char i = cache->head_mru; i != 0; i = cache->entries[i].next_mru)
-#endif
-	{
-		if (cache->validity & (1<<(i-1)))
-		{
-			struct uniqtype *cache_uniqtype = cache->entries[i].uniqtype;
-			/* We test whether the difference is divisible by the period and within the bounds */
-			signed long long diff = (char*) obj - (char*) cache->entries[i].obj_base;
-			if (cache_uniqtype == t
-					&& (char*) obj >= (char*)cache->entries[i].obj_base
-					&& (char*) obj < (char*)cache->entries[i].obj_limit
-					&& 
-					((diff == 0)
-						|| (cache->entries[i].period != 0
-							&& (!require_period || cache->entries[i].period == require_period)
-							&& diff % cache->entries[i].period == 0)))
-			{
-				// hit
-				__libcrunch_cache_bump_mru(cache, i);
-				return &cache->entries[i];
-			}
-		}
-	}
-#endif
-	__libcrunch_check_cache_sanity(cache);
-	return (void*)0;
-}
-
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup_notype )(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period);
-extern inline struct __libcrunch_cache_entry_s *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_cache_lookup_notype )(struct __libcrunch_cache *cache, const void *obj, unsigned long require_period)
-{
-#ifndef LIBCRUNCH_NOOP_INLINES
-	__libcrunch_check_cache_sanity(cache);
-#ifdef LIBCRUNCH_CACHE_LINEAR
-	for (unsigned char i = 1; i < cache->size_plus_one; ++i)
-#else
-	for (unsigned char i = cache->head_mru; i != 0; i = cache->entries[i].next_mru)
-#endif
-	{
-		if (cache->validity & (1<<(i-1)))
-		{
-			/* We test whether the difference is divisible by the period and within the bounds */
-			signed long long diff = (char*) obj - (char*) cache->entries[i].obj_base;
-			if ((char*) obj >= (char*)cache->entries[i].obj_base
-					&& (char*) obj < (char*)cache->entries[i].obj_limit
-					&& 
-					((diff == 0 && !require_period)
-						|| (cache->entries[i].period != 0
-							&& (!require_period || cache->entries[i].period == require_period)
-							&& diff % cache->entries[i].period == 0)))
-			{
-				// hit
-				__libcrunch_cache_bump_mru(cache, i);
-				return &cache->entries[i];
-			}
-		}
-	}
-#endif
-	__libcrunch_check_cache_sanity(cache);
-	return (void*)0;
-}
-
-extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_cached_object_type)(const void *addr);
-extern inline struct uniqtype *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_get_cached_object_type)(const void *addr)
-{
-	struct __libcrunch_cache_entry_s *found = __libcrunch_cache_lookup_notype(
-		&__libcrunch_is_a_cache,
-		addr, 0);
-	/* This will give us "zero-offset matches", but not contained matches. 
-	 * I.e. we know that "addr" is a "found->uniqtype", but we pass over
-	 * cases where some cached allocation spans "addr" at a non-zero offset. */
-	if (found) return found->uniqtype;
-	return (void*)0;
-}
-
 extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aU )(const void *obj, const void *uniqtype);
 extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aU )(const void *obj, const void *uniqtype)
 {
@@ -560,24 +342,15 @@ extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aU )(cons
 	// now we're really started 
 	__libcrunch_begun++; 
 
-	struct __libcrunch_cache_entry_s *hit = __libcrunch_cache_lookup(&__libcrunch_is_a_cache, 
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup(
+		&__liballocs_ool_cache,
 		obj, (struct uniqtype*) uniqtype, 0);
 	if (hit)
 	{
 		// hit!
 		++__libcrunch_is_a_hit_cache;
-		if (hit->result) 
-		{
-			++__libcrunch_succeeded;
-			return 1;
-		}
-		else
-		{
-			// to make sure the error message and suppression handling happen,
-			// we have to call the slow-path code.
-			return __is_a_internal((const void *) __libcrunch_detrap(obj), uniqtype); 
-		}
-		return 1; //__libcrunch_is_a_cache[i].result;
+		++__libcrunch_succeeded;
+		return 1;
 	}
 	// miss: __is_a_internal will cache if it's cacheable
 	int ret = __is_a_internal((const void *) __libcrunch_detrap(obj), uniqtype); 
@@ -1097,8 +870,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	const void *derived = (const void *) __libcrunch_detrap(derived_ptr_maybetrapped);
 	
 	/* If we hit the is-a cache, we can return an answer inline. */
-	struct __libcrunch_cache_entry_s *hit = __libcrunch_cache_lookup_notype(
-			&__libcrunch_is_a_cache, testptr, /* t->pos_maxoff */ t_sz);
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup_notype(
+			&__liballocs_ool_cache, testptr, /* t->pos_maxoff */ t_sz);
 	if (hit)
 	{
 		/* Is ptr actually a t? If not, we're in trouble!
@@ -1114,7 +887,7 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 		/* Does "obj" include "derivedfrom"? */
 		return __make_bounds((unsigned long) hit->obj_base, (unsigned long) hit->obj_limit);
 	}
-	else if (unlikely((hit = __libcrunch_cache_lookup_notype(
+	else if (unlikely((hit = __liballocs_memrange_cache_lookup_notype(
 			&__libcrunch_fake_bounds_cache, testptr, /* t->pos_maxoff */ t_sz), hit != (void*)0)))
 	{
 		/* We hit an entry with no alloc base. This means it's a "fake" entry that
@@ -2102,6 +1875,8 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_sec
 #endif
 }
 
+#undef __libcrunch_fetch_bounds_ool_to_use
+
 #ifdef __libcrunch_defined_unlikely
 #undef unlikely
 #endif
@@ -2111,7 +1886,5 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_sec
 #ifdef __libcrunch_defined_assert
 #undef assert
 #endif
-
-#undef __libcrunch_fetch_bounds_ool_to_use
 
 #endif

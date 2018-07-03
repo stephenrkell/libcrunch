@@ -83,4 +83,14 @@ void __libcrunch_soft_deref_error_at(const void *ptr, __libcrunch_bounds_t bound
 
 void mmap_replacement(struct generic_syscall *s, post_handler *post) __attribute__((visibility("hidden")));
 
+#ifdef __libcrunch_defined_unlikely
+#undef unlikely
+#endif
+#ifdef __libcrunch_defined_likely
+#undef likely
+#endif
+#ifdef __libcrunch_defined_assert
+#undef assert
+#endif
+
 #endif
