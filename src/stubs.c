@@ -7,8 +7,9 @@
 _Bool __libcrunch_is_initialized = 1;
 extern _Bool our_init_flag __attribute__((visibility("hidden"),alias("__libcrunch_is_initialized")));
 
-struct __libcrunch_cache __libcrunch_is_a_cache; // all zeroes
-struct __libcrunch_cache __libcrunch_fake_bounds_cache; // all zeroes
+struct __liballocs_memrange_cache __libcrunch_fake_bounds_cache; // all zeroes
+
+int __libcrunch_debug_level __attribute__((weak));
 
 unsigned long int __libcrunch_begun = 0;
 unsigned long int __libcrunch_failed = 0;
