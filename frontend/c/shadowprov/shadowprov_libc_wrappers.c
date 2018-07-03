@@ -12,6 +12,7 @@
 #include "shadowprov_helpers.h"
 #define RELF_DEFINE_STRUCTURES
 #include "relf.h" /* for the auxv stuff */
+size_t malloc_usable_size(void*);
 
 #define NULL_PROV NULL_SHADOW
 #define SPECIAL_PROV SPECIAL_SHADOW
@@ -29,6 +30,7 @@
 			caller_is_inst, (__shadowed_value_t)(v), ## rvals); \
 		return (t)(v)
 #define RETURN_NULL RETURN_SHADOWABLE(void*, NULL, NULL_PROV, 0)
+#define RETURN_INTEGER(t, v) RETURN_SHADOWABLE(t, (v), NULL_PROV, 0)
 #define RETURN_SHADOWABLE_WITH_ARGSHADOW(t, v, off, argname) \
 		__push_local_result_shadow( \
 			caller_is_inst, \
@@ -42,7 +44,7 @@
 	(__make_shadow((unsigned long) v, 0))
 #define RETURN_SHADOWABLE_FRESH(t, v) \
 		__push_result_shadow_manifest( \
-			caller_is_inst, (__shadowed_value_t)(v), (unsigned long)(v), 0); \
+			caller_is_inst, (__shadowed_value_t)(v), (!v)?0ul:(unsigned long)__liballocs_get_alloc_base((const void*)(v)), 0); \
 		return (t)(v)
 #define RETURN_SHADOWABLE_EXPLICIT(t, v, c) \
 		__push_result_shadow_explicit( \
@@ -73,6 +75,19 @@ DECLARE(char*, strchr, const char *s, int c)
 {
 	BEGIN(strchr);
 	char *ret_shadowable = REAL(strchr)(s, c);
+	if (ret_shadowable)
+	{
+		RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, ret_shadowable, 0, s);
+	}
+	else
+	{
+		RETURN_NULL;
+	}
+}
+DECLARE(void*, __rawmemchr, const void *s, int c)
+{
+	BEGIN(__rawmemchr);
+	char *ret_shadowable = REAL(__rawmemchr)(s, c);
 	if (ret_shadowable)
 	{
 		RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, ret_shadowable, 0, s);
@@ -193,6 +208,9 @@ DECLARE(void*, malloc, size_t s)
 	if (we_set_allocsite) __current_allocsite = NULL;
 	if (ret_shadowable)
 	{
+		/* To avoid confusing error reports from uninitialized pointers,
+		 * we always initialize memory. */
+		__builtin_memset(ret_shadowable, 0, s);
 		RETURN_SHADOWABLE_FRESH(void*, ret_shadowable);
 	}
 	RETURN_NULL;
@@ -218,6 +236,7 @@ DECLARE(void*, realloc, void *p, size_t size)
 {
 	BEGIN(realloc);
 	_Bool we_set_allocsite = 0;
+	size_t orig_size = p ? malloc_usable_size(p): 0;
 	if (!__current_allocsite)
 	{
 		we_set_allocsite = 1;
@@ -227,11 +246,28 @@ DECLARE(void*, realloc, void *p, size_t size)
 	if (we_set_allocsite) __current_allocsite = NULL;
 	if (ret_shadowable == p)
 	{
+		/* Same object; perhaps bigger or smaller than it used to be. */
+		if (size > orig_size)
+		{
+			__builtin_memset((char*) ret_shadowable + orig_size, 0, size - orig_size);
+		}
 		RETURN_SHADOWABLE_WITH_ARGSHADOW(
 			void*, ret_shadowable, 0, p);
 	}
+	if (ret_shadowable && !p)
+	{
+		/* Fresh object. */
+		/* To avoid confusing error reports from uninitialized pointers,
+		 * we always initialize memory. */
+		__builtin_memset(ret_shadowable, 0, size);
+	}
 	if (ret_shadowable)
 	{
+		/* Moved object. */
+		if (size > orig_size)
+		{
+			__builtin_memset((char*) ret_shadowable + orig_size, 0, size - orig_size);
+		}
 		RETURN_SHADOWABLE_FRESH(void*, ret_shadowable);
 	}
 	RETURN_NULL;
@@ -312,6 +348,14 @@ DECLARE(char *, strcpy, char *dest, const char *src)
 	BEGIN(strcpy);
 	char *ret = REAL(strcpy)(dest, src);
 	RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, dest, 0, dest);
+}
+/* Not really necessary, but characterwise I/O is so tedious
+ * that it generates time-consumingly many error messages. */
+DECLARE(int, fgetc, FILE *stream)
+{
+	BEGIN(fgetc);
+	int ret = REAL(fgetc)(stream);
+	RETURN_INTEGER(int, ret);
 }
 
 // we don't need to init the libc/auxv shadow space here -- shadow.c does it
