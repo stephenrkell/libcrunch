@@ -15,7 +15,7 @@ typedef char __raw_shadow_t;
  * succeeds and doesn't create a new shadow: it might discard one
  * or leave it unchanged. */
 typedef unsigned long __shadowed_value_t;
-extern __thread unsigned long */*volatile*/ __shadow_sp;
+extern __thread unsigned long *volatile __shadow_sp;
 #define NULL_SHADOW ((char)0)
 #define SPECIAL_SHADOW ((char)255) /* FIXME: do I need this? */
 
@@ -57,6 +57,18 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,pure,__const__
 	return (__shadow_t) { (char) 0 };
 }
 
+extern inline _Bool (__attribute__((always_inline,gnu_inline,pure,__const__))
+	IS_SANE_NONNULL)(__shadowed_value_t v)
+{
+	/* HACK based on where our shadow space assumes stuff is stored,
+	 * with added exemption for small integers. */
+	return (v && (
+			   (v >= 0x000000400000ul && v <= 0x055500000000ul)
+			|| (v >= 0x2aaa00000000ul && v <= 0x2fff00000000ul)
+			|| (v >= 0x7aaa00000000ul && v <= 0x7ffffffffffful)
+			));
+}
+
 extern inline void
 (__attribute__((always_inline,gnu_inline,used,nonnull(1))) __store_shadow_nonlocal)
 (void *dest, __shadowed_value_t v, __shadow_t shadow,
@@ -65,7 +77,7 @@ extern inline void
 	unsigned long dest_addr __attribute__((unused)) = (unsigned long) dest;
 	unsigned long shadow_stored_addr __attribute__((unused))
 	 = (unsigned long) __shadow_stored_addr(dest);
-	if (v && !arg && !shadow.byte)
+	if (IS_SANE_NONNULL(v) && !arg && !shadow.byte)
 	{
 		warnx("Storing non-null pointer with no provenance");
 	}
@@ -78,7 +90,7 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure))
 	if (loaded_from)
 	{
 		__shadow_t s = (__shadow_t) { *(__raw_shadow_t *) __shadow_stored_addr(loaded_from) };
-		if (v && !t && !s.byte)
+		if (IS_SANE_NONNULL(v) && !t && !s.byte)
 		{
 			warnx("Loaded non-null pointer with no provenance");
 		}
@@ -120,15 +132,15 @@ extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __all
  * Actually we call __builtin_memcpy because we don't want to hit
  * our funky instrumented/preloaded version. */
 
-#ifndef SHADOW_STACK_TRACE_LEVEL
-#define SHADOW_STACK_TRACE_LEVEL 0
-#endif
+/* More important messages get lower numbers.
+ * We print a message if its number is <= the current trace level */
 
+extern int __libcrunch_debug_level;
 #define PRISHADOW "%02x"
 #define PRINT_SHADOW_EXPR(s) (unsigned char)(long)*(char*)&s
-#define TRACE_SHADOW(lvl, descr, val, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): shadow " PRISHADOW " " descr, __shadow_sp, PRINT_SHADOW_EXPR(val), ## args ))
-#define TRACE_WORD(lvl, descr, w, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): word %lx " descr, __shadow_sp, w, ## args ))
-#define TRACE_STRING(lvl, descr, s, args...) (((lvl)<SHADOW_STACK_TRACE_LEVEL) ? (void)0 : warnx("(bsp=%p): %s " descr, __shadow_sp, s, ## args ))
+#define TRACE_SHADOW(lvl, descr, val, args...) (((lvl)<=__libcrunch_debug_level) ? (void)warnx("(bsp=%p): shadow " PRISHADOW " " descr, __shadow_sp, PRINT_SHADOW_EXPR(val), ## args ) : (void)0)
+#define TRACE_WORD(lvl, descr, w, args...) (((lvl)<=__libcrunch_debug_level) ? (void)warnx("(bsp=%p): word %lx " descr, __shadow_sp, w, ## args ) : (void)0 )
+#define TRACE_STRING(lvl, descr, s, args...) (((lvl)<=__libcrunch_debug_level) ? (void)warnx("(bsp=%p): %s " descr, __shadow_sp, s, ## args ) : (void)0 )
 
 extern inline __raw_shadow_t (__attribute__((always_inline,gnu_inline,pure,__const__))
 		__shadow_from_word)(unsigned long arg)
@@ -152,9 +164,12 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,pure,__const__
 	__raw_shadow_t made =__shadow_from_word(arg1);
 	TRACE_SHADOW(1, "made fresh from pointer %p", made, (void*) arg1);
 	/* CHECK against what liballocs thinks */
-	void *base = __liballocs_get_alloc_base((void*) arg1);
-	__raw_shadow_t expected = __shadow_from_word((unsigned long) base);
-	assert(made == expected);
+	if (__libcrunch_debug_level > 1)
+	{
+		void *base = __liballocs_get_alloc_base((void*) arg1);
+		__raw_shadow_t expected = __shadow_from_word((unsigned long) base);
+		assert(made == expected);
+	}
 	
 	return (__shadow_t) { made };
 }
@@ -234,7 +249,7 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure)) __
 		TRACE_SHADOW(1, "peeked for argument at offset %d", b, offset);
 		return b;
 	}
-	TRACE_STRING(0, "no shadow for shadowed arg expr", debugstr);
+	TRACE_STRING(1, "no shadow for shadowed arg expr", debugstr);
 	return __make_invalid_shadow(v);
 }
 
@@ -308,7 +323,7 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure)) __
 		TRACE_SHADOW(1, "peeked as result at offset %d", b, offset);
 		return b;
 	}
-	TRACE_STRING(0, " : callee returned no shadow (callee address %p)", calleestr, __get_pc());
+	TRACE_STRING(0, " : callee returned no shadow (call site address: somewhere before %p)", calleestr, __get_pc());
 	return __make_invalid_shadow(v);
 }
 
@@ -316,7 +331,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_sha
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_shadow_stack)(void *saved_ptr)
 {
 	__shadow_sp = (unsigned long *) saved_ptr;
-	TRACE_STRING(0, "call sequence finished", "");
+	TRACE_STRING(1, "call sequence finished", "");
 }
 
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t derefed_shadow);
