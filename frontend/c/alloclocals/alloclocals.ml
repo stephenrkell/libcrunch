@@ -17,8 +17,14 @@ class allocLocalsVisitor
     val replacedLocals : Cil.varinfo VarinfoMap.t ref = ref VarinfoMap.empty
     
     val allocationFunc : Cil.fundec = materialiseBuiltin "__builtin_alloca"
-    val memcpyFunc : Cil.fundec = materialiseBuiltin "__builtin_memcpy"
-   
+    val memcpyFunc : Cil.fundec = (* materialiseBuiltin "__builtin_memcpy" *)
+        findOrCreateExternalFunctionInFile enclosingFile "memcpy" (TFun(voidPtrType, 
+                             Some [ ("dest", voidPtrType, []);
+                                    ("src", voidConstPtrType, []);
+                                    ("n", ulongType, [])
+                                  ],
+                            false, []))
+
     val currentFunc : fundec option ref = ref None
 
     method vfunc (f: fundec) : fundec visitAction = 
