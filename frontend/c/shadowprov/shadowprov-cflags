@@ -16,7 +16,8 @@ case "$0" in
          -Wp,-plugin,"${LIBCRUNCH_BASE}"/frontend/c/shadow/shadow.cmxs \
          -Wp,-plugin,"${LIBCRUNCH_BASE}"/frontend/c/shadowprov/shadowprov.cmxs \
          -Wp,-fpass-shadowprov \
-         -include "${LIBCRUNCH_BASE}"/frontend/c/shadowprov/shadowprov_helpers.h
+         -include "${LIBCRUNCH_BASE}"/frontend/c/shadowprov/shadowprov_helpers.h \
+         -fno-builtin-memcpy
     ;;
     (*ldflags)
         /bin/echo -Wl,-plugin,"${LIBCRUNCH_BASE}"/frontend/c/shadowprov/gold-plugin.so \
