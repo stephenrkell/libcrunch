@@ -142,6 +142,13 @@ class shadowProvVisitor
                                 fun x -> let res = rewriteFunc x in
                                     res @ instrs)
                         )
+                  (* Also memcpy originating from alloclocals... don't shadow this,
+                   * because it's unnecessary,
+                   * and because our instrumentation will choke on the case of
+                   * address-taken locals. *)
+                  | Call(_, Lval(Var(fvi), NoOffset), [arg1; AddrOf(Var(v), _); arg3], l)
+                        when fvi.vname = "memcpy" && not v.vglob
+                        -> SkipChildren
                   | _ -> ChangeDoChildrenPost(replacedIs, rewriteFunc)
             end
       | _ -> failwith "expected ChangeDoChildrenPost"
@@ -259,22 +266,23 @@ class shadowProvVisitor
                  * We rewrote those by calling simplifyPtrExprs. *)
                 ShadowFetch(LoadedFrom((lh, lo)))
           | (AddrOf(Var(someVi), someOffset), _) when not someVi.vglob ->
-                let currentFrameAddressExpr = match !currentFrameAddressVar with
+                let currentFrameAddressExpr = match (*!currentFrameAddressVar*) None with
                     None -> failwith ("no current frame address var, taking address of " ^ someVi.vname)
                     | Some(cfa) -> (Lval(Var(cfa), NoOffset))        
                 in
                 makePointerShadowFromOffset currentFrameAddressExpr someVi.vid
-          | (AddrOf(Var(someVi), someOffset), _) (* vglob *) -> makePointerShadow (AddrOf(Var(someVi), NoOffset))
+          | (AddrOf(Var(someVi), someOffset), _) (* vglob *) ->
+                makePointerShadow (AddrOf(Var(someVi), NoOffset))
           | (StartOf(Var(someVi), someOffset), _) when (* by implication, not local *)
                 (* is it an extern array of unknown dimensions? *)
                 someVi.vstorage = Extern && isUnboundedArrayType someVi.vtype
                 (* OVERRIDEME: the crunchbound code tries handleAddrOfVarOrField here,
                  * then does MustFetch. We can just create a fresh shadow, because
                  * we don't need to know the bounds. *)
-                -> makePointerShadow (StartOf(Var(someVi), NoOffset))
+                -> makePointerShadow (mkAddrOrStartOf (Var(someVi), NoOffset))
           | (StartOf(Var(someVi), someOffset), _) when self#hostIsLocal (Var(someVi)) ->
                 (* array-to-pointer decay on a local var's array. *)
-                let currentFrameAddressExpr = match !currentFrameAddressVar with
+                let currentFrameAddressExpr = match (* !currentFrameAddressVar *) None with
                     None -> failwith ("no current frame address var, taking start of " ^ someVi.vname)
                     | Some(cfa) -> (Lval(Var(cfa), NoOffset))        
                 in
@@ -285,7 +293,7 @@ class shadowProvVisitor
                  * i.e. taking address of an array.
                  * We rewrote the cases that aren't, e.g. *p_arr,
                  * into CastE of an original pointer. *)
-                makePointerShadow (StartOf(Var(someVi), NoOffset))
+                makePointerShadow (mkAddrOrStartOf (Var(someVi), NoOffset))
           | (AddrOf(Mem(memExp), someOffset), _) when offsetContainsField someOffset ->
                 (* taking a non-local subobject's address, + possibly array-indexing into it *)
                 self#shadowDescrForExpr memExp
@@ -397,7 +405,23 @@ class shadowProvVisitor
                     hoistDeref memExpr (offsetToList loff)
                   | _ -> (lhost,loff)
         )
-    
+
+    method vglob (g: global) : global list visitAction = 
+        (* Drop pure and const annotations (attributes), because we don't
+         * currently do the helper workaround that's necessary to actually
+         * make them true w.r.t. the shadow stack. *)
+        match g with 
+            GVar(gvi, gii, loc) ->
+                gvi.vattr <- dropAttributes ["const"; "pure"; "aconst"] gvi.vattr;
+                DoChildren
+          | GVarDecl(gvi, l) ->
+                gvi.vattr <- dropAttributes ["const"; "pure"; "aconst"] gvi.vattr;
+                DoChildren
+          | GFun(f, l) ->
+                f.svar.vattr <- dropAttributes ["const"; "pure"; "aconst"] f.svar.vattr;
+                DoChildren
+          | _ -> DoChildren
+
 
 end
 
