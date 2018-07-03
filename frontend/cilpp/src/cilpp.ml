@@ -103,6 +103,8 @@ let () =
         end)
       (Feature.list_registered ());
     Cil.printerForMaincil := Cil.defaultCilPrinter;
+    (* We are not printing for CIL input *)
+    Cil.print_CIL_Input := false;
     let _ = Cil.dumpFile Cil.defaultCilPrinter chan str currentCilFile
     in
     (* delete temporary file unless -save-temps; FIXME: we don't see -save-temps? *)
