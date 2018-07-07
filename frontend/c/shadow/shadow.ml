@@ -626,8 +626,8 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 if sameVi then [] else [Set( slv, Lval(otherSlv), loc )]
           | ShadowFetch(lf) -> (* fetchOol complication is in here *) makeCallToFetchShadow slv lf valE loc
 
-    method containedShadowedPrimitiveExprsForExpr e =
-        let rec enumerateShadowedPrimitiveOffsetsForT t = match t with
+    method containedShadowedPrimitiveExprsForExpr (e : Cil.exp) : Cil.exp list =
+        let rec enumerateShadowedPrimitivesInT (t : Cil.typ) : Cil.offset list = match t with
             TVoid(attrs) -> []
           | TInt(_, _)
           | TFloat(_, _)
@@ -644,24 +644,29 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 let rec intsUpTo start endPlusOne = 
                     if start >= endPlusOne then [] else start :: (intsUpTo (start+1) endPlusOne)
                 in
-                let elementShadowableOffsets = enumerateShadowedPrimitiveOffsetsForT at
+                let elementShadowableOffsets = enumerateShadowedPrimitivesInT at
                 in
                 let arrayIndices = intsUpTo 0 (Int64.to_int arraySize)
                 in
-                (* copy the list of offsets, once
-                 * for every index in the range of the array *)
-                List.flatten (List.map (fun offset -> List.map (fun i ->
-                    Index(makeIntegerConstant (Int64.of_int i), offset)
-                ) arrayIndices) elementShadowableOffsets)
+                (* Copy the list of offsets, once
+                 * for every index in the range of the array,
+                 * prepending the indexing chunk of the Cil.offset each time *)
+                let mkIndex = fun trailer -> fun i -> Index(makeIntegerConstant (Int64.of_int i), trailer)
+                in
+                let mkIndexExprsForOneArray = fun restOfOffset -> List.map (mkIndex restOfOffset) arrayIndices
+                in
+                let ll = List.map mkIndexExprsForOneArray elementShadowableOffsets
+                in
+                List.flatten ll
           | TFun(_, _, _, _) -> failwith "asked to enumerate shadowed offsets for incomplete (function) type"
-          | TNamed(ti, attrs) -> enumerateShadowedPrimitiveOffsetsForT ti.ttype
+          | TNamed(ti, attrs) -> enumerateShadowedPrimitivesInT ti.ttype
           | TComp(ci, attrs) -> 
                 (* For each field, recursively collect the offsets
                  * then prepend Field(fi) to each. We prepend the same fi,
                  * for all offsets yielded by a given field,
                  * then move on to the next field. *)
                 List.fold_left (fun acc -> fun fi -> 
-                    let thisFieldOffsets = enumerateShadowedPrimitiveOffsetsForT fi.ftype
+                    let thisFieldOffsets = enumerateShadowedPrimitivesInT fi.ftype
                     in
                     let prepended = List.map (fun offs -> 
                         Field(fi, offs)
@@ -672,7 +677,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
           | TEnum(ei, attrs) -> []
           | TBuiltin_va_list(attrs) -> []
         in
-        let offsets = enumerateShadowedPrimitiveOffsetsForT (Cil.typeOf e)
+        let offsets = enumerateShadowedPrimitivesInT (Cil.typeOf e)
         in
         match e with
             Lval(someHost, someOff) -> 
@@ -698,12 +703,12 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
             (containedPointerExprsForExpr ~forceIncludeVoidPointers:true e) *)
     (* OVERRIDEME *)
 
-    method mapForAllShadowsInExpr : 'a. (Cil.exp -> shadow_for_expr -> Cil.exp -> 'a) -> Cil.exp -> 'a list =
+    method mapForAllShadowsInExpr : 'a. (Cil.exp (* containedShadowedExpr *) -> shadow_for_expr (* shadowExp *) -> Cil.exp (* an integer constant expression denoting the array pos *) -> 'a) -> Cil.exp -> 'a list =
         fun forOne outerE ->
-        List.mapi (fun i -> fun valExp -> 
-            let shadowExp = self#shadowDescrForExpr valExp
+        List.mapi (fun i -> fun containedShadowedExp -> 
+            let shadowExp = self#shadowDescrForExpr containedShadowedExp
             in
-            forOne valExp shadowExp (makeIntegerConstant (Int64.of_int i))
+            forOne containedShadowedExp shadowExp (makeIntegerConstant (Int64.of_int i))
         ) (self#containedShadowedPrimitiveExprsForExpr outerE)
 
     method concatMapForAllShadowsInExprList: 'a. (Cil.exp -> shadow_for_expr -> Cil.exp -> 'a) -> (Cil.exp list) -> 'a list =
@@ -851,7 +856,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                     in
                     let (rs, shadowReturnInstrList) =
                     (s.skind, 
-                    self#mapForAllShadowsInExpr (fun valExp -> fun shadowExp -> fun offsetExp ->
+                    self#mapForAllShadowsInExpr (fun containedShadowedExp -> fun shadowExp -> fun arrayIndexExp ->
                         match shadowExp with
                             ShadowLocalLval(slv) -> 
                                 Call( None,
@@ -867,7 +872,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 (Lval(Var((helperFunctions#getPushResultShadowManifest ()).svar),NoOffset)),
                                 [
                                     Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
-                                    CastE(opaqueShadowableT, valExp)
+                                    CastE(opaqueShadowableT, containedShadowedExp)
                                 ] @ ses,
                                 loc
                                 )
@@ -876,9 +881,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 (Lval(Var((helperFunctions#getFetchAndPushResultShadow ()).svar),NoOffset)),
                                 [
                                     Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
-                                    CastE(opaqueShadowableT, valExp);
+                                    CastE(opaqueShadowableT, containedShadowedExp);
                                     addrOfLv (lh,lo);
-                                    descriptorExprForShadowableExpr valExp
+                                    descriptorExprForShadowableExpr containedShadowedExp
                                 ],
                                 loc
                                 )
@@ -887,9 +892,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 (Lval(Var((helperFunctions#getFetchAndPushResultShadow ()).svar),NoOffset)),
                                 [
                                     Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
-                                    CastE(opaqueShadowableT, valExp);
+                                    CastE(opaqueShadowableT, containedShadowedExp);
                                     nullPtr;
-                                    descriptorExprForShadowableExpr valExp
+                                    descriptorExprForShadowableExpr containedShadowedExp
                                 ],
                                 loc
                                 )
@@ -1025,73 +1030,69 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
              * Unfortunately this might depend on their actual value.
              * So we need to make a call to a helper.
              * We unroll all these calls. *)
-            (* We reverse the formals, to generate an r-to-l order just like the caller
-             * uses. Then we reverse the whole lot, because we're popping not pushing.
-             * Complication: actually we're peeking. So what offset are we peeking at?
-             * The concatMapBlahBlah function doesn't give us what we want because it
-             * only does offsets within a single argument. Instead, abstract over the
-             * offset and then assign when we have the whole list. *)
-            let (getFunForOne : Cil.exp -> shadow_for_expr -> Cil.exp -> int -> Cil.instr) = fun valExp -> fun shadowExp -> fun offsetExp ->
+            let initCallForOneShadow = 
+            (fun baseIdxForContainingFormal -> fun containedShadowableExp -> fun shadowExp -> fun arrayIndexExp ->
+                output_string stderr ("At argument-peek time, expr " ^ (expToString containedShadowableExp)
+                   ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n");
+                let really = (* really do it? only if cookie was okay *)
+                            Lval(Var(ctxt.callerIsInstFlagVar), NoOffset) in
+                let offsetExp = (* offset on stack -- DON'T adjust for the 
+                              cookie -- the inline function has to do it, because
+                              bounds are not necessarily single words in size. *)
+                    BinOp(PlusA, makeIntegerConstant (Int64.of_int baseIdxForContainingFormal),
+                        arrayIndexExp, intType) in
+                let debugStringExp = Const(CStr((expToString containedShadowableExp) ^ ", offset "
+                    ^ (expToCilString arrayIndexExp))) in
                 match shadowExp with
-                    ShadowLocalLval(Var(svar), soffset) ->
-                        fun idx -> Call(Some(Var(svar), soffset),
-                            (Lval(Var((helperFunctions#getPeekArgumentShadow ()).svar),NoOffset)),
-                            [
-                                (* really do it? only if cookie was okay *)
-                                Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
-                                (* offset on stack *)
-                                makeIntegerConstant (Int64.of_int (idx)); (* DON'T adjust for the 
-                                  cookie -- the inline function has to do it, because
-                                  shadows are not necessarily single words in size. *)
-                                (*  const void *ptr, the pointer value (for makeInvalidShadow) *)
-                                CastE(opaqueShadowableT, valExp);
-                                Const(CStr((expToString valExp) ^ ", offset " ^ (expToCilString offsetExp)))
-                            ],
-                            svar.vdecl (* loc *)
-                        )
+                    ShadowLocalLval(Var(bvar), boffset) ->
+                    Call(Some(Var(bvar), boffset),
+                        (Lval(Var((helperFunctions#getPeekArgumentShadow ()).svar),NoOffset)),
+                        [
+                            really;
+                            offsetExp;
+                            CastE(opaqueShadowableT, containedShadowableExp);
+                            debugStringExp
+                        ],
+                        bvar.vdecl (* loc *)
+                    )
                  | ShadowFetch(LoadedFrom(lh,lo)) ->
-                        fun idx -> Call(None,
-                            (Lval(Var((helperFunctions#getPeekAndShadowStoreArgumentShadow ()).svar),NoOffset)),
-                            [
-                                (* really do it? only if cookie was okay *)
-                                Lval(Var(ctxt.callerIsInstFlagVar), NoOffset);
-                                (* address of the stored shadowable *)
-                                addrOfLv (lh,lo);
-                                (* offset on stack of the shadow that was passed *)
-                                makeIntegerConstant (Int64.of_int (idx)) (* DON'T adjust for the 
-                                  cookie -- the inline function has to do it, because
-                                  shadows are not necessarily single words in size. *);
-                                (*  const void *ptr, the pointer value (for makeInvalidShadow) *)
-                                CastE(opaqueShadowableT, valExp);
-                                descriptorExprForShadowableExpr valExp;
-                                (* the debugging string for the shadow stack tracer *)
-                                Const(CStr((expToString valExp) ^ ", offset " ^ (expToCilString offsetExp)))
-                            ],
-                            (match lh with
-                                (Var(vi)) -> vi.vdecl (* loc *)
-                              | _ -> failwith "address-taken formal but a Mem lvalue"
-                            )
+                    Call(None,
+                        (Lval(Var((helperFunctions#getPeekAndShadowStoreArgumentShadow ()).svar),NoOffset)),
+                        [
+                            really;
+                            addrOfLv (lh,lo);
+                            offsetExp;
+                            CastE(opaqueShadowableT, containedShadowableExp);
+                            descriptorExprForShadowableExpr containedShadowableExp;
+                            debugStringExp
+                        ],
+                        (match lh with
+                            (Var(vi)) -> vi.vdecl (* loc *)
+                          | _ -> failwith "address-taken formal but a Mem lvalue"
                         )
-                 | _ -> failwith "internal error: formal parameter lacks local or shadow-space shadow values"
+                    )
+                 | _ -> failwith "internal error: formal parameter lacks local or shadow-space bounds"
+            ) in
+            let initCallsForOneFormal (baseOffset : int) (vi: Cil.varinfo) : Cil.instr list
+             = self#mapForAllShadowsInExpr (initCallForOneShadow baseOffset) (Lval(Var(vi), NoOffset))
             in
-            let makeLv = (fun vi -> Lval(Var(vi), NoOffset))
-            in
-            let formalShadowInitFunReverseList = self#concatMapForAllShadowsInExprList
-                getFunForOne (List.map makeLv (List.rev formalsNeedingShadows))
-            in
-            let formalShadowInitList = List.mapi (fun i -> fun f -> f i)
-                (List.rev formalShadowInitFunReverseList)
+            let _, (formalShadowsInitList : Cil.instr list) = List.fold_left (
+                fun (accBase, accInits) -> fun formal ->
+                    let (newInits : Cil.instr list) = initCallsForOneFormal accBase formal in
+                    let nOffsets = List.length newInits in
+                    (accBase + nOffsets, accInits @ newInits)
+            ) (0, []) formalsNeedingShadows (* our args were pushed right-to-left, so our formals go l to r *)
             in
             let writeCallerInstFlag
              = [Call(Some(Var(ctxt.callerIsInstFlagVar), NoOffset),
                 Lval(Var((helperFunctions#getTweakArgumentShadowCookie ()).svar), NoOffset), 
                 [CastE(voidConstPtrType, addrOfLv (Var(f.svar), NoOffset))], instrLoc !currentInst)]
             in
-            f.sbody <- { 
+            f.sbody <- {
                 battrs = f.sbody.battrs; 
                 bstmts = {
                     labels = [];
-                    skind = Instr(writeCallerInstFlag @ formalShadowInitList);
+                    skind = Instr(writeCallerInstFlag @ formalShadowsInitList);
                     sid = 0;
                     succs = [];
                     preds = [] 
@@ -1136,8 +1137,8 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         in
         begin
             let shadowPassInstructions = if (not passesShadows) then [] else (
-                let callForOneOffset valExpr shadowExpr offsetExpr = 
-                    debug_print 1 ("Pushing shadow for shadowable-contained-in-argument expr " ^ (expToString valExpr) ^ "\n");
+                let callForOneOffset containedShadowedExpr shadowExpr arrayIndexExpr = 
+                    debug_print 1 ("Pushing shadow for shadowable-contained-in-argument expr " ^ (expToString containedShadowedExpr) ^ "\n");
                     match shadowExpr with
                         ShadowLocalLval(slv) -> 
                             Call( None,
@@ -1151,7 +1152,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             Call( None,
                             (Lval(Var((helperFunctions#getPushArgumentShadowManifest ()).svar),NoOffset)),
                             [
-                                CastE(opaqueShadowableT, valExpr)
+                                CastE(opaqueShadowableT, containedShadowedExpr)
                             ] @ ses,
                             instrLoc !currentInst
                             )
@@ -1159,9 +1160,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             Call( None,
                             (Lval(Var((helperFunctions#getFetchAndPushArgumentShadow ()).svar),NoOffset)),
                             [
-                                CastE(opaqueShadowableT, valExpr);
+                                CastE(opaqueShadowableT, containedShadowedExpr);
                                 addrOfLv (lh,lo);
-                                descriptorExprForShadowableExpr valExpr
+                                descriptorExprForShadowableExpr containedShadowedExpr
                             ],
                             instrLoc !currentInst
                             )
@@ -1169,16 +1170,19 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             Call( None,
                             (Lval(Var((helperFunctions#getFetchAndPushArgumentShadow ()).svar),NoOffset)),
                             [
-                                CastE(opaqueShadowableT, valExpr);
+                                CastE(opaqueShadowableT, containedShadowedExpr);
                                 nullPtr;
-                                descriptorExprForShadowableExpr valExpr
+                                descriptorExprForShadowableExpr containedShadowedExpr
                             ],
                             instrLoc !currentInst
                             )
                 in
-                self#concatMapForAllShadowsInExprList callForOneOffset
-                    (let l = (List.rev es) (* push r to l! *) in
-                    List.filter (fun e -> self#typeNeedsShadow (Cil.typeOf e)) l)
+                List.flatten (List.map
+                    (fun e -> List.rev (* push from high to low stack offsets *)
+                        (self#mapForAllShadowsInExpr callForOneOffset e)
+                    )
+                    (List.rev es) (* push r to l! *)
+                )
             )
             in
             let calleeLval = match realCalledE with
@@ -1204,7 +1208,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
               match olv with
                 None -> []
               | Some(lhost, loff) -> (
-                    let writeOneLocal shadowLval valExpr _ offsetExpr = 
+                    let copyShadowFromStackToLocal shadowLval containedShadowedExpr shadowExpr arrayIndexExpr = 
                     [Call(
                         Some(shadowLval),
                         (Lval(Var((helperFunctions#getPeekResultShadow ()).svar),NoOffset)),
@@ -1212,30 +1216,46 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             (* really? only if *)
                             BinOp(Ne, Lval(Mem(Lval(Var(ctxt.cookieStackAddrVar), NoOffset)), NoOffset),
                                         CastE(ulongType, addrOfLv calleeLval), boolType);
-                            (* offset? *)
-                            offsetExpr; 
+                            (* Offset on the shadow stack -- HMM. Is this the same by construction
+                             * as the array index in the bounds struct? It should be. *)
+                            arrayIndexExpr;
                             (*  const void *ptr *)
-                            CastE(opaqueShadowableT, valExpr) (* Lval(lhost, loff) *);
+                            CastE(opaqueShadowableT, containedShadowedExpr) (* Lval(lhost, loff) *);
                             Const(CStr("call to " ^ (expToString calledE)))
                         ],
                         instrLoc !currentInst
                     )]
                     in
-                    let callsForOneLocal valExpr blah offsetExpr = 
-                        writeOneLocal (self#shadowLvalForLocalLval (lhost, loff)) valExpr blah offsetExpr
+                    let callsForOneLocal (containedShadowedExpr : Cil.exp) shadowExpr arrayIndexExpr = 
+                        copyShadowFromStackToLocal (self#shadowLvalForLocalLval (lhost, loff)) containedShadowedExpr shadowExpr arrayIndexExpr
                     in
-                    let callsForOneNonLocal valExpr blah offsetExpr =
-                        let lvExpr = (Lval(lhost, loff)) in
-                        (* write to a local temp, then do the shadow-space store *)
-                        (writeOneLocal (Var(ctxt.shadowReturnVar), NoOffset) valExpr blah offsetExpr) @ (
-                         self#doNonLocalShadowableStoreInstr
-                            (* shadowable value *) lvExpr
-                            (* where it's been/being stored *) (lhost, loff)
-                            (* its shadow *) (ShadowLocalLval(Var(ctxt.shadowReturnVar), NoOffset))
+                    let callsForOneNonLocal containedShadowedExpr shadowExpr arrayIndexExpr =
+                        (* let singlelvExpr = containedShadowedExpr (Lval olv) in *)
+                        (* We copy each individual shadow to the temporary local,
+                         * then copy it to the shadow space. Note that if we are
+                         * dealing with a struct containing multiple shadowable
+                         * values, we need to add an *offset* to the shadowed lval.
+                         * That is the offset corresponding to *)
+                        (* write a single shadow to a local temp, then do the shadow-space store
+                         * of a single shadow, from that temporary to the right shadow-space location *)
+                        (copyShadowFromStackToLocal
+                            (Var(ctxt.shadowReturnVar), NoOffset)
+                            (* mostly unused: --> *) containedShadowedExpr
+                            shadowExpr (* <-- really unused *)
+                            arrayIndexExpr (* <-- this is the main thing: index on shadow stack *))
+                        @
+                        (   let singleLv = match containedShadowedExpr with
+                                Lval(lv) -> lv | _ -> failwith "storing to non-lvalue"
+                            in
+                            self#doNonLocalShadowableStoreInstr
+                            (* shadowable value *) (Lval singleLv)
+                            (* where it's been/being stored *) singleLv
+                            (* the shadow value *) (ShadowLocalLval(Var(ctxt.shadowReturnVar), NoOffset))
                             (instrLoc !currentInst)
                         )
                     in
-                    if not (list_empty (self#containedShadowedPrimitiveExprsForExpr (Lval(lhost, loff))))
+                    if not (list_empty (self#containedShadowedPrimitiveExprsForExpr
+                        (Lval(lhost, loff))))
                     then (
                         debug_print 1 ("Saw call writing to [one or more] shadowable lval: " ^ (
                             lvalToString (lhost, loff)
@@ -1249,8 +1269,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             callsForOneNonLocal
                         )
                     in
-                    (* we're popping/peeking, so reverse *)
-                    List.flatten (List.rev (self#mapForAllShadowsInExpr instrFunc (Lval(lhost, loff))))
+                    List.flatten (self#mapForAllShadowsInExpr instrFunc (Lval(lhost, loff)))
                 )
             )
          in
