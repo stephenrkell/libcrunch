@@ -1761,11 +1761,11 @@ let containedPointerExprsForExpr ?forceIncludeVoidPointers:(forceIncludeVoidPoin
             List.fold_left (fun acc -> fun fi -> 
                 let thisFieldOffsets = enumeratePointerYieldingOffsetsForT fi.ftype
                 in
-                let prepended = List.map (fun offs -> 
+                let withField = List.map (fun offs -> 
                     Field(fi, offs)
                 ) thisFieldOffsets
                 in
-                prepended @ acc
+                acc @ withField
             ) [] ci.cfields
       | TEnum(ei, attrs) -> []
       | TBuiltin_va_list(attrs) -> []
@@ -2136,8 +2136,11 @@ class crunchBoundVisitor = fun enclosingFile ->
                     (* we always return bounds *)
                     (rs, returnBoundsInstrs)
                 else
-                (s.skind, 
-                mapForAllPointerBoundsInExpr (fun ptrExp -> fun boundExp -> fun offsetExp ->
+                (s.skind,
+                let inOrderPushes =
+                mapForAllPointerBoundsInExpr (fun containedPtrExp -> fun boundExp -> fun arrayIndexExp ->
+                    output_string stderr ("At result-push time, expr " ^ (expToString containedPtrExp)
+                       ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
                     match boundExp with
                         BoundsLval(blv) -> 
                             Call( None,
@@ -2153,7 +2156,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                             (Lval(Var(helperFunctions.pushResultBoundsBaseLimit.svar),NoOffset)),
                             [
                                 Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
-                                ptrExp;
+                                containedPtrExp;
                                 baseRv;
                                 limitRv
                             ],
@@ -2164,9 +2167,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                             (Lval(Var(helperFunctions.fetchAndPushResultBounds.svar),NoOffset)),
                             [
                                 Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
-                                ptrExp;
+                                containedPtrExp;
                                 CastE(voidPtrPtrType, mkAddrOf (lh,lo));
-                                pointeeUniqtypeGlobalPtr ptrExp enclosingFile uniqtypeGlobals
+                                pointeeUniqtypeGlobalPtr containedPtrExp enclosingFile uniqtypeGlobals
                             ],
                             loc
                             )
@@ -2175,13 +2178,16 @@ class crunchBoundVisitor = fun enclosingFile ->
                             (Lval(Var(helperFunctions.fetchAndPushResultBounds.svar),NoOffset)),
                             [
                                 Lval(Var(callerIsInstrumentedFlagVar), NoOffset);
-                                ptrExp;
+                                containedPtrExp;
                                 CastE(voidPtrPtrType, nullPtr);
-                                pointeeUniqtypeGlobalPtr ptrExp enclosingFile uniqtypeGlobals
+                                pointeeUniqtypeGlobalPtr containedPtrExp enclosingFile uniqtypeGlobals
                             ],
                             loc
                             )
                     ) returnExp !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
+                    in
+                    (* push in reverse order, so that offsets go up on the stack. *)
+                    List.rev inOrderPushes
                 )
                 in
                 (* PROBLEM. Goto and Switch make use of 'ref statements'. 
@@ -2426,55 +2432,61 @@ class crunchBoundVisitor = fun enclosingFile ->
              * The concatMapBlahBlah function doesn't give us what we want because it
              * only does offsets within a single argument. Instead, abstract over the 
              * offset and then assign when we have the whole list. *)
-            let formalBoundsInitFunReverseList = concatMapForAllPointerBoundsInExprList
-            (fun ptrExp -> fun boundExp -> fun offsetExp ->
+            let initCallForOnePtrBound = 
+            (fun baseIdxForContainingFormal -> fun containedPtrExp -> fun boundExp -> fun arrayIndexExp ->
+                output_string stderr ("At argument-peek time, expr " ^ (expToString containedPtrExp)
+                   ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n");
+                let really = (* really do it? only if cookie was okay *)
+                            Lval(Var(currentFuncCallerIsInstFlagVar), NoOffset) in
+                let offsetExp = (* offset on stack -- DON'T adjust for the 
+                              cookie -- the inline function has to do it, because
+                              bounds are not necessarily single words in size. *)
+                    BinOp(PlusA, makeIntegerConstant (Int64.of_int baseIdxForContainingFormal),
+                        arrayIndexExp, intType) in
+                let debugStringExp = Const(CStr((expToString containedPtrExp) ^ ", offset " ^ (expToCilString arrayIndexExp))) in
                 match boundExp with
                     BoundsLval(Var(bvar), boffset) ->
-                    fun idx -> Call(Some(Var(bvar), boffset),
+                    Call(Some(Var(bvar), boffset),
                         (Lval(Var(helperFunctions.peekArgumentBounds.svar),NoOffset)),
                         [
-                            (* really do it? only if cookie was okay *)
-                            Lval(Var(currentFuncCallerIsInstFlagVar), NoOffset);
-                            (* offset on stack *)
-                            makeIntegerConstant (Int64.of_int (idx)) (* DON'T adjust for the 
-                              cookie -- the inline function has to do it, because
-                              bounds are not necessarily single words in size. *);
-                            (*  const void *ptr, the pointer value (for makeInvalidBounds) *)
-                            ptrExp;
-                            Const(CStr((expToString ptrExp) ^ ", offset " ^ (expToCilString offsetExp)))
+                            really;
+                            offsetExp;
+                            containedPtrExp;
+                            debugStringExp
                         ],
                         bvar.vdecl (* loc *)
                     )
                  | MustFetch(LoadedFrom(lh,lo)) ->
-                    fun idx -> Call(None,
+                    Call(None,
                         (Lval(Var(helperFunctions.peekAndShadowStoreArgumentBounds.svar),NoOffset)),
                         [
-                            (* really do it? only if cookie was okay *)
-                            Lval(Var(currentFuncCallerIsInstFlagVar), NoOffset);
+                            really;
                             (* address of the stored pointer *)
                             CastE(voidPtrPtrType, mkAddrOf (lh,lo));
-                            (* offset on stack of the bounds that were passed *)
-                            makeIntegerConstant (Int64.of_int (idx)) (* DON'T adjust for the 
-                              cookie -- the inline function has to do it, because
-                              bounds are not necessarily single words in size. *);
-                            (*  const void *ptr, the pointer value (for makeInvalidBounds) *)
-                            ptrExp;
+                            offsetExp;
+                            containedPtrExp;
                             (* the uniqtype of the shadowed pointer value's pointee *)
                             pointeeUniqtypeGlobalPtr (Lval(lh,lo)) enclosingFile uniqtypeGlobals;
-                            (* the debugging string for the shadow stack tracer *)
-                            Const(CStr((expToString ptrExp) ^ ", offset " ^ (expToCilString offsetExp)))
+                            debugStringExp
                         ],
                         (match lh with
                             (Var(vi)) -> vi.vdecl (* loc *)
                           | _ -> failwith "address-taken formal but a Mem lvalue"
                         )
                     )
-              | _ -> failwith "internal error: formal parameter lacks local or shadow-space bounds"
-            ) (List.map (fun vi -> Lval(Var(vi), NoOffset)) (List.rev formalsNeedingBounds))
+                 | _ -> failwith "internal error: formal parameter lacks local or shadow-space bounds"
+            ) in
+            let initCallsForOneFormal (baseOffset : int) (vi: Cil.varinfo) : Cil.instr list
+             = mapForAllPointerBoundsInExpr (initCallForOnePtrBound baseOffset)
+                (Lval(Var(vi), NoOffset)) 
                 !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
             in
-            let formalBoundsInitList = List.mapi (fun i -> fun f -> f i) 
-                (List.rev formalBoundsInitFunReverseList)
+            let _, (formalBoundsInitList : Cil.instr list) = List.fold_left (
+                fun (accBase, accInits) -> fun formal ->
+                    let (newInits : Cil.instr list) = initCallsForOneFormal accBase formal in
+                    let nOffsets = List.length newInits in
+                    (accBase + nOffsets, accInits @ newInits)
+            ) (0, []) formalsNeedingBounds (* our args were pushed right-to-left, so our formals go l to r *)
             in
             let writeCallerInstFlag
              = [Call(Some(Var(currentFuncCallerIsInstFlagVar), NoOffset), 
@@ -2650,7 +2662,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                   (* Don't instrument calls to our own (liballocs/libcrunch) functions that get -include'd. *)
                   (* Also don't instrument calls to __builtin_va_arg. *)
                   if (match calledE with Lval(Var(fvi), NoOffset)
-			when (varIsOurs fvi || fvi.vname = "__builtin_va_arg") -> true
+                        when (varIsOurs fvi || fvi.vname = "__builtin_va_arg") -> true
                     | _ -> false)
                   then changedInstrs
                   else
@@ -2765,9 +2777,11 @@ class crunchBoundVisitor = fun enclosingFile ->
                     in
                     begin
                         let boundsPassInstructions = if (not passesBounds) then [] else (
-                            let callForOneOffset ptrExpr boundsExpr offsetExpr = 
-                                debug_print 1 ("Pushing bounds for pointer-contained-in-argument expr " ^ (expToString ptrExpr) ^ "\n");
-                                match boundsExpr with
+                            let callForOneOffset containedPtrExp boundsExp arrayIndexExp = 
+                                output_string stderr ("At argument-push time, expr " ^ (expToString containedPtrExp)
+                                   ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
+                                debug_print 1 ("Pushing bounds for pointer-contained-in-argument expr " ^ (expToString containedPtrExp) ^ "\n");
+                                match boundsExp with
                                     BoundsLval(blv) -> 
                                         Call( None,
                                         (Lval(Var(helperFunctions.pushLocalArgumentBounds.svar),NoOffset)),
@@ -2780,7 +2794,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         Call( None,
                                         (Lval(Var(helperFunctions.pushArgumentBoundsBaseLimit.svar),NoOffset)),
                                         [
-                                            ptrExpr;
+                                            containedPtrExp;
                                             baseRv;
                                             limitRv
                                         ],
@@ -2790,9 +2804,9 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         Call( None,
                                         (Lval(Var(helperFunctions.fetchAndPushArgumentBounds.svar),NoOffset)),
                                         [
-                                            ptrExpr;
+                                            containedPtrExp;
                                             CastE(voidPtrPtrType, mkAddrOf (lh,lo));
-                                            pointeeUniqtypeGlobalPtr ptrExpr enclosingFile uniqtypeGlobals
+                                            pointeeUniqtypeGlobalPtr containedPtrExp enclosingFile uniqtypeGlobals
                                         ],
                                         instrLoc !currentInst
                                         )
@@ -2800,15 +2814,21 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         Call( None,
                                         (Lval(Var(helperFunctions.fetchAndPushArgumentBounds.svar),NoOffset)),
                                         [
-                                            ptrExpr;
+                                            containedPtrExp;
                                             CastE(voidPtrPtrType, nullPtr);
-                                            pointeeUniqtypeGlobalPtr ptrExpr enclosingFile uniqtypeGlobals
+                                            pointeeUniqtypeGlobalPtr containedPtrExp enclosingFile uniqtypeGlobals
                                         ],
                                         instrLoc !currentInst
                                         )
                             in
-                            concatMapForAllPointerBoundsInExprList callForOneOffset (List.rev es) (* push r to l! *)
-                                !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile
+                            List.flatten (List.map
+                                (fun e -> List.rev (* push from high to low stack offsets *)
+                                    (mapForAllPointerBoundsInExpr
+                                    callForOneOffset e !currentFuncAddressTakenLocalNames
+                                    localLvalToBoundsFun tempLoadExprs enclosingFile)
+                                )
+                                (List.rev es) (* push r to l! *)
+                            )
                         )
                         in
                         let cookieStackAddrVar = ref None
@@ -2837,7 +2857,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                           match olv with
                             None -> []
                           | Some(lhost, loff) -> (
-                                let writeOneLocal boundsLval ptrExpr _ offsetExpr = 
+                                let writeOneLocal boundsLval containedPtrExp _ arrayIndexExp = 
                                 [Call(
                                     Some(boundsLval),
                                     (Lval(Var(helperFunctions.peekResultBounds.svar),NoOffset)),
@@ -2850,28 +2870,42 @@ class crunchBoundVisitor = fun enclosingFile ->
                                           | None -> failwith "error: no saved bounds stack pointer for cookie"
                                         )
                                           ;
-                                        (* offset? *)
-                                        offsetExpr; 
+                                        (* offset on the shadow stack? *)
+                                        arrayIndexExp; 
                                         (*  const void *ptr *)
-                                        ptrExpr (* Lval(lhost, loff) *);
+                                        containedPtrExp (* Lval(lhost, loff) *);
                                         Const(CStr("call to " ^ (expToString calledE)))
                                     ],
                                     instrLoc !currentInst
                                 )]
                                 in
-                                let callsForOneLocal ptrExpr blah offsetExpr = 
-                                    writeOneLocal (localLvalToBoundsFun (lhost, loff)) ptrExpr blah offsetExpr
+                                let callsForOneLocal containedPtrExp blah arrayIndexExp = 
+                                    output_string stderr ("At result-peek time (local), expr " ^ (expToString containedPtrExp)
+                                       ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
+                                    writeOneLocal (localLvalToBoundsFun (lhost, loff)) containedPtrExp blah arrayIndexExp
                                 in
-                                let callsForOneNonLocal ptrExpr blah offsetExpr =
+                                let callsForOneNonLocal containedPtrExp blah arrayIndexExp =
+                                (* We copy each individual bounds value to the temporary local,
+                                 * then copy it to the shadow space. Note that if we are
+                                 * dealing with a struct containing multiple shadowable
+                                 * values, we need to add an *offset* to the shadowed lval.
+                                 * The map function gives us the whole contained expr,
+                                 * which does the trick *)
                                     let bvi = Cil.makeTempVar f ~name:"__bounds_return_" boundsType
                                     in
-                                    let lvExpr = (Lval(lhost, loff)) in
+                                    (* let lvExpr = (Lval(lhost, loff)) in *)
                                     (* write to a local temp, then do the shadow-space store *)
-                                    (writeOneLocal (Var(bvi), NoOffset) ptrExpr blah offsetExpr) @ (
+                                    (writeOneLocal (Var(bvi), NoOffset) containedPtrExp blah arrayIndexExp)
+                                    @
+                                    (let singleLv = match containedPtrExp with
+                                        Lval(lv) -> lv | _ -> failwith "storing to non-lvalue"
+                                     in
+                                     output_string stderr ("At result-peek time (nonlocal), expr " ^ (expToString containedPtrExp)
+                                        ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
                                      doNonLocalPointerStoreInstr ~useVoidPP:false
-                                        (* pointer value *) lvExpr
-                                        (pointeeUniqtypeGlobalPtr lvExpr enclosingFile uniqtypeGlobals)
-                                        (* where it's been/being stored *) (lhost, loff)
+                                        (* pointer value *) containedPtrExp
+                                        (pointeeUniqtypeGlobalPtr containedPtrExp enclosingFile uniqtypeGlobals)
+                                        (* where it's been/being stored *) singleLv
                                         (* its bounds *) (BoundsLval(Var(bvi), NoOffset))
                                         l enclosingFile f uniqtypeGlobals helperFunctions
                                     )
@@ -2890,9 +2924,8 @@ class crunchBoundVisitor = fun enclosingFile ->
                                         callsForOneNonLocal
                                     )
                                 in
-                                (* we're popping/peeking, so reverse *)
-                                List.flatten (List.rev (mapForAllPointerBoundsInExpr instrFunc (Lval(lhost, loff))
-                                    !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile))
+                                List.flatten (mapForAllPointerBoundsInExpr instrFunc (Lval(lhost, loff))
+                                    !currentFuncAddressTakenLocalNames localLvalToBoundsFun !tempLoadExprs enclosingFile)
                             )
                         )
                      in
@@ -3533,7 +3566,7 @@ class checkStatementLabelVisitor = fun labelPrefix ->
       match outerS.skind with
             | Instr(is) -> 
                 ChangeDoChildrenPost(outerS,
-                    fun s -> restructureInstrsStatement groupAndLabelInstrs s)
+                    fun s -> restructureInstrsStatement groupAndLabelInstrs s; s)
          (* |   Return(maybeE, loc)
             |   Goto(stmtRef, loc)
             |   Break(loc)
