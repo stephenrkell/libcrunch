@@ -30,7 +30,8 @@ shadowprov_libc_wrappers.o .shadowprov_libc_wrappers.d: CFLAGS += -I$(LIBCRUNCH_
   -I$(LIBCRUNCH_BASE)/src \
   -I$(LIBALLOCS)/include \
   -I$(LIBALLOCS)/src \
-  -I$(LIBSYSTRAP)
+  -I$(LIBSYSTRAP) \
+  -DSHADOW_STACK_TRACE_LEVEL=0
 
 runtime.so: $(LIBCRUNCH_BASE)/lib/libcrunch_stubs.so
 	ln -sf "$<" "$@"
@@ -53,8 +54,8 @@ $(patsubst %.c,test-%.c,$(extra_tests)): test-%.c: %.c
 # never build straight from .c -- go via .o
 %: %.c
 
-$(patsubst %.c,%.o,$(tests)): CFLAGS += $(shell shadowprov-cflags) -save-temps
-$(patsubst %.c,%,$(tests)): LDFLAGS += $(shell shadowprov-ldflags)
+$(patsubst %.c,%.o,$(tests)): CFLAGS += $(shell ./shadowprov-cflags) -save-temps
+$(patsubst %.c,%,$(tests)): LDFLAGS += $(shell ./shadowprov-ldflags)
 
 test-fail-materialise: LDFLAGS += -Wl,-Ttext,0x410000
 
