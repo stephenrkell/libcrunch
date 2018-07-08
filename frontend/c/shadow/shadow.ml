@@ -668,11 +668,11 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 List.fold_left (fun acc -> fun fi -> 
                     let thisFieldOffsets = enumerateShadowedPrimitivesInT fi.ftype
                     in
-                    let prepended = List.map (fun offs -> 
+                    let withFieldPrepended = List.map (fun offs -> 
                         Field(fi, offs)
                     ) thisFieldOffsets
                     in
-                    prepended @ acc
+                    acc @ withFieldPrepended
                 ) [] ci.cfields
           | TEnum(ei, attrs) -> []
           | TBuiltin_va_list(attrs) -> []
@@ -856,6 +856,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                     in
                     let (rs, shadowReturnInstrList) =
                     (s.skind, 
+                    let inOrderPushes =
                     self#mapForAllShadowsInExpr (fun containedShadowedExp -> fun shadowExp -> fun arrayIndexExp ->
                         match shadowExp with
                             ShadowLocalLval(slv) -> 
@@ -899,6 +900,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                                 loc
                                 )
                         ) returnExp
+                        in
+                        (* push in reverse order, so that offsets go up on the stack. *)
+                        List.rev inOrderPushes
                     )
                     in
                     (* PROBLEM. Goto and Switch make use of 'ref statements'. 
