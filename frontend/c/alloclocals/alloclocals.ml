@@ -72,7 +72,8 @@ class allocLocalsVisitor
                        (* FIXME: for the sake of our own robustness,
                           delete the local (can't do this for formals) *)
                       (*let _ = f.slocals  in *) []
-            )
+            );
+            if not isFormal then f.slocals <- List.filter (fun v -> v != vi) f.slocals else ()
         ) !tempAddressTakenLocalNames;
         DoChildren
     
@@ -95,7 +96,8 @@ class allocLocalsVisitor
             Var(vi) when not vi.vglob -> (
                 try 
                     let ptrVi = VarinfoMap.find vi !replacedLocals in
-                    ChangeTo(Mem(Lval(Var(ptrVi), NoOffset)), lo)
+                    ChangeDoChildrenPost((lh,lo), fun (_, loRewritten) ->
+                        Mem(Lval(Var(ptrVi), NoOffset)), loRewritten)
                 with Not_found -> DoChildren
             )
            | _ -> DoChildren
