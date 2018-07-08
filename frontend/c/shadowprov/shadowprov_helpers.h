@@ -323,7 +323,10 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure)) __
 		TRACE_SHADOW(1, "peeked as result at offset %d", b, offset);
 		return b;
 	}
-	TRACE_STRING(0, " : callee returned no shadow (call site address: somewhere before %p)", calleestr, __get_pc());
+	if (IS_SANE_NONNULL(v))
+	{
+		TRACE_STRING(0, " : callee returned no shadow (call site address: somewhere before %p)", calleestr, __get_pc());
+	}
 	return __make_invalid_shadow(v);
 }
 
@@ -337,6 +340,11 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_sha
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t derefed_shadow);
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __check_deref)(const void *addr, __shadow_t derefed_shadow)
 {
+	if (!addr)
+	{
+		warnx("Null dereference");
+		abort();
+	}
 	if (derefed_shadow.byte != 0 && derefed_shadow.byte != (char)255)
 	{
 		void *base = __liballocs_get_alloc_base((void*) addr);
