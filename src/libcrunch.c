@@ -967,22 +967,22 @@ static void cache_bounds(const void *obj_base, const void *obj_limit, const stru
 {
 	__liballocs_cache_with_type(&__liballocs_ool_cache,
 		obj_base, obj_limit,
-		t, 1, period, alloc_base);
+		t, !(obj_base == alloc_base), period, alloc_base);
 }
 static void cache_is_a(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	_Bool result, unsigned short period, const void *alloc_base)
+	signed depth, unsigned short period, const void *alloc_base)
 {
 	__liballocs_cache_with_type(&__liballocs_ool_cache,
 		obj_base, obj_limit,
-		t, result, period, alloc_base);
+		t, depth, period, alloc_base);
 }
 static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	_Bool result, unsigned short period, const void *alloc_base)
+	signed depth, unsigned short period, const void *alloc_base)
 {
 	debug_println(1, "Creating fake bounds %p-%p", obj_base, obj_limit);
 	__liballocs_cache_with_type(&__libcrunch_fake_bounds_cache,
 		obj_base, obj_limit,
-		t, result, period, alloc_base);
+		t, depth, period, alloc_base);
 }
 
 void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
@@ -1026,7 +1026,7 @@ __libcrunch_check_init();
 	if (__builtin_expect(err != NULL, 0)) goto out; /* liballocs has already counted this abort */ \
 
 #define DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, allocator) \
-	if (alloc_uniqtype->make_precise) \
+	if (alloc_uniqtype && alloc_uniqtype->make_precise) \
 	{ \
 		/* HACK: special-case to avoid overheads of 1-element array type creation */ \
 		if (alloc_uniqtype->make_precise == __liballocs_make_array_precise_with_memory_bounds && \
@@ -1155,15 +1155,13 @@ int __is_a_internal(const void *obj, const void *arg)
 			a->set_type(NULL, (void *) obj, __liballocs_get_or_create_array_type(
 					(struct uniqtype *) test_uniqtype, 
 					alloc_size_bytes / test_uniqtype->pos_maxoff));
-			if (a->is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 1, period, alloc_start);
+			if (a->is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 0 /* FIXME: depth */, period, alloc_start);
 		
 			return 1;
 		}
 	}
-	// if we got here, the check failed -- which we can cache too
+	// we no longer cache negative results, since hopefully they're rare
 fail:
-	if (a && a->is_cacheable) cache_is_a(obj, (char*) obj + test_uniqtype->pos_maxoff,
-		test_uniqtype, 0, test_uniqtype->pos_maxoff, alloc_start);
 	if (__currently_allocating || __currently_freeing)
 	{
 		++__libcrunch_failed_in_alloc;
