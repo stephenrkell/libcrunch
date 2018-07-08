@@ -25,7 +25,7 @@ class helperFunctionsFull = object(self)
     val mutable makeShadow = emptyFunction "__make_shadow"
     val mutable fetchShadowInl = emptyFunction "__fetch_shadow_inl"
     val mutable storeShadowNonLocal = emptyFunction "__store_shadow_nonlocal"
-    val mutable checkDeref = emptyFunction "__check_Deref"
+    val mutable checkDeref = emptyFunction "__check_deref"
     
     method getMakeShadow (_:unit) = makeShadow
     method getFetchShadowInl (_:unit) = fetchShadowInl
@@ -400,8 +400,19 @@ class shadowProvVisitor
                (* the same lval *)
                (Mem(memExpr), offsetFromList offsetList)
             in
+            let isCilAllocLocalExpr = function
+                Lval(Var(vi), NoOffset) when startsWith vi.vname "__cil_alloclocal_" -> true
+                | _ -> false
+            in
             match lhost with
-                Mem(memExpr) when not weAreUnderAddrOf ->
+                Mem(memExpr) when not weAreUnderAddrOf
+                    (* We could exclude cilallocs from check_deref, but
+                     * for robustness let's leave these checks in now
+                     * (they *should* work) and instead come up with a
+                     * less ad-hoc way of marking stuff as to be excluded
+                     * from checks added later in pipeline
+                     * (maybe an attribute "safe_unchecked"?) *)
+                    (* && not (isCilAllocLocalExp memExpr) *) ->
                     hoistDeref memExpr (offsetToList loff)
                   | _ -> (lhost,loff)
         )
@@ -413,15 +424,14 @@ class shadowProvVisitor
         match g with 
             GVar(gvi, gii, loc) ->
                 gvi.vattr <- dropAttributes ["const"; "pure"; "aconst"] gvi.vattr;
-                DoChildren
+                super#vglob g
           | GVarDecl(gvi, l) ->
                 gvi.vattr <- dropAttributes ["const"; "pure"; "aconst"] gvi.vattr;
-                DoChildren
+                super#vglob g
           | GFun(f, l) ->
                 f.svar.vattr <- dropAttributes ["const"; "pure"; "aconst"] f.svar.vattr;
-                DoChildren
-          | _ -> DoChildren
-
+                super#vglob g
+          | _ -> super#vglob g
 
 end
 
