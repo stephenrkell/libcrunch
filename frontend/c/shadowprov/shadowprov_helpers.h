@@ -231,7 +231,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __tweak_argu
 	}
 	else
 	{
-		TRACE_WORD(0, "shadow cookie did not match (vs %p)", *__shadow_sp, callee);
+		TRACE_WORD(1, "shadow cookie did not match (vs %p)", *__shadow_sp, callee);
 		return 0;
 	}
 }
