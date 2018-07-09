@@ -14,28 +14,53 @@ external mkstemps: string -> int -> Unix.file_descr * string = "caml_mkstemps"
 type extra_arg =
     OutputFile
   | Plugin
+  | Driver
 
 let () =
     let minusOPos = ref None in
     let saveTemps = ref false in
+    let seenStd = ref None in
     let readingExtraArg = ref None in
     let originalOutfile = ref None in
+    let driver = ref None in
     let cilPluginsToLoadReverse = ref [] in
     let cilPassesToRunReverse = ref [] in
     let (newTempFd, newTempName) = mkstemps "/tmp/tmp.XXXXXX.cpp.i" 6 in
-    let rewrittenArgs = List.flatten (List.mapi (fun i -> fun arg -> 
-        if i = 0 then ["cpp"] else
+    let rewrittenArgs = List.flatten (List.mapi (fun i -> fun arg ->
+        (* PROBLEM: different versions of cpp behave subtly differently,
+         * especially w.r.t. their default version.
+         * For example, cpp-4.9 defaults to gnu89 mode,
+         * whereas cpp-7.2 defaults to gnu99 mode.
+         * If we see code like this:
+         * #define U blah
+         * U"x"
+         *
+         * ... this will get preprocessed differently (unicode literals in gnu99).
+         * This is basically the code's fault, but it can cause surprises
+         * e.g. if the client compiler was gcc-4.9, it was expecting to invoke
+         * cpp-4.9 where the problem above would not arise. Ideally we would
+         * invoke the same version of cpp that the compiler would invoke. To that
+         * end, our wrapper scrapes the executable of its parent pid and passes
+         * that as a -driver option. Alternatively the user may specify -std=xxx
+         * explicitly. If we don't get either of those, we fail early rather than
+         * do something subtly wrong. *)
+        if i = 0 then [] (* we fill "cpp" or whatever later *) else
         match arg with
           | "-o" -> (minusOPos := Some(i); readingExtraArg := Some(OutputFile); [arg])
-          | "-save-temps" -> saveTemps := true; [arg]
+          | "-save-temps" -> saveTemps := true; [] (* i.e. accept -Wp,-save-temps; compiler doesn't grok it*)
+          | "-driver" -> (readingExtraArg := Some(Driver); [])
           | "-plugin" -> (readingExtraArg := Some(Plugin); [])
           | s when String.length s > String.length "-fpass-"
                 && String.sub s 0 (String.length "-fpass-") = "-fpass-" ->
                 let passName = String.sub s (String.length "-fpass-") (String.length s - String.length "-fpass-")
                 in cilPassesToRunReverse := passName :: !cilPassesToRunReverse; []
+          | s when String.length s > String.length "-std="
+                && String.sub s 0 (String.length "-std=") = "-std=" ->
+                (seenStd := Some(s); [s])
           | _ -> (
             let replacement = match !readingExtraArg with
                 None -> [arg]
+              | Some(Driver) -> driver := Some(arg); []
               | Some(OutputFile) -> originalOutfile := Some(arg); [newTempName]
               | Some(Plugin) -> cilPluginsToLoadReverse := arg :: !cilPluginsToLoadReverse; []
             in
@@ -43,10 +68,19 @@ let () =
           )
         ) (Array.to_list Sys.argv))
     in
+    let cppCommandPrefix = match !seenStd with
+        None -> (
+            match !driver with
+                None -> failwith "cilpp needs a -std=xxx option or a -driver"
+              | Some(d) ->
+                    d :: ["-E"] (* This -E may be redundant, but leave it for good measure *)
+            )
+      | Some(_) -> ["cpp"] (* -std= should do the trick *)
+    in
     let newArgs = match !minusOPos with
         None -> (* there was no -o, so add one *)
-            rewrittenArgs @ [ "-o"; newTempName ]
-      | Some(i) -> rewrittenArgs
+            cppCommandPrefix @ rewrittenArgs @ [ "-o"; newTempName ]
+      | Some(i) -> cppCommandPrefix @ rewrittenArgs
     in
     (* FIXME: we have left the fd open *)
     match fork () with
@@ -107,5 +141,5 @@ let () =
     Cil.print_CIL_Input := false;
     let _ = Cil.dumpFile Cil.defaultCilPrinter chan str currentCilFile
     in
-    (* delete temporary file unless -save-temps; FIXME: we don't see -save-temps? *)
+    (* delete temporary file unless -save-temps *)
     if !saveTemps then () else Unix.unlink newTempName

@@ -104,6 +104,8 @@ case "$cmd_to_run" in
             exec "$@"
         else
             # run cilpp, which should take care of the temporary file thing
+            driver="$(readlink /proc/$PPID/exe)"
+            debug_print 1 "driver binary is probably $driver" 1>&2
             debug_print 1 "outpos is $outpos" 1>&2
             debug_print 1 "outfile is $outfile" 1>&2
             # do the cpp, then run CIL
@@ -111,7 +113,9 @@ case "$cmd_to_run" in
             #shift # get rid of the cc1 "argument"
             #run_with_replacement_infile "$tmpfile"
             declare -a cpp_options
-            ctr=0
+            cpp_options[0]="-driver"
+            cpp_options[1]="$driver"
+            ctr=2
             while shift || break; do
                 debug_print 1 "\$# is $#, \$1 is '$1'" 1>&2
                 case "$1" in
