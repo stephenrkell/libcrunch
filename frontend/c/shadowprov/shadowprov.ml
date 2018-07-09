@@ -41,15 +41,11 @@ end
 
 let helperFunctions = new helperFunctionsFull
 
-(* FIXME: drop pure and const attrs for any shadow-passing/returning function. *)
-
-
 (* This class does (unfortunately) two things:
  * (1) fills in the virtual methods of the base class,
  * such that the base-class visitor logic will instrument
  * the code to propagate shadow values -- but not to use them.
  * (2) actually use the shadows *)
-
 class shadowProvVisitor
  = fun enclosingFile ->
        object(self)
@@ -154,13 +150,15 @@ class shadowProvVisitor
       | _ -> failwith "expected ChangeDoChildrenPost"
 
     val currentFrameAddressVar = ref None
+    val currentCheckResultVar = ref None
     method vfunc (f: fundec) : fundec visitAction =
         if self#varIsOurs f.svar then SkipChildren
         else
-        let assignVid = (fun v -> (v.vid <- Cil.newVID ()))
-        in
+        let assignVid = (fun v -> (v.vid <- Cil.newVID ())) in
         List.iter assignVid f.sformals;
         List.iter assignVid f.slocals;
+        currentCheckResultVar := Some(let v = Cil.makeTempVar ~name:"__cil_derefcheck_" f boolType in
+            v.vattr <- [Attr("unused", [])]; v);
         let tmpVar = Cil.makeTempVar f ~name:"__frame_address" ulongType
         in
         let helperFunc = materialiseBuiltin "__builtin_frame_address" 
@@ -377,28 +375,26 @@ class shadowProvVisitor
              * a subobject; it is the Mem(_) host that embodies
              * a pointer deref. *)
             let hoistDeref memExpr offsetList =
-               let simplifiedMemExpr = foldConstants memExpr
-               in
+               let simplifiedMemExpr = foldConstants memExpr in
                (* If we have an expr using PlusPI, like "ptr + 1", our BoundsDescrForExpr
                 * should just use the bounds of the input pointer. *)
-               let shadowDescr = self#shadowDescrForExpr simplifiedMemExpr
-               in
-               let slv = self#ensureShadowLocalLval simplifiedMemExpr shadowDescr
-               in
+               let shadowDescr = self#shadowDescrForExpr simplifiedMemExpr in
+               let slv = self#ensureShadowLocalLval simplifiedMemExpr shadowDescr in
                let (shadowLoadInstrs : Cil.instr list)
                = self#localShadowUpdateInstrs slv simplifiedMemExpr shadowDescr currentLoc
                in
-               let checkResultVar = Cil.makeTempVar ~name:"__cil_derefcheck_" (self#getFunc ()) boolType in
-               (checkResultVar.vattr <- [Attr("unused", [])];
+               (match !currentCheckResultVar with None -> failwith "no check result"
+               | Some(checkResultVar) ->
                self#queueInstr (shadowLoadInstrs @ [Call(Some(Var(checkResultVar), NoOffset),
                    (Lval(Var((helperFunctions#getCheckDeref ()).svar),NoOffset)),
                    [ simplifiedMemExpr
                    ; (* what are the bounds of memExpr? *)
                      Lval(slv)
                    ], currentLoc
-               )]));
+               )]);
                (* the same lval *)
                (Mem(memExpr), offsetFromList offsetList)
+               )
             in
             let isCilAllocLocalExpr = function
                 Lval(Var(vi), NoOffset) when startsWith vi.vname "__cil_alloclocal_" -> true
