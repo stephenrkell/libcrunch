@@ -664,7 +664,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                 (* For each field, recursively collect the offsets
                  * then prepend Field(fi) to each. We prepend the same fi,
                  * for all offsets yielded by a given field,
-                 * then move on to the next field. *)
+                 * then move on to the next field.
+                 * Bit of a HACK: skip unnamed bitfields. *)
+                let isUnnamedBitfield fi = (fi.fname = Cil.missingFieldName) in
                 List.fold_left (fun acc -> fun fi -> 
                     let thisFieldOffsets = enumerateShadowedPrimitivesInT fi.ftype
                     in
@@ -673,13 +675,21 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                     ) thisFieldOffsets
                     in
                     acc @ withFieldPrepended
-                ) [] ci.cfields
+                ) [] (List.filter (fun x -> not (isUnnamedBitfield x)) ci.cfields)
           | TEnum(ei, attrs) -> []
           | TBuiltin_va_list(attrs) -> []
         in
         let offsets = enumerateShadowedPrimitivesInT (Cil.typeOf e)
         in
-        match e with
+        (* Here we add the stripCasts
+         * to handle cases such as (seen in SPEC gcc)
+         *
+         *        *dest = *token
+         * where token has type const cpp_token *
+         * and the CIL turns *token into "(cpp_token) *token"
+         * so gives us a cast expression. I really want only to
+         * "stripConstCasts". FIXME.*)
+        match stripCasts e with
             Lval(someHost, someOff) -> 
                 List.map (fun off -> 
                     let newOff = offsetFromList (
@@ -693,8 +703,12 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                     Lval(someHost, newOff)
                 ) offsets
          |  _ when isCompOrArray (Cil.typeOf e) -> 
-                failwith ("internal error: did not expect array or struct type: " ^ 
-                    (typToString (Cil.typeOf e)))
+                failwith ("internal error: did not expect non-lvalue (" ^
+                    (expToString e) ^
+                    ") of array or struct type: " ^ 
+                    (typToString (Cil.typeOf e)) ^ "(at " ^
+                    (Pretty.sprint 80 (Pretty.dprintf "%a" d_loc (instrLoc !currentInst))) ^
+                    ")")
          |  _ when primitiveTypeIsShadowed (Cil.typeOf e) -> [e]
          |  _ -> []
 
@@ -1036,7 +1050,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
              * We unroll all these calls. *)
             let initCallForOneShadow = 
             (fun baseIdxForContainingFormal -> fun containedShadowableExp -> fun shadowExp -> fun arrayIndexExp ->
-                output_string stderr ("At argument-peek time, expr " ^ (expToString containedShadowableExp)
+                debug_print 1 ("At argument-peek time, expr " ^ (expToString containedShadowableExp)
                    ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n");
                 let really = (* really do it? only if cookie was okay *)
                             Lval(Var(ctxt.callerIsInstFlagVar), NoOffset) in
