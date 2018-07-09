@@ -2139,7 +2139,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                 (s.skind,
                 let inOrderPushes =
                 mapForAllPointerBoundsInExpr (fun containedPtrExp -> fun boundExp -> fun arrayIndexExp ->
-                    output_string stderr ("At result-push time, expr " ^ (expToString containedPtrExp)
+                    debug_print 1 ("At result-push time, expr " ^ (expToString containedPtrExp)
                        ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
                     match boundExp with
                         BoundsLval(blv) -> 
@@ -2434,7 +2434,7 @@ class crunchBoundVisitor = fun enclosingFile ->
              * offset and then assign when we have the whole list. *)
             let initCallForOnePtrBound = 
             (fun baseIdxForContainingFormal -> fun containedPtrExp -> fun boundExp -> fun arrayIndexExp ->
-                output_string stderr ("At argument-peek time, expr " ^ (expToString containedPtrExp)
+                debug_print 1 ("At argument-peek time, expr " ^ (expToString containedPtrExp)
                    ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n");
                 let really = (* really do it? only if cookie was okay *)
                             Lval(Var(currentFuncCallerIsInstFlagVar), NoOffset) in
@@ -2778,7 +2778,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                     begin
                         let boundsPassInstructions = if (not passesBounds) then [] else (
                             let callForOneOffset containedPtrExp boundsExp arrayIndexExp = 
-                                output_string stderr ("At argument-push time, expr " ^ (expToString containedPtrExp)
+                                debug_print 1 ("At argument-push time, expr " ^ (expToString containedPtrExp)
                                    ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
                                 debug_print 1 ("Pushing bounds for pointer-contained-in-argument expr " ^ (expToString containedPtrExp) ^ "\n");
                                 match boundsExp with
@@ -2880,7 +2880,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                 )]
                                 in
                                 let callsForOneLocal containedPtrExp blah arrayIndexExp = 
-                                    output_string stderr ("At result-peek time (local), expr " ^ (expToString containedPtrExp)
+                                    debug_print 1 ("At result-peek time (local), expr " ^ (expToString containedPtrExp)
                                        ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
                                     writeOneLocal (localLvalToBoundsFun (lhost, loff)) containedPtrExp blah arrayIndexExp
                                 in
@@ -2900,7 +2900,7 @@ class crunchBoundVisitor = fun enclosingFile ->
                                     (let singleLv = match containedPtrExp with
                                         Lval(lv) -> lv | _ -> failwith "storing to non-lvalue"
                                      in
-                                     output_string stderr ("At result-peek time (nonlocal), expr " ^ (expToString containedPtrExp)
+                                     debug_print 1 ("At result-peek time (nonlocal), expr " ^ (expToString containedPtrExp)
                                         ^ " is paired with " ^ (expToString arrayIndexExp) ^ "\n"); flush stderr;
                                      doNonLocalPointerStoreInstr ~useVoidPP:false
                                         (* pointer value *) containedPtrExp
