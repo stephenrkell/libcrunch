@@ -216,7 +216,7 @@ class shadowProvVisitor
         let e = stripIrrelevantCasts (simplifyPtrExprs outerE) in
         let t = Cil.typeOf e in
         if not (self#typeNeedsShadow t) then let loc = instrLoc !currentInst in failwith (
-            "computing shadow for non-shadowable: type " ^ (typToString t) ^ ", expr " ^ (expToString e) ^ ", file: " ^ loc.file ^ ", line " ^ (string_of_int loc.line) ^ ", CIL dump of inst: " ^ (match !currentInst with Some(x) -> instToCilString x | None -> "(no inst)" ))
+            "computing shadow for non-shadowable: orig type " ^ (typToString origT) ^ ", type " ^ (typToString t) ^ ", expr " ^ (expToString e) ^ ", file: " ^ loc.file ^ ", line " ^ (string_of_int loc.line) ^ ", CIL dump of inst: " ^ (match !currentInst with Some(x) -> instToCilString x | None -> "(no inst)" ))
         else
         (* stripping irrelevant casts should never turn
          * a shadow-needing expression into a non-shadow-needing one. *)

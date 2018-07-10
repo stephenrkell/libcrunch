@@ -681,15 +681,25 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         in
         let offsets = enumerateShadowedPrimitivesInT (Cil.typeOf e)
         in
+        let castAffectsConstOnly targetT sourceT =
+            let dropAttrs = fun attrs -> [] in
+             Cil.typeSigWithAttrs dropAttrs targetT = Cil.typeSigWithAttrs dropAttrs sourceT (* FIXME *)
+        in
+        let rec stripConstCasts someE = match someE with
+                CastE(t, innerE) ->
+                    if castAffectsConstOnly t (Cil.typeOf innerE)
+                    then stripConstCasts innerE
+                    else someE
+              | _ -> someE
+        in
         (* Here we add the stripCasts
          * to handle cases such as (seen in SPEC gcc)
          *
          *        *dest = *token
          * where token has type const cpp_token *
          * and the CIL turns *token into "(cpp_token) *token"
-         * so gives us a cast expression. I really want only to
-         * "stripConstCasts". FIXME.*)
-        match stripCasts e with
+         * so gives us a cast expression. *)
+        match stripConstCasts e with
             Lval(someHost, someOff) -> 
                 List.map (fun off -> 
                     let newOff = offsetFromList (
