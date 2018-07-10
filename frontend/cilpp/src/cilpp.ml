@@ -15,6 +15,7 @@ type extra_arg =
     OutputFile
   | Plugin
   | Driver
+  | DependencyOutputFile
 
 let () =
     let minusOPos = ref None in
@@ -23,6 +24,9 @@ let () =
     let readingExtraArg = ref None in
     let originalOutfile = ref None in
     let driver = ref None in
+    let seenMd = ref false in
+    let seenMf = ref false in
+    let depsOutputFile = ref None in
     let cilPluginsToLoadReverse = ref [] in
     let cilPassesToRunReverse = ref [] in
     let (newTempFd, newTempName) = mkstemps "/tmp/tmp.XXXXXX.cpp.i" 6 in
@@ -50,6 +54,20 @@ let () =
           | "-save-temps" -> saveTemps := true; [] (* i.e. accept -Wp,-save-temps; compiler doesn't grok it*)
           | "-driver" -> (readingExtraArg := Some(Driver); [])
           | "-plugin" -> (readingExtraArg := Some(Plugin); [])
+                (* NOTE that the driver adds an extra arg to -MD, and indeed that's the point of
+                 * -MD as opposed to -MF. We might have -MF in the mix too, though.
+                 * We delete both and then reinstate them. We want to avoid using -MD
+                 * for real because we want to re-run the driver -E, and the combination
+                 * of -MD, -E and -o changes the meaning of -MD. So it will not do what
+                 * the user intended. I *think* -M -MF <filename>, when passed to the preprocessor,
+                 * will always get that *assuming* they didn't actually pass all three of
+                 * -E, -MD and -o to the driver. FIXME: handle that case if it isn't already.
+                 * NOTE that the use of -MD without -MF is already handled by the driver, which
+                 * generates the extra argument to -MF. So CHECK whether the other works too. *)
+          | "-MD" -> (seenMd := true; readingExtraArg := Some(DependencyOutputFile); [])
+          | "-MMD" -> (seenMd := true; readingExtraArg := Some(DependencyOutputFile); [])
+          | "-MF" -> (seenMf := true; readingExtraArg := Some(DependencyOutputFile); [])
+          | "-MMF" -> (seenMf := true; readingExtraArg := Some(DependencyOutputFile); [])
           | s when String.length s > String.length "-fpass-"
                 && String.sub s 0 (String.length "-fpass-") = "-fpass-" ->
                 let passName = String.sub s (String.length "-fpass-") (String.length s - String.length "-fpass-")
@@ -63,6 +81,8 @@ let () =
               | Some(Driver) -> driver := Some(arg); []
               | Some(OutputFile) -> originalOutfile := Some(arg); [newTempName]
               | Some(Plugin) -> cilPluginsToLoadReverse := arg :: !cilPluginsToLoadReverse; []
+              | Some(DependencyOutputFile) -> (if !depsOutputFile = None
+                    then depsOutputFile := Some(arg) else (); [])
             in
             readingExtraArg := None; replacement
           )
@@ -77,14 +97,19 @@ let () =
             )
       | Some(_) -> ["cpp"] (* -std= should do the trick *)
     in
-    let newArgs = match !minusOPos with
-        None -> (* there was no -o, so add one *)
-            cppCommandPrefix @ rewrittenArgs @ [ "-o"; newTempName ]
-      | Some(i) -> cppCommandPrefix @ rewrittenArgs
+    let depsArgs = match !depsOutputFile with
+            None -> []
+          | Some(depsFile) -> ["-M"; "-MF"; depsFile]
+    in
+    let outArgs = match !minusOPos with
+        None -> (* there was no -o, so add one *) [ "-o"; newTempName ]
+      | _ -> []
+    in
+    let allArgs = cppCommandPrefix @ rewrittenArgs @ outArgs @ depsArgs
     in
     (* FIXME: we have left the fd open *)
     match fork () with
-        | 0 -> (try execvp (List.hd newArgs) (Array.of_list newArgs)
+        | 0 -> (try execvp (List.hd allArgs) (Array.of_list allArgs)
             with Unix_error(err, _, _) ->
                 output_string Pervasives.stderr ("cannot exec cpp: " ^ (error_message err) ^ "\n");
                 exit 255
@@ -122,9 +147,11 @@ let () =
           if !Errormsg.verboseFlag then 
             ignore (Errormsg.log "Running CIL feature %s (%s)\n" 
                       fdesc.Feature.fd_name fdesc.Feature.fd_description);
+          try
           (* Run the feature, and see how long it takes. *)
           Stats.time fdesc.Feature.fd_name
-            fdesc.Feature.fd_doit currentCilFile;
+            fdesc.Feature.fd_doit currentCilFile
+          with Not_found -> (output_string Pervasives.stderr ("CIL pass " ^ fdesc.Feature.fd_name ^ " raised Not_found!\n"); raise Not_found);
           (* See if we need to do some checking *)
           if !Cilutil.doCheck && fdesc.Feature.fd_post_check then begin
             ignore (Errormsg.log "CIL check after %s\n" fdesc.Feature.fd_name);
