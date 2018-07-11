@@ -402,6 +402,10 @@ class shadowProvVisitor
             in
             match lhost with
                 Mem(memExpr) when not weAreUnderAddrOf
+                    && (match !currentInst with
+                            (* don't hoist the "deref" that is calling a function ptr *)
+                            Some(Call(_, Lval(x, _), _, _)) when x == lhost -> false
+                          | _ -> true)
                     (* We could exclude cilallocs from check_deref, but
                      * for robustness let's leave these checks in now
                      * (they *should* work) and instead come up with a
