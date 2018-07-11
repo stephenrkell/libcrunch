@@ -9,6 +9,7 @@
 #include <err.h>
 #include <time.h>
 #include <assert.h>
+#include <obstack.h> /* FIXME: conditionalise on glibc */
 #include "shadowprov_helpers.h"
 #define RELF_DEFINE_STRUCTURES
 #include "relf.h" /* for the auxv stuff */
@@ -349,6 +350,33 @@ DECLARE(char *, strcpy, char *dest, const char *src)
 	char *ret = REAL(strcpy)(dest, src);
 	RETURN_SHADOWABLE_WITH_ARGSHADOW(char*, dest, 0, dest);
 }
+/* To deal with qsort callbacks, we substitute the callback for one that
+ * launders the pointers and then chain-calls the user's callback.
+ * To pass the real pointer we use a thread-local variable, which is fine
+ * because qsort() is documented as non-re-entrant. (For qsort_r() we can
+ * abuse the extra argument it gives us. */
+typedef int qsort_cb(const void *, const void *);
+static /* __thread */ qsort_cb *real_qsort_cb;
+static int launder_qsort_cb(const void *arg1, const void *arg2)
+{
+	/* qsort will call us, and we must call the user code. */
+	_Bool caller_is_inst = 0;
+	unsigned long *saved_ssp = __shadow_sp;
+	__push_argument_shadow_manifest((unsigned long) __liballocs_get_alloc_base(arg2), (unsigned long) 0, 0);
+	__push_argument_shadow_manifest((unsigned long) __liballocs_get_alloc_base(arg1), (unsigned long) 0, 0);
+	__push_argument_shadow_cookie(real_qsort_cb, "qsort real callback");
+	int ret = real_qsort_cb(arg1, arg2);
+	__shadow_sp = saved_ssp;
+	RETURN_INTEGER(int, ret);
+}
+DECLARE(int, qsort, void *base, size_t nmemb, size_t size, qsort_cb *compar)
+{
+	BEGIN(qsort);
+	real_qsort_cb = compar;
+	int ret = REAL(qsort)(base, nmemb, size, launder_qsort_cb);
+	real_qsort_cb = NULL;
+	RETURN_INTEGER(int, ret);
+}
 /* Not really necessary, but characterwise I/O is so tedious
  * that it generates time-consumingly many error messages. */
 DECLARE(int, fgetc, FILE *stream)
@@ -357,12 +385,40 @@ DECLARE(int, fgetc, FILE *stream)
 	int ret = REAL(fgetc)(stream);
 	RETURN_INTEGER(int, ret);
 }
-
-// we don't need to init the libc/auxv shadow space here -- shadow.c does it
-// OH, but it initialises things with bounds -- we want provenances.
 #define STORED_PTR(ptr) warnx("Set up stored shadowable at %p: %02x", &ptr, __make_shadow((unsigned long) ptr, 0)); __store_shadow_nonlocal(&ptr, (unsigned long) ptr, __make_shadow((unsigned long) ptr, 0), (void*)0)
 #define STORE_IT2(x, y) __store_shadow_nonlocal(&x, (unsigned long) y, __make_shadow((unsigned long) y, 0), (void*)0)
 #define STORE_IT_AT(place, val) __store_shadow_nonlocal(place, (unsigned long) val, __make_shadow((unsigned long) val, 0), (void*)0)
+#define STORE_IT_GETBASE(lv) __store_shadow_nonlocal(&(lv), !&(lv) ? 0ul : (unsigned long) __liballocs_get_alloc_base(lv), !&(lv) ? (struct shadow_byte) { NULL_PROV } : __make_shadow((unsigned long) __liballocs_get_alloc_base(lv), 0), (void*)0)
+DECLARE(int, _obstack_begin, struct obstack *o, int size, int alignment,
+                           void *(*chunkfun)(long), void (*freefun)(void *))
+{
+	BEGIN(_obstack_begin);
+	int ret = REAL(_obstack_begin)(o, size, alignment, chunkfun, freefun);
+	/* Now set the provenance for any (non-function) pointer it may have written. */
+	STORE_IT_GETBASE(o->chunk);
+	STORE_IT_GETBASE(o->object_base);
+	STORE_IT_GETBASE(o->next_free);
+	STORE_IT_GETBASE(o->chunk_limit);
+	STORE_IT_GETBASE(o->extra_arg);
+	return ret;
+}
+
+typedef void *chunkfunc_1(void *, long);
+typedef void freefunc_1(void*, void*);
+DECLARE(int, _obstack_begin_1, struct obstack *o, int size, int alignment,
+                             chunkfunc_1 *chunkfun, freefunc_1 *freefunc, void *arg)
+{
+	BEGIN(_obstack_begin_1);
+	int ret = REAL(_obstack_begin_1)(o, size, alignment, chunkfun, freefunc, arg);
+	STORE_IT_GETBASE(o->chunk);
+	STORE_IT_GETBASE(o->object_base);
+	STORE_IT_GETBASE(o->next_free);
+	STORE_IT_GETBASE(o->chunk_limit);
+	STORE_IT_GETBASE(o->extra_arg);
+	return ret;
+}
+// we don't need to init the libc/auxv shadow space here -- shadow.c does it
+// OH, but it initialises things with bounds -- we want provenances.
 extern int main(int, char**) __attribute__((weak));
 static void init_shadow_entries(void) __attribute__((constructor));
 static void init_shadow_entries(void)
