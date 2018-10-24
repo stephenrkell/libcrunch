@@ -304,22 +304,29 @@ class shadowProvVisitor
                 self#shadowDescrForExpr memExp
           | (StartOf(Mem(memExp), someOffset), _) (* no field in offset; offset yields an array *) ->
                 self#shadowDescrForExpr memExp
-          | (BinOp(PlusPI, Lval(Var(someVi), someOffset), someIntExp, somePtrT), _) when self#hostIsLocal (Var(someVi)) ->
-                (* This is an adjustment of a locally shadowed ptr.
-                 * Does it have the same shadow as the original one?
-                 * In the crunchbound case, there is a complex argument ending in "yes".
-                 * In our case, we just say yes.
-                 * Provenance gets interesting here if the integer also has a provenance. *)
-                ShadowLocalLval(self#shadowLvalForLocalLval (Var(someVi), someOffset))
-          | (BinOp(MinusPI, Lval(Var(someVi), someOffset), someIntExp, somePtrT), _) when self#hostIsLocal (Var(someVi)) ->
-                ShadowLocalLval(self#shadowLvalForLocalLval (Var(someVi), someOffset)) (* as above *)
           | (BinOp(MinusPP, ep, ei, _), _) -> plainIntegerShadow
-          | (BinOp(op, e1, _, _), _) -> if self#typeNeedsShadow (Cil.typeOf e1)
+          | (BinOp(PlusPI, somePtrExp, someIntExp, somePtrT), _) ->
+                (* FIXME: do the multi-provenance merge. *)
+                self#shadowDescrForExpr somePtrExp
+          | (BinOp(MinusPI, somePtrExp, someIntExp, somePtrT), _) ->
+                (* FIXME: do the multi-provenance merge. *)
+                self#shadowDescrForExpr somePtrExp
+          | (BinOp(Lt, ep, ei, _), _)
+          | (BinOp(Gt, ep, ei, _), _)
+          | (BinOp(Le, ep, ei, _), _)
+          | (BinOp(Ge, ep, ei, _), _)
+          | (BinOp(Ne, ep, ei, _), _)
+          | (BinOp(Eq, ep, ei, _), _) -> plainIntegerShadow
+          | (BinOp(Shiftlt, e1, _, _), _)
+          | (BinOp(Shiftrt, e1, _, _), _) ->
+                if self#typeNeedsShadow (Cil.typeOf e1)
                 then self#shadowDescrForExpr e1
-                else plainIntegerShadow (* FIXME: not quite right *)
+                else plainIntegerShadow
+          | (BinOp(op, e1, _, _), _) -> plainIntegerShadow
+          | (UnOp(LNot, someE, _), _) -> plainIntegerShadow
           | (UnOp(op, someE, _), _) -> if self#typeNeedsShadow (Cil.typeOf someE)
                 then self#shadowDescrForExpr someE
-                else plainIntegerShadow (* FIXME: not quite right *)
+                else plainIntegerShadow
           | (CastE(targetT, subE), _) ->
                 (* We stripped the irrelevant casts, so this must be a relevant one,
                  * i.e. from non-shadowed to shadowed. *)
