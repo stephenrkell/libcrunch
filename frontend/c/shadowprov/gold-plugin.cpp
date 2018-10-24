@@ -269,12 +269,14 @@ all_symbols_read_handler (void)
 	
 	static string stubs = get_plugin_dir() + "/stubs.o";
 	static string runtime = get_plugin_dir() + "/runtime.so";
+	static string qsort = get_plugin_dir() + "/qsort.o";
 	
 	// for (auto p : claimed_files) add_input_file(p.name.c_str());
 	
 	/* Also add the extra input files. */
 	add_input_file(stubs.c_str());
 	add_input_file(runtime.c_str());
+	add_input_file(qsort.c_str());
 	add_input_library("dl");
 	
 	return LDPS_OK;

@@ -365,6 +365,10 @@ static int launder_qsort_cb(const void *arg1, const void *arg2)
 	__push_argument_shadow_manifest((unsigned long) __liballocs_get_alloc_base(arg2), (unsigned long) 0, 0);
 	__push_argument_shadow_manifest((unsigned long) __liballocs_get_alloc_base(arg1), (unsigned long) 0, 0);
 	__push_argument_shadow_cookie(real_qsort_cb, "qsort real callback");
+	/* PROBLEM: qsort does memcpy to copy the chunks,
+	 * and we need to see that
+	 * if we are to update their shadow metadata.
+	 * So probably what we want to do is provide our own qsort. */
 	int ret = real_qsort_cb(arg1, arg2);
 	__shadow_sp = saved_ssp;
 	RETURN_INTEGER(int, ret);

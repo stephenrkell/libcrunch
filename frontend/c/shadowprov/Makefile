@@ -5,7 +5,7 @@ LIBCRUNCH_BASE ?= ../../..
 
 export USE_LD=ld.gold
 
-default: runtime.so stubs.o gold-plugin.so wrap.ldopts shadowprov_weak.so
+default: runtime.so stubs.o qsort.o gold-plugin.so wrap.ldopts shadowprov_weak.so
 
 C_SRC := shadowprov_libc_wrappers.c
 C_DEPS := $(patsubst %.c,.%.d,$(C_SRC))
