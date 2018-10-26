@@ -137,6 +137,7 @@ let () =
     List.iter Feature.loadWithDeps (List.rev !cilPluginsToLoadReverse);
     let features = List.rev !cilPassesToRunReverse in
     List.iter Feature.enable features;
+    (* Errormsg.verboseFlag := true; *)
     let currentCilFile = initialCilFile in
     (* HACKED based on CIL's main.ml:
      * Scan all the registered features and, if they are 
