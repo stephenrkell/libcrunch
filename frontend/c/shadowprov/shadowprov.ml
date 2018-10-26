@@ -308,6 +308,9 @@ class shadowProvVisitor
           | (BinOp(PlusPI, somePtrExp, someIntExp, somePtrT), _) ->
                 (* FIXME: do the multi-provenance merge. *)
                 self#shadowDescrForExpr somePtrExp
+          | (BinOp(IndexPI, somePtrExp, someIntExp, somePtrT), _) -> (* IndexPI just means PlusPI *)
+                (* FIXME: do the multi-provenance merge. *)
+                self#shadowDescrForExpr somePtrExp
           | (BinOp(MinusPI, somePtrExp, someIntExp, somePtrT), _) ->
                 (* FIXME: do the multi-provenance merge. *)
                 self#shadowDescrForExpr somePtrExp
@@ -322,7 +325,8 @@ class shadowProvVisitor
                 if self#typeNeedsShadow (Cil.typeOf e1)
                 then self#shadowDescrForExpr e1
                 else plainIntegerShadow
-          | (BinOp(op, e1, _, _), _) -> plainIntegerShadow
+          | (BinOp(op, e1, _, _), _) when not (isPointerType t) -> plainIntegerShadow
+          | (BinOp(op, e1, _, _), _) -> failwith ("Unexpected pointer-type binop expr: " ^ expToCilString e)
           | (UnOp(LNot, someE, _), _) -> plainIntegerShadow
           | (UnOp(op, someE, _), _) -> if self#typeNeedsShadow (Cil.typeOf someE)
                 then self#shadowDescrForExpr someE
