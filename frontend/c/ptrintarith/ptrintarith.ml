@@ -67,7 +67,7 @@ class ptrIntArithVisitor = fun enclosingFile ->
        
        * That's all there is to it! We just do it recursively, using ChangeDoChildrenPost.
        * One trick is that on the way down we rewrite all MinusPIs into PlusPIs.
-       * And ditto for IndexPI
+       * And ditto for IndexPI. RECALL that IndexPI is semantically equivalent to PlusPI.
        *)
        ChangeDoChildrenPost(
         begin
