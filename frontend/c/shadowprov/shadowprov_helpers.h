@@ -9,6 +9,18 @@ void *(__attribute__((pure)) __liballocs_get_alloc_base)(const void *obj); // be
  * defs, one of them alpha-renamed to shadow_byte___0... WHY? */
 struct shadow_byte;
 typedef struct shadow_byte __shadow_t;
+
+struct __fat_value_s
+{
+	struct shadow_byte shadow;
+	unsigned long shadowable;
+};
+union __fat_value_u
+{
+	struct __fat_value_s s;
+	__int128 raw;
+};
+
 struct shadow_byte { char byte; };
 typedef char __raw_shadow_t;
 /* This must be a type to which a cast from any shadowed primitive
