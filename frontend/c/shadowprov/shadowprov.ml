@@ -10,6 +10,8 @@ open Cilallocs
 open Shadow
 open Unix
 
+let nviMode = ref false
+
 (* We define a simple shadow value tool that does the following:
  * every integer and pointer value is shadowed.
  * Pointers are shadowed at creation with the one-byte value (char) 42.
@@ -23,17 +25,20 @@ let minusOne = Const(CInt64(Int64.minus_one, IInt, None))
 class helperFunctionsFull = object(self)
     inherit helperFunctionsRecord as super
     val mutable makeShadow = emptyFunction "__make_shadow"
+    val mutable makeInvalidShadow = emptyFunction "__make_invalid_shadow"
     val mutable fetchShadowInl = emptyFunction "__fetch_shadow_inl"
     val mutable storeShadowNonLocal = emptyFunction "__store_shadow_nonlocal"
     val mutable checkDeref = emptyFunction "__check_deref"
     
     method getMakeShadow (_:unit) = makeShadow
+    method getMakeInvalidShadow (_:unit) = makeInvalidShadow
     method getFetchShadowInl (_:unit) = fetchShadowInl
     method getStoreShadowNonLocal (_:unit) = storeShadowNonLocal
     method getCheckDeref (_:unit) = checkDeref
     method initializeFromFile f =
         super#initializeFromFile f;
         makeShadow <- findFunOrFail "__make_shadow" f.globals;
+        makeInvalidShadow <- findFunOrFail "__make_invalid_shadow" f.globals;
         fetchShadowInl <- findFunOrFail "__fetch_shadow_inl" f.globals;
         storeShadowNonLocal <- findFunOrFail "__store_shadow_nonlocal" f.globals;
         checkDeref <- findFunOrFail "__check_deref" f.globals
@@ -51,8 +56,13 @@ class shadowProvVisitor
        object(self)
    inherit shadowBasicVisitor enclosingFile
     (* primitiveTypeIsShadowed *)
-                     (fun t -> match unrollType t with TInt(_) | TPtr(_) -> true | _ -> false)
+                     (fun t -> match unrollType t with
+                            TInt(_) -> not !nviMode
+                            | TPtr(_) -> true
+                            | _ -> false)
     (* shadowCompName *) "shadow_byte"
+    (* *) "__fat_value_s"
+    (* *) "__fat_value_u"
     (* opaqueShadowableT *) ulongType
     (* helperHeaderNames *) ["liballocs_cil_inlines.h"; "shadowprov_helpers.h"]
     (* makeCallToMakeShadow *) (fun maybeLv -> fun exprs -> fun valE -> fun l -> Call(maybeLv,
@@ -73,6 +83,14 @@ class shadowProvVisitor
                );
                (* what's the pointee type? *)
                (CastE(voidPtrType, if isPointerType (Cil.typeOf e) then zero else minusOne))
+           ],
+           l
+        )])
+    (* makeCallToMakeInvalidShadow *) (fun lv -> fun descr -> fun e -> fun l -> [
+        Call( Some(lv),
+           (Lval(Var((helperFunctions#getMakeInvalidShadow ()).svar),NoOffset)),
+           [
+               CastE(ulongType, e)
            ],
            l
         )
@@ -195,7 +213,8 @@ class shadowProvVisitor
             (* do we shadow them both, the same way? then it's not relevant.
              * (do we shadow them both, differently? doesn't arise for us)
              * do we not shadow either of them? then it's not relevant.
-             * are we throwing away a shadow? then it's relevant, and we will fail.
+             * are we throwing away a shadow? then it's relevant, and we will fail
+             * unless we are in nviMode;
              * are we creating a fresh/different shadow? then it's relevant.
              *)
              match (self#typeNeedsShadow targetT, self#typeNeedsShadow sourceT) with
@@ -223,6 +242,10 @@ class shadowProvVisitor
         if self#typeNeedsShadow t <> self#typeNeedsShadow origT then failwith "cast-stripping affected shadowing"
         else
         let plainIntegerShadow = ShadowMakeFromRvals(let x = Const(CInt64(Int64.zero, IInt, None)) in [x; x]) in
+        let getPlainIntegerShadow = fun () ->
+                if !nviMode then failwith "not shadowing integers here"
+                else plainIntegerShadow
+        in
         let makePointerShadow = fun e -> ShadowMakeFromRvals([CastE(ulongType, e); CastE(ulongType, zero)]) in
         (* We did have this trick for giving locals an "offset" that was XORed 
          * into the shadow value, corresponding to their place in the stack
@@ -249,7 +272,7 @@ class shadowProvVisitor
         let offsetUpToField offs = stripTrailingIndexes offs
         in
         match (e, t) with
-            (Const _, TInt(_)) -> plainIntegerShadow
+            (Const _, TInt(_)) -> getPlainIntegerShadow ()
           | (Const(CStr(s)), _) ->  makePointerShadow e (* FIXME: doesn't account for string merge/dedup in linker *)
           | (Const(CWStr(s)), _) -> makePointerShadow e
           | (Const _, TPtr(_,_)) -> makePointerShadow e
@@ -304,7 +327,7 @@ class shadowProvVisitor
                 self#shadowDescrForExpr memExp
           | (StartOf(Mem(memExp), someOffset), _) (* no field in offset; offset yields an array *) ->
                 self#shadowDescrForExpr memExp
-          | (BinOp(MinusPP, ep, ei, _), _) -> plainIntegerShadow
+          | (BinOp(MinusPP, ep, ei, _), _) -> getPlainIntegerShadow ()
           | (BinOp(PlusPI, somePtrExp, someIntExp, somePtrT), _) ->
                 (* FIXME: do the multi-provenance merge. *)
                 self#shadowDescrForExpr somePtrExp
@@ -316,25 +339,30 @@ class shadowProvVisitor
           | (BinOp(Le, ep, ei, _), _)
           | (BinOp(Ge, ep, ei, _), _)
           | (BinOp(Ne, ep, ei, _), _)
-          | (BinOp(Eq, ep, ei, _), _) -> plainIntegerShadow
+          | (BinOp(Eq, ep, ei, _), _) -> getPlainIntegerShadow ()
           | (BinOp(Shiftlt, e1, _, _), _)
           | (BinOp(Shiftrt, e1, _, _), _) ->
                 if self#typeNeedsShadow (Cil.typeOf e1)
                 then self#shadowDescrForExpr e1
-                else plainIntegerShadow
-          | (BinOp(op, e1, _, _), _) -> plainIntegerShadow
-          | (UnOp(LNot, someE, _), _) -> plainIntegerShadow
+                else getPlainIntegerShadow ()
+          | (BinOp(op, e1, _, _), _) -> getPlainIntegerShadow ()
+          | (UnOp(LNot, someE, _), _) -> getPlainIntegerShadow ()
           | (UnOp(op, someE, _), _) -> if self#typeNeedsShadow (Cil.typeOf someE)
                 then self#shadowDescrForExpr someE
-                else plainIntegerShadow
+                else getPlainIntegerShadow ()
           | (CastE(targetT, subE), _) ->
                 (* We stripped the irrelevant casts, so this must be a relevant one,
-                 * i.e. from non-shadowed to shadowed. *)
-                if isPointerType targetT
+                 * i.e. from non-shadowed to shadowed
+                 * (or non-shadowed to shadowed in nviMode, i.e. integer to pointer). *)
+                if isPointerType targetT && (not !nviMode)
                 then failwith ("can't materialise pointer from type " ^ (typToString t))
-                else plainIntegerShadow
+                else if isPointerType targetT && !nviMode
+                then
+                    (* We're looking up the shadow for a pointer created by cast-from-integer *)
+                    ShadowFetch(UnknownOrigin)
+                else getPlainIntegerShadow ()
           | (Question(e1, e2, e3, finalT), _) -> (* hmm *) failwith "please turn off Cil.useLogicalOperators"
-          | (SizeOf _, _) | (SizeOfE _, _) | (AlignOf _, _) | (AlignOfE _, _) | (SizeOfStr _, _) -> plainIntegerShadow
+          | (SizeOf _, _) | (SizeOfE _, _) | (AlignOf _, _) | (AlignOfE _, _) | (SizeOfStr _, _) -> getPlainIntegerShadow ()
           | (AddrOfLabel _, _) -> failwith "no support for address-of-label yet; try excluding this func from instrumentation?"
 
     val underAddrOf = ref false
@@ -446,7 +474,11 @@ let feature : Feature.t =
   { fd_name = "shadowprov";
     fd_enabled = false;
     fd_description = "pointer provenance shadow value tool";
-    fd_extraopt = [];
+    fd_extraopt = [
+        ("--not-via-integers", Arg.Unit (fun _ -> 
+            nviMode := true),
+            " no provenance flowing via integers");
+    ];
     fd_doit = 
     (function (fl: file) -> (* Unix.sleep 10; *) (* debugging *)
       visitCilFileSameGlobals (new shadowProvVisitor fl :> cilVisitor) fl

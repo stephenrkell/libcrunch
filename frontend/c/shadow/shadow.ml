@@ -8,11 +8,12 @@ open Map
 open Str
 open Cilallocs
 
+let int128Type = TInt(IInt128, [])
+
 let stringStartsWith s pref = 
   if (String.length s) >= (String.length pref) 
   then (String.sub s 0 (String.length pref)) = pref 
   else false
-
 
 let instrLoc (maybeInst : Cil.instr option) =
    match maybeInst with 
@@ -210,6 +211,22 @@ class helperFunctionsRecord = object(self)
         peekResultShadow <- findFunOrFail "__peek_result_shadow" f.globals
 end
 
+let findFatValueTypes globals structName unionName =
+    let fatValueStructType = try findStructTypeByName globals "__libcrunch_ptr_with_bounds_s"
+      with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_s not defined"
+    in
+    let fatValueStructCompinfo = (match fatValueStructType with TComp(ci, _) -> ci
+      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
+    )
+    in
+    let fatValueUnionType = try findUnionTypeByName globals "__libcrunch_ptr_with_bounds_u"
+      with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_u not defined"
+    in
+    let fatValueUnionCompinfo = (match fatValueUnionType with TComp(ci, _) -> ci
+      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_u not a composite type"
+    )
+    in
+    (fatValueStructType, fatValueStructCompinfo, fatValueUnionType, fatValueUnionCompinfo)
 
 type instrumented_function = {
     callerIsInstFlagVar : varinfo;
@@ -220,21 +237,64 @@ type instrumented_function = {
     shadowReturnVar : varinfo;
     cookieStackAddrVar : varinfo;
 }
+
+class virtual basicVisitor = fun (enclosingFile : Cil.file) ->
+                            fun (primitiveTypeIsShadowed : Cil.typ -> bool)(* function *) ->
+    object(self)
+    inherit nopCilVisitor
+    
+    val currentInst : instr option ref = ref None
+    val currentFunc : fundec option ref = ref None
+    val currentLval : lval option ref = ref None
+    val currentBlock : block option ref = ref None
+
+end
+
 class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                             fun (primitiveTypeIsShadowed : Cil.typ -> bool)(* function *) ->
                             fun shadowCompName ->
+                            fun fatValueStructTypeName ->
+                            fun fatValueUnionTypeName ->
                             fun opaqueShadowableT -> (* see note in shadowprov_helpers.h __shadowed_value_t *)
                             fun helperHeaderNames ->
                             fun makeCallToMakeShadow ->
                             fun (makeCallToFetchShadow : lval -> shadow_load_store_origin -> Cil.exp -> Cil.location -> Cil.instr list) ->
+                            fun (makeCallToMakeInvalidShadow : lval -> shadow_load_store_origin -> Cil.exp -> Cil.location -> Cil.instr list) ->
                             fun (helperFunctions : helperFunctionsRecord) ->
                             fun descriptorExprForShadowableExpr (* this is the uniqtype ptr, in crunchbound *) ->
                             fun defaultShadowValueForType ->
                             fun shadowString (* name in identifiers *) ->
                                object(self)
-    inherit nopCilVisitor
+    inherit (basicVisitor enclosingFile primitiveTypeIsShadowed)
 
     val shadowType = findStructTypeByName enclosingFile.globals shadowCompName
+    
+    val fatValueStructType = let x, _, _, _ = findFatValueTypes enclosingFile.globals fatValueStructTypeName fatValueUnionTypeName
+        in x
+
+    val fatValueStructCompinfo = let _, x, _, _ = findFatValueTypes enclosingFile.globals fatValueStructTypeName fatValueUnionTypeName
+        in x
+    
+     val fatValueUnionType = let _, _, x, _ = findFatValueTypes enclosingFile.globals fatValueStructTypeName fatValueUnionTypeName
+        in x
+
+    val fatValueUnionCompinfo = let _, _, _, x = findFatValueTypes enclosingFile.globals fatValueStructTypeName fatValueUnionTypeName
+        in x
+    
+    (*
+    val fatValueStructType = try findStructTypeByName enclosingFile.globals fatValueStructTypeName
+      with Not_found -> failwith ("strange: " ^ fatValueStructTypeName ^ " not defined")
+
+    val fatValueStructCompinfo = (match fatValueStructType with TComp(ci, _) -> ci
+      | _ -> failwith ("strange: " ^ fatValueStructTypeName ^ " not a composite type")
+    )
+
+    val fatValueUnionType = try findUnionTypeByName globals fatValueUnionTypeName
+      with Not_found -> failwith ("strange: " ^ fatValueUnionTypeName ^ " not defined")
+
+    val fatValueUnionCompinfo = (match fatValueUnionType with TComp(ci, _) -> ci
+      | _ -> failwith ("strange: " ^ fatValueUnionTypeName ^ " not a composite type")
+    )*)
 
     method virtual shadowDescrForExpr :
         Cil.exp (* e *) ->
@@ -249,11 +309,6 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
         in
         if result then debug_print 1 ("Skipping our own varinfo " ^ vi.vname ^ "\n") else ();
         result
-
-    val currentInst : instr option ref = ref None
-    val currentFunc : fundec option ref = ref None
-    val currentLval : lval option ref = ref None
-    val currentBlock : block option ref = ref None
 
     val instrumContext : instrumented_function option ref = ref None
 
@@ -610,7 +665,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
 
     method virtual makeStoreHelperCall : Cil.exp -> Cil.lval -> shadow_for_expr -> Cil.location -> Cil.instr list
 
-    method localShadowUpdateInstrs slv valE shadowDescr loc = 
+    method localShadowUpdateInstrs ?doFetchOol:(doFetchOol=true) slv valE shadowDescr loc = 
         match shadowDescr with
             ShadowMakeFromRvals(exprs) ->
                 [makeCallToMakeShadow (Some(slv)) exprs valE loc]
@@ -624,7 +679,9 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
                   | _ -> slv == otherSlv
                 in
                 if sameVi then [] else [Set( slv, Lval(otherSlv), loc )]
-          | ShadowFetch(lf) -> (* fetchOol complication is in here *) makeCallToFetchShadow slv lf valE loc
+          | ShadowFetch(lf) -> (* fetchOol complication is in here *)
+            if doFetchOol then makeCallToFetchShadow slv lf valE loc
+            else makeCallToMakeInvalidShadow slv lf valE loc
 
     method containedShadowedPrimitiveExprsForExpr (e : Cil.exp) : Cil.exp list =
         let rec enumerateShadowedPrimitivesInT (t : Cil.typ) : Cil.offset list = match t with
@@ -1418,7 +1475,7 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
   method vlval outerLv =
         currentLval := Some(outerLv);
         DoChildren (* OVERRIDEME *)
-        
+
   method vexpr (outerE: exp) : exp visitAction =
     debug_print 1 (("Visiting expression: " ^ (expToString outerE)) ^ "\n");
     debug_print 1 (("CIL form: " ^ (expToCilString outerE)) ^ "\n");
@@ -1434,4 +1491,210 @@ class virtual shadowBasicVisitor = fun (enclosingFile : Cil.file) ->
               | x -> x
             in
             ChangeDoChildrenPost(initiallyChangedE, fun i -> i)
+
+    method maybeGetNoinlinePureHelper fvi =
+        let name = "__shadow_pure_helper_" ^ fvi.vname in
+        findFun name enclosingFile.globals
+
+    method getNoinlinePureHelper fvi =
+        match findFun ("__shadow_pure_helper_" ^ fvi.vname) enclosingFile.globals with
+            Some(f) -> f
+          | None -> failwith ("internal error: did not find noinline pure helper for " ^
+                fvi.vname)
+
+    method createNoinlinePureHelper helpedFunction createdHelpers callingFunction : fundec =
+        let name = "__shadow_pure_helper_" ^ helpedFunction.vname in
+        let found = self#maybeGetNoinlinePureHelper helpedFunction in
+        match found with Some(x) -> (debug_print 1 ("Already found helper: " ^ name ^ "\n"); x)
+          | None ->
+            let (origRetT, origArgsT, origIsVa, origTattrs) = match helpedFunction.vtype with
+                TFun(retT, argsT, isVa, tAttrs) -> (retT, argsT, isVa, tAttrs)
+              | _ -> failwith "creating helper for something not of function type"
+            in
+            let f = findOrCreateNewFunctionInFile 
+                    enclosingFile name (TFun(int128Type, origArgsT, origIsVa, origTattrs)) helpedFunction.vdecl
+                    (* insert before the function that called us *)
+                    (fun g -> match g with GFun(dec, loc) when dec == callingFunction -> true
+                            | _ -> false);
+            in
+            f.svar.vglob <- false;
+            f.svar.vstorage <- Static;
+            (* Did we just do find, or create? *)
+            match f.sbody.bstmts with
+                stmt :: stmts -> failwith ("internal error: helper we just created has non-empty body")
+              | [] ->
+                    let foundThisTime = findFun name enclosingFile.globals
+                    in
+                    let _ = match foundThisTime with None -> failwith "just created helper but it doesn't exist"
+                      | Some(_) -> ()
+                    in
+                    f.svar.vglob <- false;
+                    f.sformals <- (
+                        match origArgsT with None -> []
+                      | Some(argTriples) -> 
+                        List.mapi (fun idx -> fun (_, t, _) -> makeFormalVar f ("arg" ^ (string_of_int idx)) t) argTriples
+                    );
+                    (* We keep the "pure" attribute, but make us noinline. FIXME: why? It just feels right. *)
+                    f.svar.vattr <- addAttribute (Attr("noinline", [])) helpedFunction.vattr;
+                    let _ = debug_print 1 ("pure callee has attributes " ^ (attrsToString helpedFunction.vattr) ^ "\n") in
+                    let _ = debug_print 1 ("wrapper now has attributes " ^ (attrsToString f.svar.vattr) ^ "\n") in
+                    (* We create a simple wrapper body
+                       which populates a temporary by calling the real underlying function;
+                       (that is no longer pure). We instrument the wrapper like we do any other function;
+                       and then also fix up its return site to pass the shadow in-band as a fat value.
+                       This won't be treated as a shadow-returning call.
+                       We still pass shadows to the function arguments using the shadow stack, as usual.
+                       We can't fix up the return quite yet; we do it later in the shadow-stack logic. *)
+                    let tmpVi = Cil.makeTempVar ~name:"__ptr_retval_" f origRetT in
+                    let instrs = [
+                        Call(Some(Var(tmpVi), NoOffset),
+                             Lval(Var(helpedFunction), NoOffset),
+                             List.map (fun x -> Lval(Var(x), NoOffset)) f.sformals,
+                             helpedFunction.vdecl
+                            )
+                    ] in
+                    (* When we actually instrument this call, we will need 
+                     * the varinfo of the pointer temporary, so we can get its shadow.
+                     * We can create the fat value ourselves, and do the two Sets.
+                     * So just try to return tmpVi for now. *)
+                    let retStmt = (Return(Some(Lval(Var(tmpVi), NoOffset)), helpedFunction.vdecl))
+                    in
+                    f.sbody <- mkBlock [{ labels = []; skind = Instr(instrs); sid = 0; succs = []; preds = [] };
+                                        { labels = []; skind = retStmt; sid = 0; succs = []; preds = [] }]
+                    ;
+                    createdHelpers := (f, helpedFunction) :: !createdHelpers;
+                    debug_print 1 ("Created noinline pure helper " ^ name ^ "; we now have " ^ 
+                        (string_of_int (List.length !createdHelpers)) ^ ", names: [" ^
+                        (List.fold_left (fun acc -> fun (helper, callee) -> 
+                            acc ^ ((if acc = "" then "" else ", ") ^ (lvalToString (Var(callee),NoOffset)))) "" !createdHelpers) 
+                        ^ "]\n");
+                    f
+                    
+end
+
+class helperizePureCalleesVisitor = fun enclosingFile ->
+                            fun (primitiveTypeIsShadowed : Cil.typ -> bool)(* function *) ->
+                            fun shadowCompName ->
+                            fun fatValueStructTypeName ->
+                            fun fatValueUnionTypeName ->
+                            fun opaqueShadowableT -> (* see note in shadowprov_helpers.h __shadowed_value_t *)
+                            fun helperHeaderNames ->
+                            fun makeCallToMakeShadow ->
+                            fun (makeCallToFetchShadow : lval -> shadow_load_store_origin -> Cil.exp -> Cil.location -> Cil.instr list) ->
+                            fun (makeCallToMakeInvalidShadow : lval -> shadow_load_store_origin -> Cil.exp -> Cil.location -> Cil.instr list) ->
+                            fun (helperFunctions : helperFunctionsRecord) ->
+                            fun descriptorExprForShadowableExpr (* this is the uniqtype ptr, in crunchbound *) ->
+                            fun defaultShadowValueForType ->
+                            fun shadowString (* name in identifiers *) ->
+                                     object(self)
+  inherit (shadowBasicVisitor enclosingFile
+    primitiveTypeIsShadowed
+    shadowCompName
+    fatValueStructTypeName
+    fatValueUnionTypeName
+    opaqueShadowableT
+    helperHeaderNames
+    makeCallToMakeShadow
+    makeCallToFetchShadow
+    makeCallToMakeInvalidShadow
+    helperFunctions
+    descriptorExprForShadowableExpr
+    defaultShadowValueForType
+    shadowString
+  )
+  
+  (* FIXME: we should really factor out these methods from shadowBasicVisitor 
+   * into something more intermediate. For now, just nop these out since we won't use them. *)
+  method shadowDescrForExpr outerE = failwith "unsupported: shadowDescrForExpr"
+  method makeStoreHelperCall e lv descr l = failwith "unsupported: makeStoreHelperCall"
+  method canOmitShadowSpaceInitializerForValue (maybeInitializationValExpr: Cil.exp option) : bool = failwith "unsupported: canOmitShadowSpaceInitializerForValue"
+  
+  val createdHelpers = ref []
+
+  method getCreatedHelpers () : (fundec * varinfo) list = !createdHelpers (* helper function, first caller function *)
+
+  method vfunc (f: fundec) : fundec visitAction = 
+      currentFunc := Some(f);
+      DoChildren
+
+  method vinst (i: instr) : instr list visitAction = 
+      let f = match !currentFunc with Some(x) -> x | None -> failwith "Instr outside function"
+      in
+      let fatValueStructType, fatValueStructCompinfo, fatValueUnionType, fatValueUnionCompinfo
+      = findFatValueTypes enclosingFile.globals fatValueStructTypeName fatValueUnionTypeName
+      in
+      match i with
+          Call(maybeOlv, calledE, args, l) -> (
+            debug_print 1 ("helperizePureCallees considering call instr: " ^ (instToString i) ^ "\n");
+            match calledE with
+                (Lval(Var(fvi), NoOffset)) when (
+                        match maybeOlv with Some(lv) -> 
+                           not (list_empty (self#containedShadowedPrimitiveExprsForExpr (Lval(lv))))
+                         | None -> false
+                    ) (* returnsBounds *)
+                    && (let _ = debug_print 1 ("It has attributes: " ^ (List.fold_left (fun accum -> (function Attr(astr, aargs) -> (if accum = "" then "" else (accum ^ ", ")) ^ astr)) "" fvi.vattr) ^ "\n") in
+                    filterAttributes "const" fvi.vattr <> [] (* HACK: why does "const" become "aconst"? very CILly *)||
+                    filterAttributes "aconst" fvi.vattr <> [] (* HACK: why does "const" become "aconst"? very CILly *)||
+                    filterAttributes "pure" fvi.vattr <> [])
+                    (* Check we haven't already helper'd this function var *)
+                    && (let _ = debug_print 1 ("Okay, seems pure/const...\n") in true)
+                    -> (
+                        debug_print 1 ("helperizePureCallees saw call to pure/const bounds-returning function called: " ^ 
+                        expToString calledE ^ "\n");
+                        let alreadyPresent = 
+                                let (helpers, calleeVarinfos) = unzip !createdHelpers in 
+                                match List.filter (fun x -> x = fvi.vname) (List.map (fun x -> x.vname) calleeVarinfos) with
+                                    [] -> false
+                                  | x :: more -> (debug_print 1 ("helperizePureCallees found one already existing (total " 
+                                        ^ (string_of_int (List.length (x::more)))
+                                        ^ "): " ^ x ^ "\n"); true)
+                        in
+                        if not alreadyPresent
+                        then
+                        match Cil.typeSig fvi.vtype with
+                            TSFun(TSPtr(_, _), _, _, _) -> (
+                                (* Okay. What we need to do is
+                                 * 
+                                 * - get or create a static-noinline helper wrapper function
+                                 * - make this call call that instead
+                                 * - it will return a __libcrunch_ptr_with_bounds_t fatptr,
+                                 * - we need to manipulate changedInstrs
+                                 *     so that we assign fatptr.p to olv
+                                 *     and fatptr.bounds to wherever we would put the returned bounds.
+                                 *)
+                                let tmpRet = Cil.makeTempVar f ~name:"__fatvalue_ret" int128Type in
+                                let noinlineHelper = self#createNoinlinePureHelper fvi createdHelpers f in
+                                (* Now we've created the helper, it will get instrumented by crunchbound.
+                                 * What to do about our call? Nothing, for now; that's the main
+                                 * crunchbound pass's job. *)
+                                DoChildren
+                            )
+                            | _ ->
+                                debug_print 1 ("helperizePureCallees: return type is too complex, so just de-consting.\n");
+                                fvi.vattr <- dropAttributes ["aconst"; "pure"; "const"] fvi.vattr;
+                                DoChildren
+                        else (
+                            debug_print 1 ("helperizePureCallees thinks we've already got this one (total: "
+                                ^ (string_of_int (List.length !createdHelpers)) ^ ")\n");
+                            DoChildren
+                        )
+                       )
+                  | _ -> DoChildren
+                )
+          | _ -> DoChildren
+end
+
+class fixupPureCalleesVisitor = fun enclosingFile -> 
+                            fun (primitiveTypeIsShadowed : Cil.typ -> bool)(* function *) ->
+                                fun createdHelpers ->
+                                     object(self)
+  inherit (basicVisitor enclosingFile primitiveTypeIsShadowed)
+
+  method vfunc (f: fundec) : fundec visitAction = 
+      currentFunc := Some(f);
+      let (helpers, callees) = unzip createdHelpers in
+      if List.mem f.svar callees then (
+          f.svar.vattr <- dropAttributes ["pure"; "aconst"; "const"] f.svar.vattr;
+          SkipChildren)
+        else SkipChildren
 end
