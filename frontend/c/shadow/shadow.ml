@@ -212,18 +212,18 @@ class helperFunctionsRecord = object(self)
 end
 
 let findFatValueTypes globals structName unionName =
-    let fatValueStructType = try findStructTypeByName globals "__libcrunch_ptr_with_bounds_s"
-      with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_s not defined"
+    let fatValueStructType = try findStructTypeByName globals structName
+      with Not_found -> failwith ("strange: " ^ structName ^ " not defined")
     in
     let fatValueStructCompinfo = (match fatValueStructType with TComp(ci, _) -> ci
-      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_s not a composite type"
+      | _ -> failwith ("strange: " ^ structName ^ " not a composite type")
     )
     in
-    let fatValueUnionType = try findUnionTypeByName globals "__libcrunch_ptr_with_bounds_u"
-      with Not_found -> failwith "strange: __libcrunch_ptr_with_bounds_u not defined"
+    let fatValueUnionType = try findUnionTypeByName globals unionName
+      with Not_found -> failwith ("strange: " ^ unionName ^ " not defined")
     in
     let fatValueUnionCompinfo = (match fatValueUnionType with TComp(ci, _) -> ci
-      | _ -> failwith "strange: __libcrunch_ptr_with_bounds_u not a composite type"
+      | _ -> failwith ("strange: " ^ unionName ^ " not a composite type")
     )
     in
     (fatValueStructType, fatValueStructCompinfo, fatValueUnionType, fatValueUnionCompinfo)

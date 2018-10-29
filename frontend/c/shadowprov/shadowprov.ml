@@ -78,7 +78,7 @@ class shadowProvVisitor
                (* where did we load it from? *)
                (match descr with
                     LoadedFrom(lh,lo) -> addrOfLv (lh,lo)
-                  | UnknownOrigin -> failwith "unknown origin expr"
+                  | UnknownOrigin -> CastE(voidPtrType, zero)
                   | ExternObject(v) -> failwith "don't use extern object"
                );
                (* what's the pointee type? *)
@@ -485,6 +485,10 @@ let feature : Feature.t =
     ];
     fd_doit = 
     (function (fl: file) -> (* Unix.sleep 10; *) (* debugging *)
+	(* HACK because cilpp lacks cilly command-line argument processing *)
+      let doNvi = try (let _ = Sys.getenv "SHADOWPROV_PNVI" in true) with Not_found -> false
+      in
+      nviMode := doNvi;
       visitCilFileSameGlobals (new shadowProvVisitor fl :> cilVisitor) fl
     );
     fd_post_check = true;
