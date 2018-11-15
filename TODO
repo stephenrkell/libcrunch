@@ -1,12 +1,21 @@
 To do:
 
+bounds checking stuff:
+
+    - refactor libcrunch_cil_inlines.h
+        -- "primary" versus "secondary" naming confusion -- the secondary path runs a *full* check
+            -- "residual" check perhaps?
+        -- abort versus resume versus resume-secondary -- orthogonalise
+        -- wordsize bounds -- avoid scattering this
+
+
 proper union tracking (in liballocs): monunion
  -- union shadow needs on-demand design: use a per-mapping spine
  -- just a piecewise-allocated (and effectively unbounded) deep index?
  -- assume e.g. one byte per union, one union per word at the first level
  + statically forbid (perhaps just warn) address-taken members of non-simultaneous unions
 
-(in liballocs) separate -frametypes.so from -types.so, to cut link time
+(in liballocs) separate -frames.so from -types.so, to cut link time
  -- helpful message when stack query arrives and no -frametypes.so loaded
 
 (in liballocs) helpful messages when -types.so et al. can't be found (for user objects only)
