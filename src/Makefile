@@ -14,8 +14,6 @@ LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
 default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o \
     libcrunch_wrappers.o
 
-#CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS 
-# -DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
   tr -s '[:space:]' ' ')
 libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_abi_md5sum=0x$(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | md5sum | head -c16 )

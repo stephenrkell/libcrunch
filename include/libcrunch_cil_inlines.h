@@ -104,10 +104,8 @@ int __libcrunch_global_init (void);
 #define PURE
 #endif
 
-#ifndef LIBCRUNCH_USING_TRAP_PTRS
 void __libcrunch_soft_deref_error_at(const void *ptr, struct __libcrunch_bounds_s ptr_bounds, 
 	const void *pc);
-#endif
 
 /* Type checking */
 int __is_a_internal(const void *obj, const void *u) PURE;
@@ -926,7 +924,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 	++__libcrunch_ptr_derivations;
 #endif
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifndef LIBCRUNCH_USING_TRAP_PTRS
+#ifndef LIBCRUNCH_CHECK_DERIVE
 	return 1;
 #else
 	/* To make things go fast, we need to keep this to the minimum. We use the Austin et al's
@@ -961,7 +959,8 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 	 * that we usually have. In the case of SoftBound we should probably assume the bounds
 	 * might in fact be misaligned. */
 	
-#if defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH) && defined(LIBCRUNCH_USING_TRAP_PTRS)
+#if defined(LIBCRUNCH_NO_SPLIT_PATH) && defined(LIBCRUNCH_USING_TRAP_PTRS)
+	// FIXME: This seems wrong. We should do this in the secondary check. Just say success = 0
 	/* No secondary path, so have to handle traps here too -- both "one past" (trap)
 	 * and "back in" (detrap) cases.
 	 *
@@ -999,30 +998,39 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used)) __primary_ch
 	 * Anyway, some trick of this form might shorten our 
 	 * warnx_pure() and __libcrunch_bounds_error paths below, since
 	 * the diagnostic messages can be handled in the fault handler. */
-#else
-#if defined(LIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK)
+#elif defined(LIBCRUNCH_USING_TRAP_POINTERS) 
+ // i.e. we *do* have a secondary path
+ #if defined(LIBCRUNCH_TRAP_ONE_PAST_IN_PRIMARY_CHECK)
 	success = addr - base <= size;
 	if (unlikely(addr - base == size))
 	{
 		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
 	}
+ #else
+	success = addr - base < size;
+ #endif
 #else
+	// we're checking derives, but not using trap pointers; may or may not have secondary path
 	success = addr - base < size;
 #endif
-#endif
-#if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SECONDARY_DERIVE_PATH)
+
+#if defined(LIBCRUNCH_TRACE_PRIMARY_CHECKS) && !defined(LIBCRUNCH_NO_SPLIT_PATH)
 	if (unlikely(!success)) warnx("Primary check failed: addr %p, base %p, size %lu", 
 		(void*) addr, (void*) base, size);
 #endif
-#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
+
+#ifdef LIBCRUNCH_NO_SPLIT_PATH
 	if (unlikely(!success))
 	{
+		/* We report the error */
 		__libcrunch_bounds_error(*p_derived, derivedfrom, derivedfrom_bounds);
 #ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
-		/* There's no need to abort here. Either way, the secondary path
-		 * will be triggered and will abort us if it has to. Remember that a
-		 * full check does a primary check first, so this code runs even
-		 * if we don't have a separate secondary path.*/
+		/* There's no need to abort here. Either way, the secondary *check*
+		 * will be triggered and will take care of aborting us as this 
+		 * configuration requires. It aborts immediately. Remember that a
+		 * full check does a primary check first, then a secondary check.
+		 * So the secondary-check code runs even now we don't have a separate
+		 * secondary path.*/
 #endif
 	}
 #endif
@@ -1066,7 +1074,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3))) __secondary_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz __attribute__((unused)))
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
+#ifdef LIBCRUNCH_NO_SPLIT_PATH
 	abort();     // <-- this makes things go much faster!
 #endif
 	/* We're a secondary check. We assume the primary check has already happened, and failed. */
@@ -1142,7 +1150,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		}
 		return 1;
 	}
-	
+#if defined(LIBCRUNCH_USING_TRAP_PTRS)
 	// warnx("Got to 4, deriving %p", *p_derived);
 	if (unlikely(addr - base == size))
 	{
@@ -1153,17 +1161,19 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_ONE_PAST);
 		return 1;
 	}
-	
+#endif
 	/* Note that we NEVER create trapped pointers from fake bounds. 
 	 * The reason is that in fake cases, the local bounds are always max_bounds. */
 
 	// warnx("Got to 5, deriving %p", *p_derived);
 	/* Handle the error. */
 	__libcrunch_bounds_error(*p_derived, derivedfrom, *p_derivedfrom_bounds);
-#ifdef LIBCRUNCH_ABORT_ON_INVALID_DERIVE
+#if defined(LIBCRUNCH_ABORT_ON_INVALID_DERIVE)
 	abort();
-#else
+#elif defined(LIBCRUNCH_USING_TRAP_PTRS)
 	*p_derived = __libcrunch_trap(*p_derived, LIBCRUNCH_TRAP_INVALID);
+#else
+	
 #endif
 	return 0;
 #else
@@ -1177,7 +1187,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3)
 extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3))) __full_check_derive_ptr)(const void **p_derived, const void *derivedfrom, /* __libcrunch_bounds_t *opt_derived_bounds, */ __libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
 #ifndef LIBCRUNCH_NOOP_INLINES
-#ifndef LIBCRUNCH_USING_TRAP_PTRS
+#ifndef LIBCRUNCH_CHECK_DERIVE
 	return 1;
 #else
 	/* PRECONDITIONS (a.k.a. things we don't need to check here): 
@@ -1192,7 +1202,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,2,3)
 	{
 		// tell the compiler this means our bounds are definitely valid
 		if (__libcrunch_bounds_invalid(*derivedfrom_bounds, derivedfrom)) __builtin_unreachable();
-#ifndef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
+#ifndef LIBCRUNCH_NO_SPLIT_PATH
 		// also tell it that derivedfrom is not a trap pointer -- if it is, primary check fails
 		if (__libcrunch_is_trap_ptr(derivedfrom)) __builtin_unreachable();
 #endif
@@ -1845,7 +1855,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __cleanup_bou
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_derive_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz);
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_derive_transition)(const void **p_derived, const void *derivedfrom, __libcrunch_bounds_t *p_derivedfrom_bounds, struct uniqtype *t, unsigned long t_sz)
 {
-#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
+#ifdef LIBCRUNCH_NO_SPLIT_PATH
 	abort();
 #else
 	++__libcrunch_primary_secondary_transitions;
@@ -1862,7 +1872,7 @@ extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_sec
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_deref_transition)(const void *derived, __libcrunch_bounds_t derivedfrom_bounds);
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __primary_secondary_deref_transition)(const void *derived, __libcrunch_bounds_t derivedfrom_bounds)
 {
-#ifdef LIBCRUNCH_NO_SECONDARY_DERIVE_PATH
+#ifdef LIBCRUNCH_NO_SPLIT_PATH
 	abort();
 #else
 	++__libcrunch_primary_secondary_transitions;

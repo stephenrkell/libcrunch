@@ -99,7 +99,7 @@ class CrunchBCC(CrunchCC):
             "--load=%s" % (os.path.dirname(sys.argv[0]) + "/../crunchbound/crunchbound.cmxs"), "--docrunchbound", \
             ] + (["--void-ptr-has-bounds"] if "-DLIBCRUNCH_VOID_POINTERS_HAVE_BOUNDS" in defines else []) \
               + (["--no-object-type-info"] if "-DLIBCRUNCH_NO_POINTER_TYPE_INFO" in defines else []) \
-              + (["--skip-secondary-split"] if "-DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH" in defines else [])
+              + (["--skip-secondary-split"] if "-DLIBCRUNCH_NO_SPLIT_PATH" in defines else [])
         else:
             self.debugMsg("No source files, or not all (only %d) are C files\n" % len(sourceFiles))
         
