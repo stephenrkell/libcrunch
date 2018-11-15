@@ -18,6 +18,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <signal.h>
+#include <ucontext.h>
 #ifdef USE_REAL_LIBUNWIND
 #include <libunwind.h>
 #endif
@@ -697,7 +698,7 @@ static void handle_sigsegv(int signum, siginfo_t *info, void *ucontext_as_void)
 	 * is zero, and is possibly not it anyway). So scan *all* operands for
 	 * trap-pointer values. This is prone to false positives! We should really
 	 * check the opcode that the operand really is being used as a pointer. */
-	struct ucontext *ucontext = (struct ucontext *) ucontext_as_void;
+	ucontext_t *ucontext = (ucontext_t *) ucontext_as_void;
 	void *faulting_code_address = (void*) ucontext->uc_mcontext.gregs[REG_RIP];
 	
 	int dummy_ret;
