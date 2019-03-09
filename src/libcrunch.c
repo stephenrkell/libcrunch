@@ -388,7 +388,7 @@ unsigned long __libcrunch_ptr_stores;
  * the main cache. */
 // FIXME: this should be thread-local but my gdb can't grok that
 struct __liballocs_memrange_cache /* __thread */ __libcrunch_fake_bounds_cache = {
-	.size_plus_one = 1 + LIBALLOCS_MEMRANGE_CACHE_MAX_SIZE,
+	.max_pos = 1 + LIBALLOCS_MEMRANGE_CACHE_MAX_SIZE,
 	.next_victim = 1
 };
 
@@ -962,27 +962,25 @@ static void report_failure(const void *site,
 	va_end(ap);
 }
 
-static void cache_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	unsigned short period, const void *alloc_base)
+static void cache_bounds(const void *range_base, const void *range_limit, unsigned period,
+	unsigned offset_to_t, const struct uniqtype *t, unsigned short depth)
 {
 	__liballocs_cache_with_type(&__liballocs_ool_cache,
-		obj_base, obj_limit,
-		t, !(obj_base == alloc_base), period, alloc_base);
+		range_base, range_limit, period, offset_to_t, t, depth);
 }
-static void cache_is_a(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	signed depth, unsigned short period, const void *alloc_base)
+static void cache_is_a(const void *range_base, const void *range_limit, unsigned period,
+	unsigned offset_to_t, const struct uniqtype *t, unsigned short depth)
 {
 	__liballocs_cache_with_type(&__liballocs_ool_cache,
-		obj_base, obj_limit,
-		t, depth, period, alloc_base);
+		range_base, range_limit, period, offset_to_t, t, depth);
 }
-static void cache_fake_bounds(const void *obj_base, const void *obj_limit, const struct uniqtype *t, 
-	signed depth, unsigned short period, const void *alloc_base)
+static void cache_fake_bounds(const void *range_base, const void *range_limit, unsigned period,
+	unsigned offset_to_t, const struct uniqtype *t, unsigned short depth)
 {
-	debug_println(1, "Creating fake bounds %p-%p", obj_base, obj_limit);
+	debug_println(1, "Creating fake bounds %p-%p", range_base, range_limit);
 	__liballocs_cache_with_type(&__libcrunch_fake_bounds_cache,
-		obj_base, obj_limit,
-		t, depth, period, alloc_base);
+		range_base, range_limit, period,
+		0, t, depth);
 }
 
 void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
@@ -998,7 +996,7 @@ void __ensure_bounds_in_cache(unsigned long ptrval, __libcrunch_bounds_t ptr_bou
 	if (__libcrunch_bounds_invalid(from_cache, ptr))
 	{
 		cache_bounds(__libcrunch_get_base(ptr_bounds, ptr), __libcrunch_get_limit(ptr_bounds, ptr),
-				t, 1, NULL);
+				t->pos_maxoff, 0, t, 1 /* HACK FIXME */);
 	}
 }
 
@@ -1025,7 +1023,7 @@ __libcrunch_check_init();
 	 \
 	if (__builtin_expect(err != NULL, 0)) goto out; /* liballocs has already counted this abort */ \
 
-#define DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, allocator) \
+#define DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, allocator) \
 	if (alloc_uniqtype && alloc_uniqtype->make_precise) \
 	{ \
 		/* HACK: special-case to avoid overheads of 1-element array type creation */ \
@@ -1053,15 +1051,37 @@ __libcrunch_check_init();
 	unsigned cumulative_offset_searched = 0; \
 	unsigned target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
 
+struct starts_at_target_offset_and_has_type_args {
+	unsigned target_offset;
+	struct uniqtype *test_type;
+	struct allocator *a;
+};
+static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
+	struct uniqtype_containment_ctxt *ucc,
+	unsigned u_offset_from_search_start,
+	void *args_as_void)
+{
+	struct starts_at_target_offset_and_has_type_args *args
+	 = (struct starts_at_target_offset_and_has_type_args *) args_as_void;
+	_Bool can_stop_now = (args->target_offset == u_offset_from_search_start
+			&& u == test_type);
+	if (can_stop_now)
+	{
+		// cache some stuff
+	}
+	return can_stop_now;
+}
 int __is_a_internal(const void *obj, const void *arg)
 {
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
+	unsigned containing_instance_offset = 0;
 	
 	CHECK_INIT
 	DO_QUERY(obj)
 	INIT_SUBOBJ_SEARCH(obj)
 	/* Optimisation: if we have an array whose element type is smaller than the
 	 * test type (e.g. an array of uninterpreted bytes or chars),
+	 * we're never going to find an instance of the test type within it,
 	 * we can skip precisify and fail. Or if we're zero-offset and the types
 	 * match, we can skip and pass. */
 	_Bool success;
@@ -1081,50 +1101,137 @@ int __is_a_internal(const void *obj, const void *arg)
 	}
 	else
 	{
-		DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+		DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 		cur_obj_uniqtype = alloc_uniqtype; /* HACK: necessary because may be updated by precisify */
-
-		success = __liballocs_find_matching_subobject(target_offset_within_uniqtype, 
-				cur_obj_uniqtype, (struct uniqtype *) test_uniqtype, &cur_obj_uniqtype, 
-				&target_offset_within_uniqtype, &cumulative_offset_searched,
-				&cur_containing_uniqtype, &cur_contained_pos);
+		success = __liballocs_search_subobjects_spanning(
+			/* u */ alloc_uniqtype,
+			/* target_offset_within_u */ (char*) obj - (char*) alloc_start,
+			/* visit_stop_test */ starts_at_target_offset_and_has_type,
+			/* arg */ test_type,
+			/* out_offset */ NULL,
+			/* out_ctxt */ NULL);
+		/* We just walked a ton of objects. What memranges do we want to cache?
+		 * One answer    : (1) the target object/type and its nearest enclosing array.
+		 * Another answer: (2) the target object/type and its outermost enclosing array.
+		 * Another answer: (3) the target object/type and all arrays that enclose it.
+		 * Another answer: (4) the target object/type whether or not it's in an array.
+		 * Another answer: (5) all of the above.
+		 * Another answer: (6) the target object and all enclosing objects.
+		 * In terms of value for cache entries, it seems (1) is best.
+		 * But also (4) in the case where there is no enclosing array.
+		 * PROBLEM: we want to be able to walk the up the containment contexts,
+		 * at the callback site, so that we can find arrays. Currently our callback
+		 * doesn't give us that. */
 	}
 
-	unsigned short period;// = (alloc_uniqtype->pos_maxoff > 0) ? alloc_uniqtype->pos_maxoff : 0;
-	void *range_base;
-	void *range_limit;
-
-	if (__builtin_expect(a && a->is_cacheable, 1))
+	if (success && __builtin_expect(a && a->is_cacheable, 1))
 	{
-		/* Calculate a typed memrange with which we can populate the cache.
-		 * Is there a repetitive (array) structure around the test uniqtype? */
-		period = test_uniqtype->pos_maxoff;
+		/* We have up to three objects:
+		 * one whose type is test_uniqtype
+		 * one whose type is cur_obj_uniqtype
+		 * one whose type is cur_containing_uniqtype */
+		/* Our memrange cache currently serves two purposes:
+		 * remembering the type of a range of memory (perhaps an array),
+		 * and remembering containment facts
+		 * ("within type t, at offset o, is an instance of type t'").
+		 * We should probably separate these, perhaps by
+		 * computing the "containment transitive closure" for each type
+		 * and only caching memranges that are
+		 *       statically unbounded arrays (i.e. not precomputable subobject arrays)
+		 *       *or*
+		 *       whole allocations
+		 *       i.e. no need to cache individual subobjects when they're easily computed
+		 *         from the containment structure of some containing allocation
+		 * BUT how should that containment structure be represented,
+		 * and is it too application-specific to include in our uniqtype info?
+		 * I suspect we can come up with something acceptable.
+		 * It is currently wasteful to repeat pointers to member types if those types repeat.
+		 * We could have a per-type bitmap? HMM, gets complicated. */
 		if (cur_containing_uniqtype && UNIQTYPE_IS_ARRAY_TYPE(cur_containing_uniqtype)
 				&& UNIQTYPE_HAS_KNOWN_LENGTH(cur_containing_uniqtype))
 		{
-			/* Use the array start and end. FIXME: this doesn't see through
-			 * arrays of arrays, which it should. Need to merge the code with
-			 * __fetch_bounds_internal, which does understand this. */
-			range_base = (char*) alloc_start + 
-				cumulative_offset_searched -
-					cur_contained_pos->un.memb.off;
-			range_limit = range_base + 
-					cur_containing_uniqtype->pos_maxoff;
+			assert(test_uniqtype != alloc_uniqtype);
+			assert(cur_obj_uniqtype == test_uniqtype);
+			assert(cur_contained_pos == &cur_containing_uniqtype->related[0]);
+			assert(cur_obj_uniqtype != cur_containing_uniqtype);
+
+			/* We found the target type inside an array, perhaps at some
+			 * offset or perhaps as the array element type. So we want to cache
+			 * the array as our memrange, recording the offset.
+			 
+			 HMM. There might be *many* arrays, under which (somewhere)
+			 we found the target type. Each one could be a memrange!
+			 Chances are, if we're doing is_a checking, we want the outermost array
+			 because that probably maximises the number of repetitions of the target type
+			 that we cache in a single entry.
+			 
+			 If we're doing bounds checking, we want the innermost array
+			 because that's the one whose element type might match the test type.
+			 And it's that case where caching is going to help.
+			 
+			 Since we're doing is-a checking, let's cache the outermost one.
+			 But it needn't be the allocation type itself! Maybe the allocation
+			 is one big struct, that contains an array.
+			 The problem is that as we do our subobject search,
+			 we don't record the arrays we pass through.
+			 
+			 HMM. For now just use the array which is available to us,
+			 i.e. the one that is containing us.
+			  */
+			struct uniqtype *array_element_type = cur_contained_pos->un.t.ptr;
+			
+			// WHAT does cumulative_offset_searched mean?
+			// every time we descend to search a subobject,
+			// it gets incremented by the offset of that subobject.
+			// but searching through an array (in __liballocs_first_subobject_spanning)
+			// the target offset gets modded by the array element size.
+			// so we never "look for" offsets within an array except within the first element.
+			// so cumulative_offset_searched is always an offset
+			// within the *first* element of any contained array,
+			// if test_uniqtype is indeed contained within an array.
+			// Is it the offset *of* that first element,
+			// or the offset *of* the test_uniqtype *within* that first element?
+			// I think it's the latter, because to find the test_uniqtype we must descend.
+			// SO how do we get the array base?
+			// it's alloc_start + cumulative_offset_searched
+			// MINUS
+			// the offset of a test_uniqtype within the containing uniqtype,
+			// i.e. target_offset_within_uniqtype.
+			char *array_start = (char*) alloc_start + containing_instance_offset;
+			// FIXMe: sanity check: is this aligned for the array type?
+			// i.e. I really don't trust this code still.
+			
+			// this must be some offset from alloc_start between 0 and cumulative_offset_searched.
+			assert(cur_contained_pos->un.memb.off == 0);
+			//unsigned array_element_to_test_uniqtype_offset =
+
+			cache_is_a(/* range_base */ (char*) array_start,
+				/* range_limit */ (char*) array_start + cur_containing_uniqtype->pos_maxoff,
+				/* period */ array_element_type->pos_maxoff,
+				// we cache the fact that it contains <test_uniqtype>s, not <array element type>s!
+				/* offset_to_a_t */ target_offset_within_uniqtype,
+				/* t */ test_uniqtype,
+				/* depth */ 1 /* HACK FIXME */);
+			// FIXME: do the set_type here (currently below)
 		}
-		else
+		else // it's not an array; we may not have a containing object
 		{
-			range_base = (char*) alloc_start + target_offset_within_uniqtype;
-			range_limit = (char*) obj + test_uniqtype->pos_maxoff;
+			unsigned alloc_start_to_range_base
+				 = cumulative_offset_searched
+					;//- (cur_contained_pos ? cur_contained_pos->un.memb.off : 0);
+			// the range we cache is a single object of type test_uniqtype
+			// FIXME: maybe we should cache the *containing* object?
+			cache_is_a(/* range_base */ (char*) alloc_start + alloc_start_to_range_base,
+				/* range_limit */ (char*) alloc_start + alloc_start_to_range_base + test_uniqtype->pos_maxoff,
+				/* period */ 0,
+				/* offset_to_a_t */ 0, //cur_contained_pos->un.memb.off,
+				/* t */ test_uniqtype,
+				/* depth */ 1 /* HACK FIXME */);
 		}
 	}
 	
 	if (__builtin_expect(success, 1))
 	{
-		if (__builtin_expect(a && a->is_cacheable, 1))
-		{
-			cache_is_a(range_base, range_limit, test_uniqtype, 1,
-				period, alloc_start);
-		}
 		++__libcrunch_succeeded;
 		return 1;
 	}
@@ -1155,7 +1262,11 @@ int __is_a_internal(const void *obj, const void *arg)
 			a->set_type(NULL, (void *) obj, __liballocs_get_or_create_array_type(
 					(struct uniqtype *) test_uniqtype, 
 					alloc_size_bytes / test_uniqtype->pos_maxoff));
-			if (a->is_cacheable) cache_is_a(range_base, range_limit, test_uniqtype, 0 /* FIXME: depth */, period, alloc_start);
+			if (a->is_cacheable)
+			{
+				//cache_is_a(range_base, range_limit, test_uniqtype, period, alloc_start);
+				// FIXME: reinstate this!! depth is 0
+			}
 		
 			return 1;
 		}
@@ -1201,28 +1312,28 @@ int __like_a_internal(const void *obj, const void *arg)
 	
 	CHECK_INIT
 	DO_QUERY(obj)
-	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 	INIT_SUBOBJ_SEARCH(obj)
+	/* We don't update these, nor need them in this function, so
+	 * null them to avoid surprises. */
+	cur_containing_uniqtype = NULL;
+	cur_contained_pos = NULL;
 	
 	/* Descend the subobject hierarchy until our target offset is zero, i.e. we 
 	 * find the outermost thing in the subobject tree that starts at the address
-	 * we were passed (obj). */
-	while (target_offset_within_uniqtype != 0)
-	{
-		_Bool success = __liballocs_first_subobject_spanning(
-				&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
-				&cur_contained_pos);
-		if (!success) goto like_a_failed;
-	}
+	 * we were passed (obj). FIXME: doesn't seem quite right; what if we want
+	 * to unwrap one more level? */
+	unsigned distance_traversed;
+	cur_obj_uniqtype = __liballocs_outermost_span_beginning_at(cur_obj_uniqtype,
+		target_offset_within_uniqtype, &distance_traversed);
+	if (!cur_obj_uniqtype) goto like_a_failed;
+	target_offset_within_uniqtype -= distance_traversed;
+	assert(target_offset_within_uniqtype == 0);
 	/* That's not quite enough: we want a *non-array* (we assume the test uniqtype
 	 * is never an array uniqtype... FIXME: is that reasonable? *seems* okay...) */
 	while (UNIQTYPE_IS_ARRAY_TYPE(cur_obj_uniqtype))
 	{
 		cur_obj_uniqtype = UNIQTYPE_ARRAY_ELEMENT_TYPE(cur_obj_uniqtype);
-		/* We don't update these, nor need them in this function, so
-		 * null them to avoid surprises. */
-		cur_containing_uniqtype = NULL;
-		cur_contained_pos = NULL;
 	}
 	
 	// trivially, identical types are like one another
@@ -1352,7 +1463,7 @@ int __named_a_internal(const void *obj, const void *arg)
 	// FIXME: use our recursive subobject search here? HMM -- semantics are non-obvious.
 	CHECK_INIT
 	DO_QUERY(obj)
-	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 	INIT_SUBOBJ_SEARCH(obj)
 
 	/* The type is incomplete in the client, but not in the program
@@ -1536,6 +1647,7 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 							/* last_uniqtype_offset */ NULL, \
 							/* p_cumulative_offset_searched */ NULL, \
 							/* p_cur_containing_subobject */ NULL, \
+							/* p_cur_containing_instance_offset */ NULL, \
 							/* p_cur_contained_pos */ NULL)) \
 						)
 						
@@ -1628,29 +1740,21 @@ static _Bool pointer_degree_and_ultimate_pointee_type(struct uniqtype *t, int *o
 static _Bool is_generic_ultimate_pointee(struct uniqtype *ultimate_pointee_type)
 {
 	return ultimate_pointee_type == pointer_to___uniqtype__void 
-		|| ultimate_pointee_type == pointer_to___uniqtype__signed_char
-		|| ultimate_pointee_type == pointer_to___uniqtype__unsigned_char;
+		/*|| ultimate_pointee_type == pointer_to___uniqtype__signed_char
+		|| ultimate_pointee_type == pointer_to___uniqtype__unsigned_char*/;
 }
 
-static _Bool holds_pointer_of_degree(struct uniqtype *cur_obj_uniqtype, int d, unsigned target_offset)
+static _Bool holds_pointer_of_degree(struct uniqtype *u, int d, unsigned target_offset)
 {
-	struct uniqtype *cur_containing_uniqtype = NULL;
-	struct uniqtype_rel_info *cur_contained_pos = NULL;
-	unsigned target_offset_within_uniqtype = target_offset;
-
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
 	 * are atomic. */
-	_Bool success = 1;
-	while (success)
+	unsigned distance_traversed = 0;
+	struct uniqtype_rel_info *contained_pos = NULL;
+	struct uniqtype *deepest = __liballocs_deepest_span(u, target_offset,
+			&distance_traversed, NULL);
+	if (distance_traversed == target_offset && UNIQTYPE_IS_POINTER_TYPE(deepest))
 	{
-		success = __liballocs_first_subobject_spanning(
-			&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
-			&cur_contained_pos);
-	}
-
-	if (target_offset_within_uniqtype == 0 && UNIQTYPE_IS_POINTER_TYPE(cur_obj_uniqtype))
-	{
-		_Bool depth_okay = pointer_has_degree(cur_obj_uniqtype, d);
+		_Bool depth_okay = pointer_has_degree(deepest, d);
 		if (depth_okay)
 		{
 			return 1;
@@ -1719,25 +1823,29 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	
 	CHECK_INIT
 	DO_QUERY(obj)
-	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 	INIT_SUBOBJ_SEARCH(obj)
-	
+	/* We don't update these, nor need them in this function, so
+	 * null them to avoid surprises. */
+	cur_containing_uniqtype = NULL;
+	cur_contained_pos = NULL;
+
 	if (__builtin_expect(err != NULL, 0)) return 1; // liballocs has already counted this abort
 	
 	/* HACK */
 	reinstate_looseness_if_necessary(alloc_start, alloc_site, alloc_uniqtype);
-	
+
 	/* Descend the subobject hierarchy until our target offset is zero, i.e. we 
 	 * find the outermost thing in the subobject tree that starts at the address
-	 * we were passed (obj). */
-	while (target_offset_within_uniqtype != 0)
-	{
-		_Bool success = __liballocs_first_subobject_spanning(
-				&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
-				&cur_contained_pos);
-		if (!success) goto loosely_like_a_failed;
-	}
-	
+	 * we were passed (obj). FIXME: doesn't seem quite right; what if we want
+	 * to unwrap one more level? */
+	unsigned distance_traversed;
+	cur_obj_uniqtype = __liballocs_outermost_span_beginning_at(cur_obj_uniqtype,
+		target_offset_within_uniqtype, &distance_traversed);
+	if (!cur_obj_uniqtype) goto loosely_like_a_failed;
+	target_offset_within_uniqtype -= distance_traversed;
+	assert(target_offset_within_uniqtype == 0);
+
 	do
 	{
 		
@@ -1871,9 +1979,11 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	_Bool success;
 	try_deeper:
 		debug_println(0, "No dice; will try the object type one level down if there is one...");
-		success = __liballocs_first_subobject_spanning(
-				&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
-				&cur_contained_pos);
+		success = 0;
+		// FIXME: reinstate this code
+		//success = __liballocs_first_subobject_spanning(
+		//		&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
+		//		&cur_contained_pos);
 		if (!success) goto loosely_like_a_failed;
 		debug_println(0, "... got %s", NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
 
@@ -1916,7 +2026,7 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d)
 {
 	CHECK_INIT
 	DO_QUERY(obj)
-	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 	INIT_SUBOBJ_SEARCH(obj)
 	
 	/* HACK */
@@ -2005,7 +2115,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	{
 		CHECK_INIT
 		DO_QUERY(obj)
-		DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+		DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 		INIT_SUBOBJ_SEARCH(obj)
 		obj_a = a;
 		obj_alloc_start = alloc_start;
@@ -2020,14 +2130,11 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
 	 * are atomic. */
-	_Bool success = 1;
-	while (success)
-	{
-		success = __liballocs_first_subobject_spanning(
-			&obj_target_offset_within_uniqtype, &cur_obj_within_alloc_uniqtype, &obj_cur_containing_uniqtype,
-			&obj_cur_contained_pos);
-	}
-	struct uniqtype *type_of_pointer_being_stored_to = cur_obj_within_alloc_uniqtype;
+	unsigned distance_traversed;
+	struct uniqtype *type_of_pointer_being_stored_to = __liballocs_deepest_span(
+		cur_obj_within_alloc_uniqtype, obj_target_offset_within_uniqtype,
+		&distance_traversed, NULL
+	);
 	
 	struct allocator *value_a = NULL;
 	const void *value_alloc_start = NULL;
@@ -2037,8 +2144,9 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	unsigned value_target_offset_within_uniqtype = 0;
 	_Bool value_contract_is_specialisable = 0;
 	
-	/* Might we have a pointer? */
-	if (obj_target_offset_within_uniqtype == 0 && UNIQTYPE_IS_POINTER_TYPE(cur_obj_within_alloc_uniqtype))
+	/* Might we be storing to pointer? */
+	if (distance_traversed == obj_target_offset_within_uniqtype
+			&& UNIQTYPE_IS_POINTER_TYPE(type_of_pointer_being_stored_to))
 	{
 		int d;
 		struct uniqtype *ultimate_pointee_type;
@@ -2061,7 +2169,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		 * whether we're generic or not. */
 		{
 			DO_QUERY(value)
-			DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+			DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 			INIT_SUBOBJ_SEARCH(value)
 			value_a = a;
 			value_alloc_start = alloc_start;
@@ -2323,6 +2431,7 @@ static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigne
 	}
 	
 	assert(0);
+	__builtin_unreachable();
 }
 
 __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derived, struct uniqtype *t)
@@ -2331,9 +2440,9 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	
 	CHECK_INIT
 	DO_QUERY(obj)
-	DO_ARRAY_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
+	DO_PRECISIFY(alloc_uniqtype, alloc_start, alloc_size_bytes, a)
 	INIT_SUBOBJ_SEARCH(obj)
-	
+
 	if (__builtin_expect(err == &__liballocs_err_unrecognised_alloc_site, 0))
 	{
 		if (!(alloc_start && alloc_size_bytes)) goto abort_returning_max_bounds;
@@ -2358,7 +2467,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	{
 		goto return_min_bounds; // FIXME: also belongs in instrumentation -- can test for an incomplete type
 	}	                        // -- bounds are no use if the caller thinks it's incomplete, even if does have bounded size
-	
+
 	/* For bounds checking, 
 	 * what we're really asking about is the regularity of the memory around obj,
 	 * when considered in strides of t->pos_maxoff. 
@@ -2393,7 +2502,8 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 					: (char*) alloc_start + arg.innermost_containing_array_type_span_start_offset
 						+ (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) * t->pos_maxoff);
 			unsigned period = UNIQTYPE_ARRAY_ELEMENT_TYPE(arg.innermost_containing_array_t)->pos_maxoff;
-			if (a && a->is_cacheable) cache_bounds(lower, upper, t, period, alloc_start);
+			if (a && a->is_cacheable) cache_bounds(lower, upper, period, 0, t,
+				/* depth HACK FIXME */ arg.innermost_containing_array_type_span_start_offset == 0 ? 0 : 1);
 			return __make_bounds(
 				(unsigned long) lower,
 				(unsigned long) upper
@@ -2401,7 +2511,10 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		}
 		// bounds are just this object
 		char *limit = (char*) obj + (t->pos_maxoff > 0 ? t->pos_maxoff : 1);
-		if (a && a->is_cacheable) cache_bounds(obj, limit, t, alloc_uniqtype->pos_maxoff, alloc_start);
+		if (a && a->is_cacheable)
+		{
+			cache_bounds(obj, limit, 0, 0, t, /* HACK FIXME depth */ 1);
+		}
 		return __make_bounds((unsigned long) obj, (unsigned long) limit);
 	}
 	else
@@ -2413,7 +2526,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 	}
 
 return_min_bounds:
-	if (a && a->is_cacheable) cache_bounds(obj, (char*) obj + 1, NULL, 1, alloc_start);
+	if (a && a->is_cacheable) cache_bounds(obj, (char*) obj + 1, 0, 0, NULL, 1);
 	return __make_bounds((unsigned long) obj, (unsigned long) obj + 1);
 
 return_alloc_bounds:
@@ -2424,12 +2537,15 @@ return_alloc_bounds:
 		
 		/* CHECK: do the bounds include the derived-from pointer? If not, we abort. */
 		if ((unsigned long) obj - (unsigned long) base > size) goto abort_returning_max_bounds;
-			
-		if (a && a->is_cacheable) cache_bounds(base, 
-			limit, 
-			alloc_uniqtype, 
-			alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1,
-			alloc_start);
+
+		// FIXME: the period here seems not right
+		// -- if we are chars, should ignore alloc_uniqtype and go for 1?
+		if (a && a->is_cacheable) cache_bounds(base,
+			limit,
+			/* period */ alloc_uniqtype ? alloc_uniqtype->pos_maxoff : 1,
+			/* offset to a t, i.e. to a char */ 0,
+			t,
+			/* HACK FIXME depth */ 0);
 		return __make_bounds(
 			(unsigned long) base,
 			(unsigned long) limit
@@ -2447,8 +2563,11 @@ abort_returning_max_bounds:
 #define MAX(x, y) (((x) < (y)) ? (y) : (x))
 	cache_fake_bounds(
 		MIN((char*) obj, (char*) derived), 
-		MAX((char*) obj, (char*) derived) + (t ? t->pos_maxoff : 0), 
-		t, 1, (t ? t->pos_maxoff : 1), NULL /* no alloc start */
+		MAX((char*) obj, (char*) derived) + (t ? t->pos_maxoff : 0),
+		/* period */ (t ? t->pos_maxoff : 1),
+		0,
+		t,
+		0 /* depth */
 	);
 	
 	debug_println(1, "libcrunch: failed to fetch bounds for pointer %p (deriving %p); liballocs said %s (alloc site %p)", 
@@ -2736,13 +2855,12 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 		unsigned target_offset = 0;
 		struct uniqtype *cur_containing_uniqtype = NULL;
 		struct uniqtype_rel_info *cur_contained_pos = NULL;
-		while (success)
-		{
-			success = __liballocs_first_subobject_spanning(
-				&target_offset, &cached_target_alloc_type, &cur_containing_uniqtype,
-				&cur_contained_pos);
-		}
-		if (!UNIQTYPE_IS_POINTER_TYPE(cached_target_alloc_type)) cached_target_alloc_type = NULL;
+		unsigned distance_traversed = 0;
+		struct uniqtype *deepest = __liballocs_deepest_span(
+				cached_target_alloc_type, target_offset, &distance_traversed, NULL);
+		if (distance_traversed != target_offset ||
+				!UNIQTYPE_IS_POINTER_TYPE(deepest)) cached_target_alloc_type = NULL;
+		else cached_target_alloc_type = deepest;
 	}
 
 	if (cached_target_alloc_type)
@@ -2808,11 +2926,6 @@ void __libcrunch_ool_check_cache_sanity(struct __liballocs_memrange_cache *cache
 struct __liballocs_memrange_cache_entry_s *__libcrunch_ool_cache_lookup(struct __liballocs_memrange_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
 {
 	return __liballocs_memrange_cache_lookup(cache, obj, t, require_period);
-}
-
-struct __liballocs_memrange_cache_entry_s *__libcrunch_ool_cache_lookup_notype(struct __liballocs_memrange_cache *cache, const void *obj, unsigned long require_period)
-{
-	return __liballocs_memrange_cache_lookup_notype(cache, obj, require_period);
 }
 
 struct uniqtype * __libcrunch__ool_get_cached_object_type(const void *addr)
