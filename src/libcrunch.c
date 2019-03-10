@@ -1051,10 +1051,26 @@ __libcrunch_check_init();
 	unsigned cumulative_offset_searched = 0; \
 	unsigned target_offset_within_uniqtype = (char*) obj - (char*) alloc_start;
 
-struct starts_at_target_offset_and_has_type_args {
+struct starts_at_target_offset_and_has_type_nocache_args {
 	unsigned target_offset;
 	struct uniqtype *test_type;
+};
+static _Bool starts_at_target_offset_and_has_type_nocache(struct uniqtype *u,
+	struct uniqtype_containment_ctxt *ucc,
+	unsigned u_offset_from_search_start,
+	void *args_as_void)
+{
+	struct starts_at_target_offset_and_has_type_nocache_args *args
+	 = (struct starts_at_target_offset_and_has_type_nocache_args *) args_as_void;
+	return args->target_offset == u_offset_from_search_start
+			&& u == args->test_type;
+}
+struct starts_at_target_offset_and_has_type_args {
+	struct starts_at_target_offset_and_has_type_nocache_args nocache_args;
+	uintptr_t alloc_base;
 	struct allocator *a;
+	struct uniqtype *out_cur_obj_uniqtype;
+	unsigned out_offset_from_search_start;
 };
 static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 	struct uniqtype_containment_ctxt *ucc,
@@ -1063,11 +1079,59 @@ static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 {
 	struct starts_at_target_offset_and_has_type_args *args
 	 = (struct starts_at_target_offset_and_has_type_args *) args_as_void;
-	_Bool can_stop_now = (args->target_offset == u_offset_from_search_start
-			&& u == test_type);
-	if (can_stop_now)
+	args->out_cur_obj_uniqtype = u;
+	args->out_offset_from_search_start = u_offset_from_search_start;
+	_Bool can_stop_now = starts_at_target_offset_and_has_type_nocache(u,
+		ucc, u_offset_from_search_start, &args->nocache_args);
+	if (can_stop_now && __builtin_expect(args->a && args->a->is_cacheable, 1))
 	{
-		// cache some stuff
+		/* We walked (potentially) a ton of objects. What memranges do we want to cache?
+		 * One answer    : (1) the target object/type and its nearest enclosing array.
+		 * Another answer: (2) the target object/type and its outermost enclosing array.
+		 * Another answer: (3) the target object/type and all arrays that enclose it.
+		 * Another answer: (4) the target object/type whether or not it's in an array.
+		 * Another answer: (5) all of the above.
+		 * Another answer: (6) the target object and all enclosing objects.
+		 * In terms of value for cache entries, it seems (1) is best.
+		 * But also (4) in the case where there is no enclosing array.
+		 */
+		// walk up the context looking for an array type
+		uintptr_t subobj_addr = args->alloc_base + args->nocache_args.target_offset;
+		unsigned back_offset = 0;
+		struct uniqtype_containment_ctxt *c = ucc;
+		for (;
+			c;
+			subobj_addr -= ucc->u_offset_within_container, c = c->next)
+		{
+			if (!c->u_container) break;
+			struct uniqtype *subobj_t = UNIQTYPE_SUBOBJECT_TYPE(c->u_container, c->u_ctxt);
+			if (subobj_t)
+			{
+				uintptr_t array_base = subobj_addr;
+				assert(UNIQTYPE_HAS_KNOWN_LENGTH(subobj_t));
+				uintptr_t array_end = subobj_addr + subobj_t->pos_maxoff;
+				struct uniqtype *array_element_type = UNIQTYPE_ARRAY_ELEMENT_TYPE(subobj_t);
+
+				cache_is_a((char*) array_base,
+					/* range_limit */ (char*) array_end,
+					/* period */ array_element_type->pos_maxoff,
+					// we cache the fact that it contains <test_uniqtype>s, not <array element type>s!
+					/* offset_to_a_t */ args->alloc_base + args->nocache_args.target_offset - subobj_addr,
+					/* t */ args->nocache_args.test_type,
+					/* depth */ 1 /* HACK FIXME */);
+				break;
+			}
+		}
+		if (!c)
+		{
+			// it's not an array; we may not have a containing object
+			cache_is_a(/* range_base */ (char*) args->alloc_base + args->nocache_args.target_offset,
+				/* range_limit */ (char*) args->alloc_base + args->nocache_args.target_offset + args->nocache_args.test_type->pos_maxoff,
+				/* period */ 0,
+				/* offset_to_a_t */ 0, //cur_contained_pos->un.memb.off,
+				/* t */ args->nocache_args.test_type,
+				/* depth */ 1 /* HACK FIXME */);
+		}
 	}
 	return can_stop_now;
 }
@@ -1075,16 +1139,24 @@ int __is_a_internal(const void *obj, const void *arg)
 {
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
 	unsigned containing_instance_offset = 0;
-	
 	CHECK_INIT
 	DO_QUERY(obj)
 	INIT_SUBOBJ_SEARCH(obj)
+	_Bool success;
+	struct starts_at_target_offset_and_has_type_args args = {
+		.nocache_args = (struct starts_at_target_offset_and_has_type_nocache_args) {
+			.test_type = (struct uniqtype *) test_uniqtype,
+			.target_offset = target_offset_within_uniqtype
+		},
+		.alloc_base = (uintptr_t) alloc_start,
+		.a = a
+	};
 	/* Optimisation: if we have an array whose element type is smaller than the
 	 * test type (e.g. an array of uninterpreted bytes or chars),
 	 * we're never going to find an instance of the test type within it,
 	 * we can skip precisify and fail. Or if we're zero-offset and the types
 	 * match, we can skip and pass. */
-	_Bool success;
+	// FIXME: these should fall out naturally from our search
 	if (UNIQTYPE_IS_ARRAY_TYPE(alloc_uniqtype) &&
 		UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)
 		&& UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)->pos_maxoff
@@ -1107,7 +1179,7 @@ int __is_a_internal(const void *obj, const void *arg)
 			/* u */ alloc_uniqtype,
 			/* target_offset_within_u */ (char*) obj - (char*) alloc_start,
 			/* visit_stop_test */ starts_at_target_offset_and_has_type,
-			/* arg */ test_type,
+			/* arg */ &args,
 			/* out_offset */ NULL,
 			/* out_ctxt */ NULL);
 		/* We just walked a ton of objects. What memranges do we want to cache?
@@ -1124,112 +1196,6 @@ int __is_a_internal(const void *obj, const void *arg)
 		 * doesn't give us that. */
 	}
 
-	if (success && __builtin_expect(a && a->is_cacheable, 1))
-	{
-		/* We have up to three objects:
-		 * one whose type is test_uniqtype
-		 * one whose type is cur_obj_uniqtype
-		 * one whose type is cur_containing_uniqtype */
-		/* Our memrange cache currently serves two purposes:
-		 * remembering the type of a range of memory (perhaps an array),
-		 * and remembering containment facts
-		 * ("within type t, at offset o, is an instance of type t'").
-		 * We should probably separate these, perhaps by
-		 * computing the "containment transitive closure" for each type
-		 * and only caching memranges that are
-		 *       statically unbounded arrays (i.e. not precomputable subobject arrays)
-		 *       *or*
-		 *       whole allocations
-		 *       i.e. no need to cache individual subobjects when they're easily computed
-		 *         from the containment structure of some containing allocation
-		 * BUT how should that containment structure be represented,
-		 * and is it too application-specific to include in our uniqtype info?
-		 * I suspect we can come up with something acceptable.
-		 * It is currently wasteful to repeat pointers to member types if those types repeat.
-		 * We could have a per-type bitmap? HMM, gets complicated. */
-		if (cur_containing_uniqtype && UNIQTYPE_IS_ARRAY_TYPE(cur_containing_uniqtype)
-				&& UNIQTYPE_HAS_KNOWN_LENGTH(cur_containing_uniqtype))
-		{
-			assert(test_uniqtype != alloc_uniqtype);
-			assert(cur_obj_uniqtype == test_uniqtype);
-			assert(cur_contained_pos == &cur_containing_uniqtype->related[0]);
-			assert(cur_obj_uniqtype != cur_containing_uniqtype);
-
-			/* We found the target type inside an array, perhaps at some
-			 * offset or perhaps as the array element type. So we want to cache
-			 * the array as our memrange, recording the offset.
-			 
-			 HMM. There might be *many* arrays, under which (somewhere)
-			 we found the target type. Each one could be a memrange!
-			 Chances are, if we're doing is_a checking, we want the outermost array
-			 because that probably maximises the number of repetitions of the target type
-			 that we cache in a single entry.
-			 
-			 If we're doing bounds checking, we want the innermost array
-			 because that's the one whose element type might match the test type.
-			 And it's that case where caching is going to help.
-			 
-			 Since we're doing is-a checking, let's cache the outermost one.
-			 But it needn't be the allocation type itself! Maybe the allocation
-			 is one big struct, that contains an array.
-			 The problem is that as we do our subobject search,
-			 we don't record the arrays we pass through.
-			 
-			 HMM. For now just use the array which is available to us,
-			 i.e. the one that is containing us.
-			  */
-			struct uniqtype *array_element_type = cur_contained_pos->un.t.ptr;
-			
-			// WHAT does cumulative_offset_searched mean?
-			// every time we descend to search a subobject,
-			// it gets incremented by the offset of that subobject.
-			// but searching through an array (in __liballocs_first_subobject_spanning)
-			// the target offset gets modded by the array element size.
-			// so we never "look for" offsets within an array except within the first element.
-			// so cumulative_offset_searched is always an offset
-			// within the *first* element of any contained array,
-			// if test_uniqtype is indeed contained within an array.
-			// Is it the offset *of* that first element,
-			// or the offset *of* the test_uniqtype *within* that first element?
-			// I think it's the latter, because to find the test_uniqtype we must descend.
-			// SO how do we get the array base?
-			// it's alloc_start + cumulative_offset_searched
-			// MINUS
-			// the offset of a test_uniqtype within the containing uniqtype,
-			// i.e. target_offset_within_uniqtype.
-			char *array_start = (char*) alloc_start + containing_instance_offset;
-			// FIXMe: sanity check: is this aligned for the array type?
-			// i.e. I really don't trust this code still.
-			
-			// this must be some offset from alloc_start between 0 and cumulative_offset_searched.
-			assert(cur_contained_pos->un.memb.off == 0);
-			//unsigned array_element_to_test_uniqtype_offset =
-
-			cache_is_a(/* range_base */ (char*) array_start,
-				/* range_limit */ (char*) array_start + cur_containing_uniqtype->pos_maxoff,
-				/* period */ array_element_type->pos_maxoff,
-				// we cache the fact that it contains <test_uniqtype>s, not <array element type>s!
-				/* offset_to_a_t */ target_offset_within_uniqtype,
-				/* t */ test_uniqtype,
-				/* depth */ 1 /* HACK FIXME */);
-			// FIXME: do the set_type here (currently below)
-		}
-		else // it's not an array; we may not have a containing object
-		{
-			unsigned alloc_start_to_range_base
-				 = cumulative_offset_searched
-					;//- (cur_contained_pos ? cur_contained_pos->un.memb.off : 0);
-			// the range we cache is a single object of type test_uniqtype
-			// FIXME: maybe we should cache the *containing* object?
-			cache_is_a(/* range_base */ (char*) alloc_start + alloc_start_to_range_base,
-				/* range_limit */ (char*) alloc_start + alloc_start_to_range_base + test_uniqtype->pos_maxoff,
-				/* period */ 0,
-				/* offset_to_a_t */ 0, //cur_contained_pos->un.memb.off,
-				/* t */ test_uniqtype,
-				/* depth */ 1 /* HACK FIXME */);
-		}
-	}
-	
 	if (__builtin_expect(success, 1))
 	{
 		++__libcrunch_succeeded;
@@ -1295,10 +1261,10 @@ fail:
 			a ? a->name : "(no allocator)",
 			(ALLOC_IS_DYNAMICALLY_SIZED(alloc_start, alloc_site) && alloc_uniqtype && alloc_size_bytes > alloc_uniqtype->pos_maxoff) ? " allocation of " : " ",
 			NAME_FOR_UNIQTYPE(alloc_uniqtype),
-			(cur_obj_uniqtype ? 
-				((cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : NAME_FOR_UNIQTYPE(cur_obj_uniqtype)) 
-				: "(none)"), 
-			(int) cumulative_offset_searched, 
+			(args.out_cur_obj_uniqtype ?
+				((args.out_cur_obj_uniqtype == alloc_uniqtype) ? "(the same)" : NAME_FOR_UNIQTYPE(args.out_cur_obj_uniqtype))
+				: "(none)"),
+			(int) args.out_offset_from_search_start,
 			(void*) alloc_site
 		);
 	}
@@ -1324,7 +1290,7 @@ int __like_a_internal(const void *obj, const void *arg)
 	 * we were passed (obj). FIXME: doesn't seem quite right; what if we want
 	 * to unwrap one more level? */
 	unsigned distance_traversed;
-	cur_obj_uniqtype = __liballocs_outermost_span_beginning_at(cur_obj_uniqtype,
+	cur_obj_uniqtype = __liballocs_outermost_subobject_at_offset(cur_obj_uniqtype,
 		target_offset_within_uniqtype, &distance_traversed);
 	if (!cur_obj_uniqtype) goto like_a_failed;
 	target_offset_within_uniqtype -= distance_traversed;
@@ -1620,36 +1586,25 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 					/* HACK: a little bit of C-specifity is creeping in here.
 					 * FIXME: adjust this to reflect sloppy generic-pointer-pointer matches! 
 					      (only if LIBCRUNCH_STRICT_GENERIC_POINTERS not set) */
-					/* HACK: referencing uniqtypes directly from libcrunch is problematic
-					 * for COMDAT / section group / uniqing reasons. Ideally we wouldn't
-					 * do this. To prevent non-uniquing, we need to avoid linking
-					 * uniqtypes into the preload .so. But we can't rely on any particular
-					 * uniqtypes being in the executable; and if they're in a library
-					 * won't let us bind to them from the preload library (whether the
-					 * library is linked at startup or later, as it happens).  One workaround:
-					 * use the _nonshared.a hack for -lcrunch_stubs too, so that all 
-					 * libcrunch-enabled executables necessarily have __uniqtype__void
-					 * and __uniqtype__signed_char in the executable.
-					 * ARGH, but we still can't bind to these from the preload lib.
-					 * (That's slightly surprising semantics, but it's what I observe.)
-					 * We have to use dynamic linking. */
 					#define would_always_succeed(from, to) \
 						( \
 							!UNIQTYPE_IS_POINTER_TYPE((to)) \
 						||  (UNIQTYPE_POINTEE_TYPE((to)) == pointer_to___uniqtype__void) \
 						||  (UNIQTYPE_POINTEE_TYPE((to)) == pointer_to___uniqtype__signed_char) \
 						||  (UNIQTYPE_IS_POINTER_TYPE((from)) && \
-							__liballocs_find_matching_subobject( \
-							/* target_offset_within_uniqtype */ 0, \
-							/* cur_obj_uniqtype */ UNIQTYPE_POINTEE_TYPE((from)), \
-							/* test_uniqtype */ UNIQTYPE_POINTEE_TYPE((to)), \
-							/* last_attempted_uniqtype */ NULL, \
-							/* last_uniqtype_offset */ NULL, \
-							/* p_cumulative_offset_searched */ NULL, \
-							/* p_cur_containing_subobject */ NULL, \
-							/* p_cur_containing_instance_offset */ NULL, \
-							/* p_cur_contained_pos */ NULL)) \
-						)
+							({ \
+								struct starts_at_target_offset_and_has_type_nocache_args args = { \
+									0, \
+									(to), \
+								}; \
+								__liballocs_search_subobjects_spanning( \
+										/* u */ (from), \
+										/* target_offset_within_u */ 0, \
+										/* visit_stop_test */ starts_at_target_offset_and_has_type_nocache, \
+										/* arg */ &args, \
+										/* out_offset */ NULL, \
+										/* out_ctxt */ NULL); \
+							})))
 						
 					/* ARGH. Are these the right way round?  
 					 * The "implicit cast" is from the alloc'd return type to the 
@@ -1840,7 +1795,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	 * we were passed (obj). FIXME: doesn't seem quite right; what if we want
 	 * to unwrap one more level? */
 	unsigned distance_traversed;
-	cur_obj_uniqtype = __liballocs_outermost_span_beginning_at(cur_obj_uniqtype,
+	cur_obj_uniqtype = __liballocs_outermost_subobject_at_offset(cur_obj_uniqtype,
 		target_offset_within_uniqtype, &distance_traversed);
 	if (!cur_obj_uniqtype) goto loosely_like_a_failed;
 	target_offset_within_uniqtype -= distance_traversed;
@@ -1980,10 +1935,17 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	try_deeper:
 		debug_println(0, "No dice; will try the object type one level down if there is one...");
 		success = 0;
-		// FIXME: reinstate this code
-		//success = __liballocs_first_subobject_spanning(
-		//		&target_offset_within_uniqtype, &cur_obj_uniqtype, &cur_containing_uniqtype,
-		//		&cur_contained_pos);
+		struct uniqtype_rel_info *contained_ctxt = __liballocs_find_span(cur_obj_uniqtype,
+				target_offset_within_uniqtype, NULL);
+		if (contained_ctxt)
+		{
+			success = 1;
+			unsigned distance_traversed = UNIQTYPE_SUBOBJECT_OFFSET(cur_obj_uniqtype,
+				contained_ctxt, target_offset_within_uniqtype);
+			target_offset_within_uniqtype = target_offset_within_uniqtype - distance_traversed;
+			cur_obj_uniqtype = UNIQTYPE_SUBOBJECT_TYPE(cur_obj_uniqtype,
+				contained_ctxt);
+		}
 		if (!success) goto loosely_like_a_failed;
 		debug_println(0, "... got %s", NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
 
