@@ -1105,7 +1105,7 @@ static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 		{
 			if (!c->u_container) break;
 			struct uniqtype *subobj_t = UNIQTYPE_SUBOBJECT_TYPE(c->u_container, c->u_ctxt);
-			if (subobj_t)
+			if (subobj_t && UNIQTYPE_IS_ARRAY_TYPE(subobj_t))
 			{
 				uintptr_t array_base = subobj_addr;
 				assert(UNIQTYPE_HAS_KNOWN_LENGTH(subobj_t));
@@ -1412,15 +1412,13 @@ struct offset_and_name_args
 	unsigned offset;
 	const char *name;
 };
-static int offset_and_name_match_cb(struct uniqtype *spans, 
-		unsigned span_start_offset, unsigned depth, 
-		struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-		unsigned containing_span_start_offset, void *arg)
+static _Bool offset_and_name_match_cb(struct uniqtype *u, struct uniqtype_containment_ctxt *ucc,
+	unsigned u_offset_from_search_start, void *arg)
 {
 	struct offset_and_name_args *args = arg;
 	
-	return args->offset == span_start_offset
-		&& 0 == strcmp(NAME_FOR_UNIQTYPE(spans), args->name);
+	return args->offset == u_offset_from_search_start
+		&& 0 == strcmp(NAME_FOR_UNIQTYPE(u), args->name);
 }
 
 int __named_a_internal(const void *obj, const void *arg)
@@ -1436,11 +1434,12 @@ int __named_a_internal(const void *obj, const void *arg)
 	 * as a whole. So we still need to look for a matching subobject. */
 	unsigned target_offset = (char*) obj - (char*) alloc_start;
 	struct offset_and_name_args args = { target_offset, test_typestr };
-	int ret = __liballocs_walk_subobjects_spanning(target_offset,
-			alloc_uniqtype, 
+	_Bool success =  __liballocs_search_subobjects_spanning(alloc_uniqtype,
+			target_offset,
 			offset_and_name_match_cb,
-			&args);
-	if (!ret) goto named_a_failed;
+			&args,
+			NULL, NULL);
+	if (!success) goto named_a_failed;
 
 named_a_succeeded:
 	++__libcrunch_succeeded;
@@ -2032,32 +2031,28 @@ struct match_cb_args
 	struct uniqtype *type_of_pointer_being_stored_to;
 	unsigned target_offset;
 };
-static int match_pointer_subobj_strict_cb(struct uniqtype *spans, unsigned span_start_offset, 
-		unsigned depth, struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-		unsigned containing_span_start_offset, void *arg)
+static _Bool match_pointer_subobj_strict_cb(struct uniqtype *u,
+	struct uniqtype_containment_ctxt *ucc, unsigned u_offset_from_search_start, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
-	struct uniqtype *t = spans;
 	struct match_cb_args *args = (struct match_cb_args *) arg;
 	struct uniqtype *type_we_can_store = UNIQTYPE_POINTEE_TYPE(args->type_of_pointer_being_stored_to);
 	
-	if (span_start_offset == args->target_offset && type_we_can_store == t)
+	if (u_offset_from_search_start == args->target_offset && type_we_can_store == u)
 	{
 		return 1;
 	}
 	return 0;
 }
-static int match_pointer_subobj_generic_cb(struct uniqtype *spans, unsigned span_start_offset, 
-		unsigned depth, struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-		unsigned containing_span_start_offset, void *arg)
+static _Bool match_pointer_subobj_generic_cb(struct uniqtype *u,
+	struct uniqtype_containment_ctxt *ucc, unsigned u_offset_from_search_start, void *arg)
 {
 	/* We're storing a pointer that is legitimately a pointer to t (among others) */
-	struct uniqtype *t = spans;
 	struct match_cb_args *args = (struct match_cb_args *) arg;
 	
 	int degree_of_pointer_stored_to = pointer_degree(args->type_of_pointer_being_stored_to);
 
-	if (span_start_offset == 0 && pointer_has_degree(t, degree_of_pointer_stored_to - 1))
+	if (u_offset_from_search_start == 0 && pointer_has_degree(u, degree_of_pointer_stored_to - 1))
 	{
 		return 1;
 	}
@@ -2150,28 +2145,22 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 			.type_of_pointer_being_stored_to = type_of_pointer_being_stored_to,
 			.target_offset = value_target_offset_within_uniqtype
 		};
-		int ret = (is_generic ? match_pointer_subobj_generic_cb : match_pointer_subobj_strict_cb)(
+		_Bool success = (is_generic ? match_pointer_subobj_generic_cb : match_pointer_subobj_strict_cb)(
 			value_alloc_uniqtype,
+			NULL,
 			0,
-			0,
-			NULL, NULL,
-			0, 
 			&args
 		);
 		/* Here we walk the subobject hierarchy until we hit 
-		 * one that is at the right offset and equals test_uniqtype.
-		 
-		 __liballocs_walk_subobjects_starting(
-		 
-		 ) ... with a cb that tests equality with test_uniqtype and returns 
-		 
-		 */
-		if (!ret) ret = __liballocs_walk_subobjects_spanning(value_target_offset_within_uniqtype, 
+		 * one that is at the right offset and equals test_uniqtype. */
+		if (!success) success = __liballocs_search_subobjects_spanning(
 			value_alloc_uniqtype, 
+			value_target_offset_within_uniqtype,
 			is_generic ? match_pointer_subobj_generic_cb : match_pointer_subobj_strict_cb, 
-			&args);
+			&args,
+			NULL, NULL);
 		
-		if (ret)
+		if (success)
 		{
 			++__libcrunch_succeeded;
 			return 1;
@@ -2309,9 +2298,8 @@ struct bounds_cb_arg
 	size_t accum_array_bounds;
 };
 
-static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigned depth,
-	struct uniqtype *containing, struct uniqtype_rel_info *contained_pos, 
-	unsigned containing_span_start_offset, void *arg_void)
+static _Bool bounds_cb(struct uniqtype *u, struct uniqtype_containment_ctxt *ucc,
+	unsigned u_offset_from_search_start, void *arg_void)
 {
 	struct bounds_cb_arg *arg = (struct bounds_cb_arg *) arg_void;
 
@@ -2324,21 +2312,21 @@ static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigne
 	 * we actually want to range over the outermost bounds.
 	 * This is not the case of arrays of structs of arrays.
 	 * So we want to clear the state once we descend through a non-array. */
-	if (UNIQTYPE_IS_ARRAY_TYPE(containing))
+	if (ucc && UNIQTYPE_IS_ARRAY_TYPE(ucc->u_container))
 	{
 		arg->innermost_containing_array_type_span_start_offset
-		 = containing_span_start_offset;
-		arg->innermost_containing_array_t = containing;
-		
+		 = u_offset_from_search_start - ucc->u_offset_within_container;
+		arg->innermost_containing_array_t = ucc->u_container;
+		// FIXME: get rid of innermost and outermost and just walk the contexts
 		if (!arg->outermost_containing_array_t)
 		{
 			arg->outermost_containing_array_type_span_start_offset
-			 = containing_span_start_offset;
-			arg->outermost_containing_array_t = containing;
-			arg->accum_array_bounds = UNIQTYPE_ARRAY_LENGTH(containing);
+			 = u_offset_from_search_start - ucc->u_offset_within_container;
+			arg->outermost_containing_array_t = ucc->u_container;
+			arg->accum_array_bounds = UNIQTYPE_ARRAY_LENGTH(ucc->u_container);
 			if (arg->accum_array_bounds < 1) arg->accum_array_bounds = 0;
 		}
-		else arg->accum_array_bounds *= UNIQTYPE_ARRAY_LENGTH(containing);
+		else arg->accum_array_bounds *= UNIQTYPE_ARRAY_LENGTH(ucc->u_container);
 	}
 	else
 	{
@@ -2349,13 +2337,13 @@ static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigne
 		arg->accum_array_bounds = 0;
 	}
 	
-	if (span_start_offset < arg->target_offset)
+	if (u_offset_from_search_start < arg->target_offset)
 	{
 		return 0; // keep going
 	}
 	
-	// now we have span_start_offset <= target_offset
-	if (span_start_offset > arg->target_offset)
+	// now we have span_start_offset >= target_offset
+	if (u_offset_from_search_start > arg->target_offset)
 	{
 		/* We've overshot. If this happens, it means the target offset
 		 * is not a subobject start offset. This shouldn't happen,
@@ -2363,7 +2351,7 @@ static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigne
 		return 1;
 	}
 	
-	if (span_start_offset == arg->target_offset)
+	if (u_offset_from_search_start == arg->target_offset)
 	{
 		/* We've hit a subobject that starts at the right place.
 		 * It might still be an enclosing object, not the object we're
@@ -2371,23 +2359,23 @@ static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigne
 		 * type -- this is the size of object that the pointer
 		 * arithmetic is being done on. Keep going til we hit something
 		 * of that size. */
-		if (spans->pos_maxoff < arg->passed_in_t->pos_maxoff)
+		if (u->pos_maxoff < arg->passed_in_t->pos_maxoff)
 		{
 			// usually shouldn't happen, but might with __like_a prefixing
 			arg->success = 1;
 			return 1;
 		}
-		if (spans->pos_maxoff > arg->passed_in_t->pos_maxoff)
+		if (u->pos_maxoff > arg->passed_in_t->pos_maxoff)
 		{
 			// keep going
 			return 0;
 		}
 		
-		assert(spans->pos_maxoff == arg->passed_in_t->pos_maxoff);
+		assert(u->pos_maxoff == arg->passed_in_t->pos_maxoff);
 		/* What are the array bounds? We don't have enough context,
 		 * so the caller has to figure it out. */
 		arg->success = 1;
-		arg->matched_t = spans;
+		arg->matched_t = u;
 
 		return 1;
 	}
@@ -2447,11 +2435,12 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		.passed_in_t = t,
 		.target_offset = target_offset_within_uniqtype
 	};
-	int ret = __liballocs_walk_subobjects_spanning(
-		target_offset_within_uniqtype,
+	_Bool ret = __liballocs_search_subobjects_spanning(
 		alloc_uniqtype, 
+		target_offset_within_uniqtype,
 		bounds_cb, 
-		&arg
+		&arg,
+		NULL, NULL
 	);
 	if (arg.success)
 	{
