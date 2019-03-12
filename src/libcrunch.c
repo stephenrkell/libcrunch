@@ -776,6 +776,7 @@ static void clear_mem_refbits(void)
 	close(fd);
 }
 
+int __libcrunch_global_init(void) __attribute__((constructor));
 int __libcrunch_global_init(void)
 {
 	if (__libcrunch_is_initialized) return 0; // we are okay
