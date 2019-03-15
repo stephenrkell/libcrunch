@@ -26,6 +26,23 @@
 #include "libcrunch.h"
 #include "libcrunch_private.h"
 
+struct cache_miss_record {
+	const void *caller;
+	unsigned long count;
+};
+static int compare_miss_record_by_addr(const void *vmr1, const void *vmr2)
+{
+	struct cache_miss_record *mr1 = (void*) vmr1, *mr2 = (void*) vmr2;
+	if (mr1->caller == mr2->caller) return 0;
+	// NULL is the maximal value
+	if (!mr1->caller) return 1;
+	if (!mr2->caller) return -1;
+	return ((uintptr_t) mr1->caller < (uintptr_t) mr2->caller) ? -1 : 1;
+}
+static struct cache_miss_record *miss_vec;
+static unsigned long miss_vec_nused;
+static unsigned long miss_vec_n;
+
 int __libcrunch_get_errno(void) // for debugging
 {
 	return errno;
@@ -447,6 +464,13 @@ static void print_exit_summary(void)
 	fprintf(crunch_stream_err, "       nontrivially passed:                % 11ld\n", __libcrunch_succeeded);
 	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 	fprintf(crunch_stream_err, "   of which hit __is_a cache:              % 11ld\n", __libcrunch_is_a_hit_cache);
+#ifdef LIBCRUNCH_PROFILE_CACHE_MISSES
+	fprintf(crunch_stream_err, "   miss profile:                           \n");
+for (unsigned i = 0; i < miss_vec_nused; ++i)
+{
+	fprintf(crunch_stream_err, "   % 12lx                            % 11ld\n", (unsigned long) miss_vec[i].caller, miss_vec[i].count);
+}
+#endif
 #ifdef LIBCRUNCH_KEEP_EXPENSIVE_COUNTS
 	fprintf(crunch_stream_err, "------------------------------------------------------\n");
 	fprintf(crunch_stream_err, "pointer dereferences:                      % 11ld\n", __libcrunch_ptr_derefs);
@@ -1072,6 +1096,95 @@ struct starts_at_target_offset_and_has_type_args {
 	struct uniqtype *out_cur_obj_uniqtype;
 	unsigned out_offset_from_search_start;
 };
+#define MAX_TO_CACHE 1
+static inline unsigned chain_cache_toplevel(
+		struct uniqtype *cur_u,
+		uintptr_t cur_u_addr,
+		struct uniqtype_containment_ctxt *cur_ucc,
+		uintptr_t initial_u_addr,
+		struct starts_at_target_offset_and_has_type_nocache_args *nocache_args)
+{
+	/* First we always recurse up to the top. */
+	unsigned n_so_far = 0;
+	if (cur_ucc->next) return chain_cache_toplevel(
+		cur_ucc->u_container,
+		cur_u_addr - cur_ucc->u_offset_within_container,
+		cur_ucc->next,
+		initial_u_addr,
+		nocache_args
+	);
+	// we're toplevel; we definitely cache something
+	if (UNIQTYPE_IS_ARRAY_TYPE(cur_u))
+	{
+		/* We now have several potentially distinct types in play.
+		  - "t" is the initial u, i.e. the test type.
+		  - the array type cur_u
+		  - the array element type. */
+		assert(UNIQTYPE_HAS_KNOWN_LENGTH(cur_u));
+		struct uniqtype *array_element_type = UNIQTYPE_ARRAY_ELEMENT_TYPE(cur_u);
+		uintptr_t array_base = cur_u_addr;
+		uintptr_t array_end = cur_u_addr + cur_u->pos_maxoff;
+		cache_is_a((char*) array_base,
+			/* range_limit */ (char*) array_end,
+			/* period */ array_element_type->pos_maxoff,
+			/* we cache the fact that it contains <test_uniqtype>s, not <array element type>s! */
+			/* offset_to_a_t */ (initial_u_addr - cur_u_addr) % array_element_type->pos_maxoff,
+			/* t */ nocache_args->test_type,
+			/* depth */ 1 /* HACK FIXME */);
+		return 1;
+	}
+	// didn't find an array; or we may be a top-level object. Just cache that object
+	cache_is_a(/* range_base */ (char*) cur_u_addr,
+		/* range_limit */ (char*) cur_u + cur_u->pos_maxoff,
+		/* period */ 0,
+		/* offset_to_a_t */ initial_u_addr - cur_u_addr, //cur_contained_pos->un.memb.off,
+		/* t */ nocache_args->test_type,
+		/* depth */ 1 /* HACK FIXME */);
+	return 1;
+}
+
+static inline unsigned chain_consider_caching_array(
+		struct uniqtype *cur_u,
+		uintptr_t cur_u_addr,
+		struct uniqtype_containment_ctxt *cur_ucc,
+		uintptr_t initial_u_addr,
+		struct starts_at_target_offset_and_has_type_nocache_args *nocache_args)
+{
+	/* First we always recurse up to the top. */
+	unsigned n_so_far = 0;
+	if (cur_ucc->next) n_so_far = chain_consider_caching_array(
+		cur_ucc->u_container,
+		cur_u_addr - cur_ucc->u_offset_within_container,
+		cur_ucc->next,
+		initial_u_addr,
+		nocache_args
+	);
+	if (n_so_far != MAX_TO_CACHE)
+	{
+		/* Now we can consider caching ourselves. Don't cache the test type, though. */
+		if (UNIQTYPE_IS_ARRAY_TYPE(cur_u) && cur_u != nocache_args->test_type)
+		{
+			/* We now have several potentially distinct types in play.
+			  - "t" is the initial u, i.e. the test type.
+			  - the array type cur_u
+			  - the array element type. */
+			assert(UNIQTYPE_HAS_KNOWN_LENGTH(cur_u));
+			struct uniqtype *array_element_type = UNIQTYPE_ARRAY_ELEMENT_TYPE(cur_u);
+			uintptr_t array_base = cur_u_addr;
+			uintptr_t array_end = cur_u_addr + cur_u->pos_maxoff;
+			cache_is_a((char*) array_base,
+				/* range_limit */ (char*) array_end,
+				/* period */ array_element_type->pos_maxoff,
+				/* we cache the fact that it contains <test_uniqtype>s, not <array element type>s! */
+				/* offset_to_a_t */ (initial_u_addr - cur_u_addr) % array_element_type->pos_maxoff,
+				/* t */ nocache_args->test_type,
+				/* depth */ 1 /* HACK FIXME */);
+			return n_so_far + 1;
+		}
+	}
+	return n_so_far;
+}
+
 static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 	struct uniqtype_containment_ctxt *ucc,
 	unsigned u_offset_from_search_start,
@@ -1085,6 +1198,7 @@ static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 		ucc, u_offset_from_search_start, &args->nocache_args);
 	if (can_stop_now && __builtin_expect(args->a && args->a->is_cacheable, 1))
 	{
+		assert(u == args->nocache_args.test_type);
 		/* We walked (potentially) a ton of objects. What memranges do we want to cache?
 		 * One answer    : (1) the target object/type and its nearest enclosing array.
 		 * Another answer: (2) the target object/type and its outermost enclosing array.
@@ -1092,39 +1206,62 @@ static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 		 * Another answer: (4) the target object/type whether or not it's in an array.
 		 * Another answer: (5) all of the above.
 		 * Another answer: (6) the target object and all enclosing objects.
-		 * In terms of value for cache entries, it seems (1) is best.
-		 * But also (4) in the case where there is no enclosing array.
+		 * In terms of value for cache entries, it seems choosing an outermore array
+		 * is better -- it covers more memory (but perhaps only a narrow slice of that
+		 * memory).
+		 * We should also do (4) in the case where there is no enclosing array.
 		 */
-		// walk up the context looking for an array type
-		uintptr_t subobj_addr = args->alloc_base + args->nocache_args.target_offset;
-		unsigned back_offset = 0;
-		struct uniqtype_containment_ctxt *c = ucc;
-		for (;
-			c;
-			subobj_addr -= ucc->u_offset_within_container, c = c->next)
+		// walk to the outermost containment context, then walk down looking for an array
+		uintptr_t initial_u_addr = args->alloc_base + args->nocache_args.target_offset;
+		unsigned ncached = /*chain_consider_caching_array*/ chain_cache_toplevel(
+			u,
+			initial_u_addr,
+			ucc,
+			initial_u_addr,
+			&args->nocache_args
+		);
+// 		unsigned ncached = 0;
+// 		// the *cast target* subobject could in principle be an array type
+// 		// ... but it is not the array type we want. So start looking one level up.
+// 		if (ucc && ucc->next)
+// 		{
+// 			// we start with considering the container and *its* containment context
+// 			struct uniqtype *cur_u = ucc->u_container;
+// 			uintptr_t cur_u_addr = initial_u_addr - ucc->u_offset_within_container;
+// 			struct uniqtype_containment_ctxt *c = ucc->next;
+// 			while (c)
+// 			{
+// 				if (UNIQTYPE_IS_ARRAY_TYPE(cur_u))
+// 				{
+// 					/* We now have several potentially distinct types in play.
+// 					  - "t" is the initial u, i.e. the test type.
+// 					  - the array type cur_u
+// 					  - the array element type. */
+// 					assert(UNIQTYPE_HAS_KNOWN_LENGTH(cur_u));
+// 					struct uniqtype *array_element_type = UNIQTYPE_ARRAY_ELEMENT_TYPE(cur_u);
+// 					uintptr_t array_base = cur_u_addr;
+// 					uintptr_t array_end = cur_u_addr + cur_u->pos_maxoff;
+//
+// 					cache_is_a((char*) array_base,
+// 						/* range_limit */ (char*) array_end,
+// 						/* period */ array_element_type->pos_maxoff,
+// 						/* we cache the fact that it contains <test_uniqtype>s, not <array element type>s! */
+// 						/* offset_to_a_t */ (initial_u_addr - cur_u_addr) % array_element_type->pos_maxoff,
+// 						/* t */ args->nocache_args.test_type,
+// 						/* depth */ 1 /* HACK FIXME */);
+// 					++ncached;
+// 					if (ncached == MAX_TO_CACHE) break;
+// 				}
+//
+// 			next:
+// 				cur_u_addr -= c->u_offset_within_container;
+// 				cur_u = c->u_container;
+// 				c = c->next;
+// 			}
+// 		}
+		if (ncached < MAX_TO_CACHE)
 		{
-			if (!c->u_container) break;
-			struct uniqtype *subobj_t = UNIQTYPE_SUBOBJECT_TYPE(c->u_container, c->u_ctxt);
-			if (subobj_t && UNIQTYPE_IS_ARRAY_TYPE(subobj_t))
-			{
-				uintptr_t array_base = subobj_addr;
-				assert(UNIQTYPE_HAS_KNOWN_LENGTH(subobj_t));
-				uintptr_t array_end = subobj_addr + subobj_t->pos_maxoff;
-				struct uniqtype *array_element_type = UNIQTYPE_ARRAY_ELEMENT_TYPE(subobj_t);
-
-				cache_is_a((char*) array_base,
-					/* range_limit */ (char*) array_end,
-					/* period */ array_element_type->pos_maxoff,
-					// we cache the fact that it contains <test_uniqtype>s, not <array element type>s!
-					/* offset_to_a_t */ args->alloc_base + args->nocache_args.target_offset - subobj_addr,
-					/* t */ args->nocache_args.test_type,
-					/* depth */ 1 /* HACK FIXME */);
-				break;
-			}
-		}
-		if (!c)
-		{
-			// it's not an array; we may not have a containing object
+			// didn't find an array; or we may be a top-level object. Just cache that object
 			cache_is_a(/* range_base */ (char*) args->alloc_base + args->nocache_args.target_offset,
 				/* range_limit */ (char*) args->alloc_base + args->nocache_args.target_offset + args->nocache_args.test_type->pos_maxoff,
 				/* period */ 0,
@@ -1135,9 +1272,51 @@ static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 	}
 	return can_stop_now;
 }
+
+static void profile_cache_miss(const void *obj, const void *arg, const void *caller)
+{
+#ifdef LIBCRUNCH_PROFILE_CACHE_MISSES
+	if (!miss_vec)
+	{
+		miss_vec_n = 10000;
+		miss_vec = calloc(miss_vec_n, sizeof (struct cache_miss_record));
+	}
+	if (!miss_vec) abort();
+
+	/* Look for our miss site */
+	if (miss_vec_nused > 0)
+	{
+		struct cache_miss_record key_dummy = (struct cache_miss_record) { .caller = caller };
+		struct cache_miss_record *found = bsearch(&key_dummy, miss_vec,
+			miss_vec_nused, sizeof (struct cache_miss_record), compare_miss_record_by_addr);
+		if (found)
+		{
+			++(found->count);
+			return;
+		}
+	}
+	// we need to add a new entry, perhaps by growing the array
+	if (miss_vec_nused == miss_vec_n)
+	{
+		miss_vec_n *= 2;
+		miss_vec = realloc(miss_vec, miss_vec_n * sizeof (struct cache_miss_record));
+	}
+	assert(miss_vec_nused < miss_vec_n);
+	miss_vec[miss_vec_nused++] = (struct cache_miss_record) {
+		.caller = caller,
+		.count = 1
+	};
+	qsort(miss_vec, miss_vec_nused, sizeof (struct cache_miss_record), compare_miss_record_by_addr);
+#endif
+}
+
 int __is_a_internal(const void *obj, const void *arg)
 {
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
+	// debugging -- please remove
+	fprintf(stderr, "Cache miss: %p type %s, from %p\n", obj, UNIQTYPE_NAME(test_uniqtype),
+		__builtin_return_address(0));
+	profile_cache_miss(obj, arg, __builtin_return_address(0));
 	unsigned containing_instance_offset = 0;
 	CHECK_INIT
 	DO_QUERY(obj)
@@ -1163,13 +1342,6 @@ int __is_a_internal(const void *obj, const void *arg)
 			< test_uniqtype->pos_maxoff)
 	{
 		goto fail;
-	}
-	else if (UNIQTYPE_IS_ARRAY_TYPE(alloc_uniqtype) &&
-		UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)
-		&& UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype) == test_uniqtype
-				&& target_offset_within_uniqtype == 0)
-	{
-		success = 1;
 	}
 	else
 	{
