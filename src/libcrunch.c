@@ -200,100 +200,6 @@ static int do_nothing_cb(struct uniqtype *t, void *ignored)
 // 		}
 // 	}
 // }
-int __hook_loaded_one_object_meta(struct dl_phdr_info *info, size_t size, void *data)
-{
-	/* NOTE: this used to initialize the bounds metadata for static-storage pointers.
-	 * We don't do this any more.
-	 *
-	 * There are several reasons. One is that it's less efficient than a 
-	 * compile-time solution that instruments static initializers.
-	 * Another is that it complicates initialization: the hook gets called
-	 * very early, when it might not be safe to run liballocs queries -- yet
-	 * a query is necessary to initialize the bounds.
-	 * 
-	 * The static solution has the problem that bounds may not be available
-	 * at compile time, in the case of something like
-	 * 
-	 * extern int blah[];
-	 * static int *p = &blah[0];
-	 *
-	 * ... since the bounds for p depend on the exact size of blah, which is
-	 * not decided until link time. However, that could be resolved using
-	 * only link-time mechanisms, e.g. probing the size of symbol blah
-	 * (if only we could insert a relocation that is expanded with the link-time
-	 * size of a symbol! Oh, actually there is one: R_X86_64_SIZE,
-	 * but I guess our instrumentation would have to drop down to assembly level
-	 * to generate these).
-	 */
-// 	struct object_metadata *p_meta = (struct object_metadata *) data;
-// 	const char *real_name = dynobj_name_from_dlpi_name(info->dlpi_name, (void*) info->dlpi_addr);
-// 	
-// 	/* Get the bounds of the initialized data sections in this object.
-// 	 * We make do with the data segment for now. */
-// 	char *data_begin = NULL;
-// 	char *data_end = NULL;
-// 	for (int i = 0; i < info->dlpi_phnum; ++i)
-// 	{
-// 		if (info->dlpi_phdr[i].p_type == PT_LOAD && 
-// 				(info->dlpi_phdr[i].p_flags & PF_R)
-// 				&& (info->dlpi_phdr[i].p_flags & PF_W))
-// 		{
-// 			/* Check this is the first data phdr we've seen. */
-// 			if (data_begin)
-// 			{
-// 				debug_println(1, "saw multiple data segments in %s; bailing", real_name);
-// 				return 1;
-// 			}
-// 			data_begin = (char*) info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
-// 			data_end = data_begin + info->dlpi_phdr[i].p_memsz;
-// 		}
-// 	}
-// 	if (!data_begin)
-// 	{
-// 		debug_println(1, "found no data segment for %s; bailing", real_name);
-// 		return 1;
-// 	}
-// 	
-// 	/* Walk the static allocations in its meta-object, visiting any that
-// 	 * - fall within the bounds of the initialized data section(s), and
-// 	 * - have uniqtypes that are pointers. */
-// 	if (!p_meta || !p_meta->types_handle)
-// 	{
-// 		debug_println(1, "no types handle for %s; bailing", real_name);
-// 		return 1;
-// 	}
-// 	
-// 	void *p_statics = dlsym(p_meta->types_handle, "statics");
-// 	if (!p_statics)
-// 	{
-// 		debug_println(1, "no statics metadata for %s; bailing", real_name);
-// 		return 1;
-// 	}
-// 	
-// 	for (struct static_allocsite_entry *p_static = p_statics;
-// 				p_static->entry.allocsite;
-// 				++p_static)
-// 	{
-// 		if ((char*) p_static->entry.allocsite >= data_begin
-// 					&& (char*) p_static->entry.allocsite < data_end)
-// 		{
-// 			/* FIXME: pointer-containing types too! */
-// 			if (UNIQTYPE_IS_POINTER_TYPE(p_static->entry.uniqtype))
-// 			{
-// 				debug_println(0, "saw a static pointer alloc named %s", p_static->name);
-// 				__shadow_store_bounds_for((void**) p_static->entry.allocsite,
-// 						__fetch_bounds_internal(
-// 							*(void**) p_static->entry.allocsite,
-// 							*(void**) p_static->entry.allocsite,
-// 							UNIQTYPE_POINTEE_TYPE(p_static->entry.uniqtype)
-// 						));
-// 			}
-// 			// else debug_println(0, "... not of pointer type", p_static->name);
-// 		}
-// 	}
-// 	
-	return 0;
-}
 
 static ElfW(Dyn) *get_dynamic_entry_from_section(void *dynsec, unsigned long tag)
 {
@@ -1313,9 +1219,6 @@ static void profile_cache_miss(const void *obj, const void *arg, const void *cal
 int __is_a_internal(const void *obj, const void *arg)
 {
 	const struct uniqtype *test_uniqtype = (const struct uniqtype *) arg;
-	// debugging -- please remove
-	fprintf(stderr, "Cache miss: %p type %s, from %p\n", obj, UNIQTYPE_NAME(test_uniqtype),
-		__builtin_return_address(0));
 	profile_cache_miss(obj, arg, __builtin_return_address(0));
 	unsigned containing_instance_offset = 0;
 	CHECK_INIT
@@ -1386,8 +1289,7 @@ int __is_a_internal(const void *obj, const void *arg)
 					UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype) &&
 					UNIQTYPE_IS_ABSTRACT(UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)))
 				//|| is_lazy_uniqtype(UNIQTYPE_ARRAY_ELEMENT_TYPE(alloc_uniqtype)
-				)
-			&& !__currently_allocating)//, 0)
+				))//, 0)
 	{
 		struct insert *ins = __liballocs_get_insert(NULL, obj);
 		assert(ins);
