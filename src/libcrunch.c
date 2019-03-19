@@ -2006,7 +2006,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 	
 	_Bool success;
 	try_deeper:
-		debug_println(0, "No dice; will try the object type one level down if there is one...");
+		debug_println(1, "No dice; will try the object type one level down if there is one...");
 		success = 0;
 		struct uniqtype_rel_info *contained_ctxt = __liballocs_find_span(cur_obj_uniqtype,
 				target_offset_within_uniqtype, NULL);
@@ -2020,7 +2020,7 @@ int __loosely_like_a_internal(const void *obj, const void *arg)
 				contained_ctxt);
 		}
 		if (!success) goto loosely_like_a_failed;
-		debug_println(0, "... got %s", NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
+		debug_println(1, "... got %s", NAME_FOR_UNIQTYPE(cur_obj_uniqtype));
 
 	} while (1);
 	
