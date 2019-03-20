@@ -2225,15 +2225,15 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 		.target_offset = value_pointee_target_offset_within_uniqtype,
 		.out_seen_at_target_offset = NULL
 	};
-	/* Here we walk the pointed-at subobject hierarchy until we hit 
+	/* Here we walk the pointed-at subobject hierarchy until we hit
 	 * one that is at the offset the pointer value actually points at
 	 * and equals the stored-to pointer's target type. Or if the stored-to
 	 * pointer is generic, it doesn't have to match exactly but should
 	 * be a degreewise match (i.e. degree of no more than one less). */
 	if (!success) success = __liballocs_search_subobjects_spanning(
-		value_pointee_alloc_uniqtype, 
+		value_pointee_alloc_uniqtype,
 		value_pointee_target_offset_within_uniqtype,
-		is_generic ? match_pointer_subobj_generic_cb : match_pointer_subobj_strict_cb, 
+		is_generic ? match_pointer_subobj_generic_cb : match_pointer_subobj_strict_cb,
 		&args,
 		NULL, NULL);
 
@@ -2335,7 +2335,7 @@ can_hold_pointer_failed:
 			NAME_FOR_UNIQTYPE(type_of_pointer_being_stored_to),
 			(long)((char*) obj - (char*) obj_alloc_start),
 			obj_a ? obj_a->name : "(no allocator)",
-			(ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site) && obj_alloc_uniqtype && obj_alloc_size_bytes > obj_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ", 
+			(ALLOC_IS_DYNAMICALLY_SIZED(obj_alloc_start, obj_alloc_site) && obj_alloc_uniqtype && obj_alloc_size_bytes > obj_alloc_uniqtype->pos_maxoff) ? " allocation of " : " ",
 			NAME_FOR_UNIQTYPE(obj_alloc_uniqtype),
 			obj_alloc_site,
 			(long)((char*) value - (char*) value_pointee_alloc_start),
