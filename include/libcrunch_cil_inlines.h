@@ -566,6 +566,35 @@ extern inline int (__attribute__((always_inline,gnu_inline,used)) __can_hold_poi
 		return 1;
 	}
 	__libcrunch_begun++;
+	/* First we look in the cache for any pointer-sized object
+	 * at the target site. Then if it's a pointer... */
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup(
+		&__liballocs_ool_cache,
+		target, NULL, 0);
+	if (hit)
+	{
+		/* We succeed iff hit->t is a pointer type
+		 * and if t points to its *target type*. */
+		// FIXME: replace these nasty hardcoded constants with
+		// use of macros that we can generate from dwarfidl of struct uniqtype
+		// (for clients that can't afford to include uniqtype-defs.h)
+		char kind = *((char*) hit->t + 0xc);
+		if ((kind & 0xf) == 8)
+		{
+			char related[8];
+			__builtin_memcpy(related, (char*) hit->t + 0x18, 8);
+			struct __liballocs_memrange_cache_entry_s *hit2 = __liballocs_memrange_cache_lookup(
+				&__liballocs_ool_cache,
+				value, *(void**) related, 0);
+			if (hit2)
+			{
+				++__libcrunch_is_a_hit_cache;
+				++__libcrunch_succeeded;
+				return 1;
+			}
+		}
+	}
+
 	int ret = __can_hold_pointer_internal((const void *) __libcrunch_detrap(target), value);
 	return ret;
 #else
