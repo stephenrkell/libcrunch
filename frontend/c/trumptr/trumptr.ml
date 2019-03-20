@@ -109,8 +109,8 @@ let likeATypeNames = try begin
     Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LIKE_A_FOR_TYPES")
 end with Not_found -> []
 
-let looseGPCOTTypeNames = try begin
-    Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_USE_LOOSELY_LIKE_A_FOR_TYPES")
+let abstractLvalueTypeNames = try begin
+    Str.split (regexp "[ \t]+") (Sys.getenv "LIBCRUNCH_ABSTRACT_LVALUE_TYPES")
 end with Not_found -> []
 
 let rec findLikeA barename l = match l with 
@@ -197,39 +197,30 @@ let mkCheckInstrsForTargetType
       mkCheckInstrs e enclosingFunction testFunVar inlineAssertFun (instrLoc !currentInst) ourCheckArgs uniqtypeS uniqtypeGlobals currentInst
  end
 
-let rec isGPCOT t = (* generic-pointer-containing object type *)
-isGenericPointerType t
-||
-match t with
-    TVoid(attrs) -> false
-  | TInt(ik, attrs) -> false
-  | TFloat(fk, attrs) -> false
-  | TPtr(pt, attrs) -> isGenericPointerType pt
-  | TArray(at, _, attrs) -> isGPCOT at
-  | TFun(_, _, _, _) -> false
-  | TNamed(ti, attrs) -> isGPCOT ti.ttype
-  | TComp(ci, attrs) -> 
-        let allFieldTypes = List.map (fun fi -> fi.ftype) ci.cfields
-        in
-        List.fold_left (fun acc -> fun ft -> acc || isGPCOT ft) false allFieldTypes
-  | TEnum(ei, attrs) -> false
-  | TBuiltin_va_list(attrs) -> false
-
-(* We actually care about "loose" GPCOTs. These are GPCOTs T that the user
- * has requested we use the more relaxed __loosely_like_a(T) check for. 
- * GPPs are always included, but other (structs) may also be named.
+(* We actually care about "abstract" types. These are types T that the user
+ * has requested we use the more relaxed __loosely_like_a(T) check for.
+ * We used to call these types "generic-pointer-containing-object types".
+ * An instance of void* is trivially a "generic-pointer-containing object".
+ * So casting a pointer to void** always proceeds by the loose check.
+ * However, other types, such as structs, may also be named as abstract.
+ * Then, a cast of any pointer to "pointer-to-[such a struct]" would also be
+ * checked only loosely. To compensate, writes *through* such abstract types
+ * (such as a write through a void* lvalue, say *(void** ) = p) are also checked
+ * against the written-to object (whose actual type may be int*, say).
  * perl needs this, for example.
+ * We also generalise to further levels of indirection. If T is an abstract
+ * lvalue type, then just as we can form a T* from any pointer (we'll check the writes through it),
+ * we can form a T** or T*** (and so on) from any pointer of degree 2, 3 etc..
  *)
-let isLooseGPCOT (t : Cil.typ) = 
-    isGPCOT t && (
+let isAbstractLvalueType (t : Cil.typ) =
         (* all generic pointer types are not only GPCOTs, 
          * but are automagically treated as loose GPCOTs unles opted-out
          * (i.e. this behaviour is opt-out, not opt-in, for void** and friends. *)
         (isGenericPointerType t && not strictVoidpps)
         || 
         (* some named structure types are also GPCOTs *)
-        List.mem (barenameFromSig (getConcreteType (Cil.typeSig t))) looseGPCOTTypeNames
-        (* OR: I THINK: for any subobject of a loose GPCOT, 
+        List.mem (barenameFromSig (getConcreteType (Cil.typeSig t))) abstractLvalueTypeNames
+        (* OR: FIXME: I THINK: for any subobject of a loose GPCOT,
          * if that subobject type is a GPCOT,
          * it is a loose GPCOT. This prevents us from
          * bypassing GPCOT write-checks by selecting a
@@ -237,24 +228,18 @@ let isLooseGPCOT (t : Cil.typ) =
          * necessary? ONLY IF we see through subobjects
          * in our __loosely_like_a check. It'll be easier
          * not to, initially. *)
-    )
 
-let tIsIndirectedLooseGPCOT (t : Cil.typ) = 
+let rec tIsIndirectedAbstractLvalueTypeRec (t : Cil.typ) =
     isPointerType t
-    && (
-        (
-            isGenericPointerType t && 
-            indirectionLevel (Cil.typeSig t) >= 2 &&
-            (not strictVoidpps)
-        )
-    || 
-        let result = isLooseGPCOT (ultimatePointeeT t)
-        in (if result then
-                (output_string stderr ("type " ^ (typToString t) ^ ", ultimate pointee " ^ (typToString (ultimatePointeeT t)) ^ ", ultimately points to a loose GPCOT\n");
+    && (isAbstractLvalueType (pointeeT t)
+      || tIsIndirectedAbstractLvalueTypeRec (pointeeT t))
+
+let tIsIndirectedAbstractLvalueType (t : Cil.typ) =
+    let result = tIsIndirectedAbstractLvalueTypeRec t in
+    (if result then
+                (output_string stderr ("type " ^ (typToString t) ^ ", ultimate pointee " ^ (typToString (ultimatePointeeT t)) ^ ", is an indirection of an abstract lvalue type\n");
                 result)
             else result)
-    )
-
 
 class trumPtrExprVisitor = fun enclosingFile -> 
                            fun enclosingFunction -> 
@@ -312,16 +297,45 @@ class trumPtrExprVisitor = fun enclosingFile ->
         Some(_) -> true
       | None -> false
     in
-    let lvalueNamesPointerThroughPtrToLooseGPCOT lv = match lv with 
+    let lvalueDerefsPtrToAbstractLvalueType lv = match lv with 
         (Mem(e), offs) when
-            (* we're writing to an lvalue of generic pointer type, 
-             * i.e. one of the subobjects in the GPCOT that actually
-             * needs checking. *)
+            (* Note that it's not the type we're *writing* that decides
+             * that we need to check a write.
+             * It's the type we're dereferencing.
+             * So, for example, if I have
+             *
+             *               struct S { void *p; other stuff; };
+             *
+             * and struct S is not an abstract lvalue type, even though
+             * its constituent void* is,
+             *
+             * then for some S* s, I can do
+             *
+             *               ( *s ).p
+             *
+             * without needing a write-through check. Because we could
+             * not form the pointer "s" by the looser method.
+             *
+             * Conversely if I'm writing a subobject through a struct type
+             * that *is* an abstract lvalue type, say
+             *
+             *               struct Lens { void *p; int x; other stuff; };
+             *
+             * then if I do
+             *
+             *               ( *lens ).p = ...
+             *
+             * I do need to check the write. But if I do
+             *
+             *               ( *lens ).x
+             *
+             * .. I do *not* need to, because we don't play loose with integer
+             * lvalues. *)
             (let writtenObjectType = Cil.typeOf (Lval(Mem(e), offs))
              in 
-             let writtenThroughPointerType = Cil.typeOf e      (* a pointer type*)
+             let dereferencedPointerType = Cil.typeOf e      (* a pointer type*)
              in
-             let writtenThroughPointeeType = Cil.typeOf (Lval(Mem(e), NoOffset))
+             let dereferencedPointeeType = Cil.typeOf (Lval(Mem(e), NoOffset))
              in
              (* What about writes of the form
              
@@ -332,10 +346,10 @@ class trumPtrExprVisitor = fun enclosingFile ->
                      OH, but that's a nested Mem:
                       Lval(Mem(Lval(Mem( ...
                      ... and the outermost Mem *is* a pointer to GPCOT.
-                     So we're okay as we are.
+                     So we don't need any additional cases.
               *)
-              isGenericPointerType writtenObjectType
-              && isLooseGPCOT writtenThroughPointeeType) -> true
+              tIsIndirectedAbstractLvalueType dereferencedPointerType
+              && isAbstractLvalueType writtenObjectType) -> true
       | _ -> false
     in
     let (maybeWrittenLv, doingWrite, writtenType, doingIndirectCall) = match i with 
@@ -438,7 +452,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
         in
         let writtenLv = match maybeWrittenLv with Some(lv) -> lv | None -> failwith "logic error"
         in
-        if not (lvalueNamesPointerThroughPtrToLooseGPCOT writtenLv) then []
+        if not (lvalueDerefsPtrToAbstractLvalueType writtenLv) then []
         else begin
           let writtenType = Cil.typeOf (Lval(writtenLv))
           in
@@ -685,8 +699,8 @@ class trumPtrExprVisitor = fun enclosingFile ->
           (* To any void** or higher-degree void ptr is okay if we're not being strict. 
            * BUT we also have to check that the target degree is not greater than the 
            * source degree, or else do a check. 
-           * And then we generalise this to "loose GPCOTs",  *)
-          if tIsIndirectedLooseGPCOT targetT
+           * And then we generalise this to "loose GPCOTs", and to "abstract lvalue types". *)
+          if tIsIndirectedAbstractLvalueType targetT
           then
             (* If we're (statically) casting away levels of indirection,
              * *and* if the target type is a pointer to GPP,
@@ -714,7 +728,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
              *          that we present it to the user as a single function.
              *)
             if (indirectionLevel subexTs >= indirectionLevel targetTs
-                && tsIsMultiplyIndirectedGenericPointer targetTs) then DoChildren
+                && tIsIndirectedAbstractLvalueType targetT) then DoChildren
             else
               begin
                 (* Output a dynamic check of the pointer degree *)
@@ -733,7 +747,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                            * i.e. the pointee type of targetTs. *)
                           (let concretePtdts = match targetTs with 
                              TSPtr(ptdts, attrs) -> getConcreteType ptdts
-                           | _ -> failwith "pointer to GPCOT is not a pointer"
+                           | _ -> failwith "pointer to abstract lvalue type is not a pointer"
                           in
                           let uniqtypeV, uniqtypeS = uniqtypeCheckArgs concretePtdts enclosingFile uniqtypeGlobals
                           in
@@ -762,7 +776,7 @@ class trumPtrExprVisitor = fun enclosingFile ->
                 (* change to a reference to the decl'd tmp var *)
                 ChangeTo ( CastE(targetT, subex) )
               end
-          else (* not multiply-indirected void (or rather, not pointer to loose GPCOT) *) begin
+          else (* not multiply-indirected void (or rather, not pointer to loose GPCOT) (or rather: abstract lvalue type mumble) *) begin
           match targetTs with 
             TSPtr(TSFun(_, _, _, _), _) when sloppyFps -> failwith "impossible sloppyFps failure"   
           | TSPtr(TSBase(TVoid([])), []) (* when tsIsPointer subexTs *) -> DoChildren
