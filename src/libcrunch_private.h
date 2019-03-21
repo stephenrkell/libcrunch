@@ -62,7 +62,7 @@ extern unsigned long __libcrunch_trivially_succeeded_null;
 extern unsigned long __libcrunch_checked_pointer_adjustments;
 #endif
 extern unsigned long __libcrunch_aborted_typestr;
-extern unsigned long __libcrunch_lazy_heap_type_assignment;
+extern unsigned long __libcrunch_succeeded_by_specialization;
 extern unsigned long __libcrunch_failed_and_suppressed;
 extern unsigned long __libcrunch_failed_in_alloc;
 extern unsigned long __libcrunch_succeeded;

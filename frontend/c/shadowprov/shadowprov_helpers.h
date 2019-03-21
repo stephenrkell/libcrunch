@@ -7,9 +7,20 @@ void *(__attribute__((pure)) __liballocs_get_alloc_base)(const void *obj); // be
 /* FIXME: if I don't do the definition in two stages like this,
  * starting with the opaque declaration, CIL forks into two struct
  * defs, one of them alpha-renamed to shadow_byte___0... WHY? */
-struct shadow_byte;
-typedef struct shadow_byte __shadow_t;
 struct shadow_byte { char byte; };
+typedef struct shadow_byte __shadow_t;
+
+struct __fat_value_s
+{
+	struct shadow_byte shadow;
+	unsigned long shadowable;
+};
+union __fat_value_u
+{
+	struct __fat_value_s s;
+	__int128 raw;
+};
+
 typedef char __raw_shadow_t;
 /* This must be a type to which a cast from any shadowed primitive
  * succeeds and doesn't create a new shadow: it might discard one
@@ -82,21 +93,6 @@ extern inline void
 		warnx("Storing non-null pointer with no provenance");
 	}
 	*(__raw_shadow_t *) shadow_stored_addr = (__raw_shadow_t) shadow.byte;
-}
-
-extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure))
-	__fetch_shadow_inl)(__shadowed_value_t v, const void *loaded_from, void *t)
-{
-	if (loaded_from)
-	{
-		__shadow_t s = (__shadow_t) { *(__raw_shadow_t *) __shadow_stored_addr(loaded_from) };
-		if (IS_SANE_NONNULL(v) && !t && !s.byte)
-		{
-			warnx("Loaded non-null pointer with no provenance");
-		}
-		return s;
-	}
-	return __make_invalid_shadow(v);
 }
 
 extern inline void *(__attribute__((always_inline,gnu_inline,used,malloc)) __alloc_shadow_stack_space)
@@ -173,6 +169,21 @@ extern inline __shadow_t (__attribute__((always_inline,gnu_inline,pure,__const__
 	
 	return (__shadow_t) { made };
 }
+extern inline __shadow_t (__attribute__((always_inline,gnu_inline,used,pure))
+	__fetch_shadow_inl)(__shadowed_value_t v, const void *loaded_from, void *t)
+{
+	if (loaded_from)
+	{
+		__shadow_t s = (__shadow_t) { *(__raw_shadow_t *) __shadow_stored_addr(loaded_from) };
+		if (IS_SANE_NONNULL(v) && !t && !s.byte)
+		{
+			warnx("Loaded non-null pointer with no provenance");
+		}
+		return s;
+	}
+	return __make_shadow(__liballocs_get_alloc_base((void*) v), 0);
+}
+
 
 extern inline void (__attribute__((always_inline,gnu_inline,used)) __push_local_argument_shadow)
 	(__shadow_t shadow)
