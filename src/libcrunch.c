@@ -597,11 +597,12 @@ void try_register_fixup(int regnum, mcontext_t *p_mcontext)
 			MSGLIT("not a trap pointer\n");
 			return;
 		report:
-			MSGLIT("possibly a ");
+			MSGLIT(" a ");
 			MSGBUF(kindstr);
 			const int shiftamount = 8*sizeof(uintptr_t) - LIBCRUNCH_TRAP_TAG_SHIFT;
 			*p_savedval = (*p_savedval << shiftamount) >> shiftamount;
-			MSGLIT(" trap pointer, so detrapping them; new value is ");
+			MSGLIT(" trap pointer\n");
+			MSGLIT("Attempting resume following de-trap; new value is ");
 			MSGADDR(*p_savedval);
 			MSGLIT("\n");
 			did_fixup = 1;
@@ -775,6 +776,7 @@ static void clear_mem_refbits(void)
 	close(fd);
 }
 
+int __libcrunch_global_init(void) __attribute__((constructor));
 int __libcrunch_global_init(void)
 {
 	if (__libcrunch_is_initialized) return 0; // we are okay
