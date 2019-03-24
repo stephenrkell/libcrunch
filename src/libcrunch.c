@@ -972,7 +972,7 @@ static inline unsigned chain_cache_toplevel(
 	// didn't find an array; or we may be a top-level object. Just cache that object
 	cache_is_a(/* range_base */ (char*) cur_u_addr,
 		/* range_limit */ (char*) cur_u + cur_u->pos_maxoff,
-		/* period */ 0,
+		/* period */ nocache_args->test_type->pos_maxoff,
 		/* offset_to_a_t */ initial_u_addr - cur_u_addr, //cur_contained_pos->un.memb.off,
 		/* t */ nocache_args->test_type,
 		/* depth */ 1 /* HACK FIXME */);
@@ -2412,7 +2412,7 @@ static _Bool bounds_cb(struct uniqtype *u, struct uniqtype_containment_ctxt *ucc
 	 * we actually want to range over the outermost bounds.
 	 * This is not the case of arrays of structs of arrays.
 	 * So we want to clear the state once we descend through a non-array. */
-	if (ucc && UNIQTYPE_IS_ARRAY_TYPE(ucc->u_container))
+	if (ucc && ucc->u_container && UNIQTYPE_IS_ARRAY_TYPE(ucc->u_container))
 	{
 		arg->innermost_containing_array_type_span_start_offset
 		 = u_offset_from_search_start - ucc->u_offset_within_container;
@@ -2564,7 +2564,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		char *limit = (char*) obj + (t->pos_maxoff > 0 ? t->pos_maxoff : 1);
 		if (a && a->is_cacheable)
 		{
-			cache_bounds(obj, limit, 0, 0, t, /* HACK FIXME depth */ 1);
+			cache_bounds(obj, limit, (t->pos_maxoff > 0 ? t->pos_maxoff : 1), 0, t, /* HACK FIXME depth */ 1);
 		}
 		return __make_bounds((unsigned long) obj, (unsigned long) limit);
 	}
