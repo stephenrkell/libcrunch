@@ -1,11 +1,34 @@
 #!/bin/bash
-# FIXME: rewrite this in C
+# FIXME: rewrite this in C, or at least as a POSIX shell script.
 
 # Using gcc's -wrapper option, the compiler driver will invoke
 # us instead of cpp, cc1, etc., with the full command path as
 # $1. We want to substitute cilpp in the right places.
 # NOTE: this whole thing is necessary only because the driver
 # does not want to run `cpp' ever... it uses cc1 -E.
+#
+# clang does not (last I checked) support -wrapper, but I
+# imagine it's only a matter of time.
+
+# If we are symlinked under a name ending '-cflags', '-cppflags',
+# '-ldflags' etc, we print out the options that one should pass
+# to the compiler for the wrapper to be employed. So you can do
+#
+# gcc `/path/to/cilpp/cilpp-cflags` <... normal gcc args...>
+#
+# to run with cilpp.
+case "$0" in
+    (*cflags|*cppflags)
+        /bin/echo -no-integrated-cpp -wrapper "$(readlink -f "$(dirname "$0")")"/wrapper
+        exit 0
+    ;;
+    (*ldflags)
+        # we don't interfere with linking, so no extra ldflags
+        exit 0
+    ;;
+    (*) # silently continue, i.e. actually act as the wrapper command
+    ;;
+esac
 
 debug_print () {
     lvl="$1"

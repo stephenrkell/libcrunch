@@ -1,4 +1,4 @@
-(* Copyright (c) 2014--16,
+(* Copyright (c) 2014--19,
  *  Stephen Kell        <stephen.kell@cl.cam.ac.uk>
  *
  * and based on logwrites.ml, which is 
@@ -615,6 +615,14 @@ let rec boundsDescrForExpr e currentFuncAddressTakenLocalNames localLvalToBounds
     match simplifiedPtrExp with 
         Lval(Var(vi), offs) when varinfoIsLocal vi currentFuncAddressTakenLocalNames -> 
             BoundsLval(localLvalToBoundsFun (Var(vi), offs))
+      | StartOf (Mem(Lval(Var(vi), NoOffset)), NoOffset) when varinfoIsLocal vi currentFuncAddressTakenLocalNames -> 
+            (* The StartOf and Mem mostly cancel each other out. 
+             * The effect is to cast the pointer from a pointer-to-array type
+             * to a pointer-to- element type. This does not affect the bounds,
+             * since we represent the bounds in terms of a base and limit.
+             * The bounds are as if we were asking about the pointer-to-element.
+             *)
+            boundsDescrForExpr (Lval(Var(vi), NoOffset)) currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile
       | (* for pointer arithmetic, just use the raw input pointer's bounds *) 
         BinOp(PlusPI, ptrE, intE, ptrT) -> boundsDescrForExpr ptrE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile
       |  BinOp(MinusPI, ptrE, intE, ptrT) -> boundsDescrForExpr ptrE currentFuncAddressTakenLocalNames localLvalToBoundsFun tempLoadExprs wholeFile
@@ -624,15 +632,16 @@ let rec boundsDescrForExpr e currentFuncAddressTakenLocalNames localLvalToBounds
     let maybeLoadedFromLv = (
         (* getLoadedFromLv simplifiedPtrExp tempLoadExprs currentFuncAddressTakenLocalNames *) 
         debug_print 1 ("Getting loaded-from addr for ptr expr: " ^ (expToCilString simplifiedPtrExp) ^ "\n");
+        (* Note that getStoredPtrLvalForPtrExp can see through Mem, CastE and so on. *)
         match getStoredPtrLvalForPtrExp simplifiedPtrExp wholeFile with
         |   Some(loadHost, loadOffs) ->
                 if not (hostIsLocal loadHost currentFuncAddressTakenLocalNames) 
                 then (
                     debug_print 1 ("It's a non-local lval\n");
-                    Some((loadHost, loadOffs))
+                    Some((loadHost, loadOffs)) (* The pointer load is done from some non-local storage *)
                 ) else (* the host is local -- this will never be hit! *) 
                     failwith ("impossible: exp " ^ (expToString simplifiedPtrExp)
-                        ^ " did not hit varinfoislocal but also stores a pointer locally " ^ 
+                        ^ " is not a local-varinfo lvalue but, according to getStoredPtrLvalForPtrExp, accesses a local-storage pointer " ^ 
                         (lvalToString (loadHost, loadOffs)))
         | None -> None
     ) in
@@ -3055,12 +3064,12 @@ class crunchBoundVisitor = fun enclosingFile ->
                 (Mem(memExpr), offsetFromList offsetsOkayWithoutCheck)
              in
              let rec hoistIndexing ol lhost offsetsOkayWithoutCheck origHost prevOffsetList = 
-                (* let _ = debug_print 1 ("hoist indexing on" ^ 
+                 let _ = debug_print 1 ("hoist indexing on" ^ 
                     "\nlval " ^ (lvalToCilString (lhost, offsetFromList (offsetsOkayWithoutCheck @ ol))) ^
                     "\ntype " ^ (typToString (Cil.typeOf (Lval(lhost, offsetFromList (offsetsOkayWithoutCheck @ ol))))) ^
                     "\norig host " ^ (lvalToCilString (origHost, NoOffset)) ^
                     "\nprev offset list " ^ (List.fold_left (fun s -> fun ox -> s ^ ", " ^ (offsetToString ox)) "" prevOffsetList)
-                    ^ "\n") in let _ = flush stderr in *)
+                    ^ "\n") in let _ = flush stderr in 
                  match ol with 
                      [] -> (lhost, offsetFromList offsetsOkayWithoutCheck)
                    | NoOffset :: rest -> failwith "impossible: NoOffset in offset list"
