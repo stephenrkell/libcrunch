@@ -1583,11 +1583,11 @@ int __is_a_function_refining_internal(const void *obj, const void *arg)
 					/* HACK: a little bit of C-specifity is creeping in here.
 					 * FIXME: adjust this to reflect sloppy generic-pointer-pointer matches! 
 					      (only if LIBCRUNCH_STRICT_GENERIC_POINTERS not set) */
+					//	||  (UNIQTYPE_POINTEE_TYPE((to)) == pointer_to___uniqtype__signed_char)
 					#define would_always_succeed(from, to) \
 						( \
 							!UNIQTYPE_IS_POINTER_TYPE((to)) \
 						||  (UNIQTYPE_POINTEE_TYPE((to)) == pointer_to___uniqtype__void) \
-						||  (UNIQTYPE_POINTEE_TYPE((to)) == pointer_to___uniqtype__signed_char) \
 						||  (UNIQTYPE_IS_POINTER_TYPE((from)) && \
 							({ \
 								struct starts_at_target_offset_and_has_type_nocache_args args = { \
@@ -1692,8 +1692,9 @@ static _Bool pointer_degree_and_ultimate_pointee_type(struct uniqtype *t, int *o
 static _Bool is_generic_ultimate_pointee(struct uniqtype *ultimate_pointee_type)
 {
 	return ultimate_pointee_type == pointer_to___uniqtype__void 
-		|| ultimate_pointee_type == pointer_to___uniqtype__signed_char
-		|| ultimate_pointee_type == pointer_to___uniqtype__unsigned_char;
+		//|| ultimate_pointee_type == pointer_to___uniqtype__signed_char
+		//|| ultimate_pointee_type == pointer_to___uniqtype__unsigned_char
+		;
 }
 
 static _Bool holds_pointer_of_degree(struct uniqtype *u, int d, unsigned target_offset)
@@ -2925,8 +2926,8 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 			/* If it really is a void* object, we can go ahead  */
 			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__void
 			/* Ditto for any other generic pointer? FIXME: think more about this.  */
-			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__signed_char
-			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__unsigned_char
+			//|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__signed_char
+			//|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == pointer_to___uniqtype__unsigned_char
 			/* ... and we do the same if the static guess agrees with the cache */
 			|| UNIQTYPE_POINTEE_TYPE(cached_target_alloc_type) == static_guessed_srcval_pointee_type)
 		{
