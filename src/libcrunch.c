@@ -2386,6 +2386,15 @@ out:
 	return __real___notify_copy(dest, src, n);
 }
 
+static void cache_containment_facts(struct uniqtype *ultimate_u,
+	struct uniqtype *contained_u,
+	struct uniqtype_containment_ctxt *ucc,
+	unsigned distance_walked_back)
+{
+	// This is called from bounds_cb when we succeed at locating
+	// TODO: fill me in once we know what we want to cache.
+}
+
 struct bounds_cb_arg
 {
 	struct uniqtype *passed_in_t;
@@ -2463,8 +2472,12 @@ static _Bool bounds_cb(struct uniqtype *u, struct uniqtype_containment_ctxt *ucc
 		if (u->pos_maxoff < arg->passed_in_t->pos_maxoff)
 		{
 			// usually shouldn't happen, but might with __like_a prefixing
-			arg->success = 1;
-			return 1;
+			// arg->success = 1;
+			// return 1;
+			// EXCEPT it also happens with stack frames that are de-facto unions.
+			// In that case, we should continue with the sibling members,
+			// looking for one whose size does match.
+			return 0; // keep going here too
 		}
 		if (u->pos_maxoff > arg->passed_in_t->pos_maxoff)
 		{
@@ -2473,10 +2486,9 @@ static _Bool bounds_cb(struct uniqtype *u, struct uniqtype_containment_ctxt *ucc
 		}
 		
 		assert(u->pos_maxoff == arg->passed_in_t->pos_maxoff);
-		/* What are the array bounds? We don't have enough context,
-		 * so the caller has to figure it out. */
 		arg->success = 1;
 		arg->matched_t = u;
+		cache_containment_facts(u, ucc);
 
 		return 1;
 	}
