@@ -2387,9 +2387,9 @@ out:
 }
 
 static void cache_containment_facts(struct uniqtype *ultimate_u,
-	struct uniqtype *contained_u,
-	struct uniqtype_containment_ctxt *ucc,
-	unsigned distance_walked_back)
+	//struct uniqtype *contained_u,
+	struct uniqtype_containment_ctxt *ucc/*,
+	unsigned distance_walked_back*/)
 {
 	// This is called from bounds_cb when we succeed at locating
 	// TODO: fill me in once we know what we want to cache.
