@@ -579,13 +579,11 @@ extern inline int (__attribute__((always_inline,gnu_inline,used)) __can_hold_poi
 		// use of macros that we can generate from dwarfidl of struct uniqtype
 		// (for clients that can't afford to include uniqtype-defs.h)
 		char kind = *((char*)(unsigned long) hit->t + 0xc);
-		if ((kind & 0xf) == 8)
+		if (UNIQTYPE_QD_KIND(hit->t) == 8)
 		{
-			char related[8];
-			__builtin_memcpy(related, (char*)(unsigned long) hit->t + 0x18, 8);
 			struct __liballocs_memrange_cache_entry_s *hit2 = __liballocs_memrange_cache_lookup(
 				&__liballocs_ool_cache,
-				value, *(void**) related, 0);
+				value, UNIQTYPE_QD_RELATED0_T(hit->t), 0);
 			if (hit2)
 			{
 				++__libcrunch_is_a_hit_cache;

@@ -960,25 +960,61 @@ static inline unsigned chain_cache_toplevel(
 		struct uniqtype *array_element_type = UNIQTYPE_ARRAY_ELEMENT_TYPE(cur_u);
 		uintptr_t array_base = cur_u_addr;
 		uintptr_t array_end = cur_u_addr + cur_u->pos_maxoff;
+		/* If our test-type instance was not found at offset zero,
+		 * or if our array period does not equal the test type size,
+		 * we record a containment fact in the uniqtype itself. */
+		struct uniqtype *memrange_type_to_use;
+		if (0 != (initial_u_addr - cur_u_addr) % array_element_type->pos_maxoff
+			|| nocache_args->test_type->pos_maxoff != array_element_type->pos_maxoff)
+		{
+			memrange_type_to_use = array_element_type;
+			// cache a containment fact
+			memrange_type_to_use->cache_word = (struct alloc_addr_info) {
+				.addr = (unsigned long) nocache_args->test_type,
+				.bits = (initial_u_addr - cur_u_addr) % array_element_type->pos_maxoff
+			};
+		}
+		else
+		{
+			// cheeky HACK: just pretend the array is of "test type", since it's of
+			// a structure that is the same size and contains test_type at offset 0
+			// (even though there might be a nest of one-member structures, say)
+			memrange_type_to_use = nocache_args->test_type;
+		}
 		cache_is_a((char*) array_base,
 			/* range_limit */ (char*) array_end,
 			/* period */ array_element_type->pos_maxoff,
 			/* we cache the fact that it contains <test_uniqtype>s, not <array element type>s! */
-			/* offset_to_a_t */ (initial_u_addr - cur_u_addr) % array_element_type->pos_maxoff,
-			/* t */ nocache_args->test_type,
+			/* FIXME: if nonzero offset, cache in the uniqtype --
+			 * this argument will now be ignored */
+			/* offset_to_a_t */ 0/*(initial_u_addr - cur_u_addr) % array_element_type->pos_maxoff*/,
+			/* t */ /*nocache_args->test_type*/
+				memrange_type_to_use,
 			/* depth */ 1 /* HACK FIXME */);
 		return 1;
 	}
 	// didn't find an array; or we may be a top-level object. Just cache that object
+	if (0 != initial_u_addr - cur_u_addr)
+	{
+		// cache a containment fact
+		cur_u->cache_word = (struct alloc_addr_info) {
+			.addr = (unsigned long) nocache_args->test_type,
+			.bits = (initial_u_addr - cur_u_addr)
+		};
+	}
 	cache_is_a(/* range_base */ (char*) cur_u_addr,
 		/* range_limit */ (char*) cur_u + cur_u->pos_maxoff,
 		/* period */ nocache_args->test_type->pos_maxoff,
+		/* FIXME: if nonzero offset, cache in the uniqtype --
+		 * this argument will now be ignored */
 		/* offset_to_a_t */ initial_u_addr - cur_u_addr, //cur_contained_pos->un.memb.off,
 		/* t */ nocache_args->test_type,
 		/* depth */ 1 /* HACK FIXME */);
 	return 1;
 }
 
+/* This code has not been ported to the new no-containment-fact caching regime. */
+#if 0
 static inline unsigned chain_consider_caching_array(
 		struct uniqtype *cur_u,
 		uintptr_t cur_u_addr,
@@ -1020,6 +1056,7 @@ static inline unsigned chain_consider_caching_array(
 	}
 	return n_so_far;
 }
+#endif
 
 static _Bool starts_at_target_offset_and_has_type(struct uniqtype *u,
 	struct uniqtype_containment_ctxt *ucc,
