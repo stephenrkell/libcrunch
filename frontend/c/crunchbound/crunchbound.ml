@@ -303,6 +303,14 @@ let isPointerTypeNeedingBounds t enclosingFile =
 let exprNeedsBounds expr enclosingFile =
     typeNeedsBounds (Cil.typeOf expr) enclosingFile
 
+(* EXPERIMENT: don't bother widening bounds on casts to char* *)
+let skipWideningTo targetTS =
+    match targetTS with TSPtr(concreteX, _) ->
+        (concreteX = typeSig charType
+      || concreteX = typeSig ucharType
+      || concreteX = typeSig scharType)
+      | _ -> false
+
 let castNeedsFreshBounds sourceE targetT enclosingFile =
     let sourceT = Cil.typeOf sourceE in
     if (!noObjectTypeInfo && isPointerType sourceT) then false else
@@ -314,8 +322,11 @@ let castNeedsFreshBounds sourceE targetT enclosingFile =
     && (not (isStaticallyNullPtr sourceE) && not (isStaticallyZero sourceE))
     (* AND either the cast-from expr does not have bounds, or it has different bounds *)
     && (
+        (not (typeNeedsBounds sourceT enclosingFile))
+      ||
         (sourceConcrete <> targetConcrete
-        && (* possibly-different sizes?
+        && (
+           (* possibly-different sizes?
             * ARGH no, we can't be clever and just look at sizes, because
             * we depend on casts after allocation functions, even if they return void** or similar.
             * e.g.
@@ -335,12 +346,13 @@ let castNeedsFreshBounds sourceE targetT enclosingFile =
             * the temporary. YES, this should probably be a separate CIL pass, running
             * before the cast-collapsing one.
             *)
-            (not false(*(tsIsPointer targetTS && tsIsPointer sourceTS && 
+            not false(*(tsIsPointer targetTS && tsIsPointer sourceTS && 
                 let sourcePointeeT = match unrollType sourceT with TPtr(x, _) -> x | _ -> failwith "impossible" in
                 let targetPointeeT = match unrollType targetT with TPtr(x, _) -> x | _ -> failwith "impossible" in
-                sizeOf sourcePointeeT = sizeOf targetPointeeT )*))
+                sizeOf sourcePointeeT = sizeOf targetPointeeT )*)
         )
-        || (not (typeNeedsBounds sourceT enclosingFile))
+        && (not (skipWideningTo targetConcrete))
+        )
     )
 
 let castWantsCachePrefill sourceE targetT enclosingFile =
@@ -367,7 +379,11 @@ let castWantsCachePrefill sourceE targetT enclosingFile =
          * in the case of CastE(voidPtrPtrType, _).
          * Control flow here is a mess....  *)
     
-    (*  (not (isPointerType targetT))  || *) isGenericPointerType targetT )
+       (*  (not (isPointerType targetT))  || *) isGenericPointerType targetT
+      ||   (isPointerType targetT && let upts = ultimatePointeeTs targetConcrete in
+        upts = Cil.typeSig(charType) || upts = Cil.typeSig(ucharType) || upts = Cil.typeSig(scharType))
+    )
+
 
 let rec boundsIndexExprForOffset (startIndexExpr: Cil.exp) (offs : Cil.offset) (host : Cil.lhost) (prevOffsets : Cil.offset) gs = 
     debug_print 1 ("Hello from boundsIndexExprForOffset\n");

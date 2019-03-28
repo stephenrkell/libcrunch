@@ -884,11 +884,20 @@ extern void __ensure_bounds_in_cache(unsigned long ptr, __libcrunch_bounds_t ptr
 extern inline void ( __attribute__((always_inline,gnu_inline)) __prefill_cache_hint)(unsigned long ptr, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t);
 extern inline void ( __attribute__((always_inline,gnu_inline)) __prefill_cache_hint)(unsigned long ptr, __libcrunch_bounds_t ptr_bounds, struct uniqtype *t)
 {
-	// __ensure_bounds_in_cache(ptr, ptr_bounds, t);
+	__ensure_bounds_in_cache(ptr, ptr_bounds, t);
 }
 
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz);
-extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t __attribute__((unused)), unsigned long t_sz)
+/* HACK: pasted from uniqtype-defs.h */
+#ifndef UNIQTYPE_DECLS
+struct alloc_addr_info
+{
+	unsigned long addr:47;
+	unsigned flag:1;
+	unsigned bits:16;
+};
+#endif
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t, unsigned long t_sz);
+extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used)) __fetch_bounds_from_cache)(const void *ptr, const void *derived_ptr_maybetrapped, struct uniqtype *t, unsigned long t_sz)
 {
 	/* We understand trap ptrs */
 	const void *testptr;
@@ -899,24 +908,22 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	const void *derived = (const void *) __libcrunch_detrap(derived_ptr_maybetrapped);
 	
 	/* If we hit the is-a cache, we can return an answer inline. */
-	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup(
-			&__liballocs_ool_cache, testptr, NULL, /* t->pos_maxoff */ t_sz);
-	if (hit)
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup_range(
+			&__liballocs_ool_cache, testptr);
+	if (hit &&
+		hit->period == t_sz &&
+		0 == ((char*) obj - (char*) hit->range_base) % hit->period // the "mod check" is important
+	)
 	{
 		/* Is ptr actually a t? If not, we're in trouble!
 		 * Maybe it's one-past and we just de-trapped it? 
 		 * NO, we handle that in caller. */
-		//if (unlikely(!hit->result, 0))
-		//{
-		//	// loop: goto loop; /* internal error! this shouldn't happen! etc. */
-		//	__asm__ volatile ("ud2");
-		//}
-		/* HMM. Commented this abort out since I'm now less sure that it's a good idea.
-		 * See the bounds-toint test case. */
-		/* Does "obj" include "derivedfrom"? */
 		return __make_bounds((unsigned long) hit->range_base, (unsigned long) hit->range_limit);
 	}
-	else if (unlikely((hit = __liballocs_memrange_cache_lookup(
+	// TODO: else if hit but not a period match... is it congruent to X modulo period,
+	// where X is the offset of the contained-range fact currently cached? also check sz
+
+	if (unlikely((hit = __liballocs_memrange_cache_lookup(
 			&__libcrunch_fake_bounds_cache, testptr, NULL, /* t->pos_maxoff */ t_sz), hit != (void*)0)))
 	{
 		/* We hit a "fake" entry that we use to suppress repeated failures for
