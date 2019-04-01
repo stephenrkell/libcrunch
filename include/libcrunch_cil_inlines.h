@@ -564,6 +564,33 @@ extern inline int (__attribute__((always_inline,gnu_inline,used)) __can_hold_poi
 		return 1;
 	}
 	__libcrunch_begun++;
+	/* First we look in the cache for any pointer-sized object
+	 * at the target site. Then if it's a pointer... */
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup(
+		&__liballocs_ool_cache,
+		target, NULL, 0);
+	if (hit)
+	{
+		/* We succeed iff hit->t is a pointer type
+		 * and if t points to its *target type*. */
+		// FIXME: replace these nasty hardcoded constants with
+		// use of macros that we can generate from dwarfidl of struct uniqtype
+		// (for clients that can't afford to include uniqtype-defs.h)
+		char kind = *((char*)(unsigned long) hit->t + 0xc);
+		if (UNIQTYPE_QD_KIND(hit->t) == 8)
+		{
+			struct __liballocs_memrange_cache_entry_s *hit2 = __liballocs_memrange_cache_lookup(
+				&__liballocs_ool_cache,
+				value, UNIQTYPE_QD_RELATED0_T(hit->t), 0);
+			if (hit2)
+			{
+				++__libcrunch_is_a_hit_cache;
+				++__libcrunch_succeeded;
+				return 1;
+			}
+		}
+	}
+
 	int ret = __can_hold_pointer_internal((const void *) __libcrunch_detrap(target), value);
 	return ret;
 #else
@@ -868,8 +895,8 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	const void *derived = (const void *) __libcrunch_detrap(derived_ptr_maybetrapped);
 	
 	/* If we hit the is-a cache, we can return an answer inline. */
-	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup_notype(
-			&__liballocs_ool_cache, testptr, /* t->pos_maxoff */ t_sz);
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup(
+			&__liballocs_ool_cache, testptr, NULL, /* t->pos_maxoff */ t_sz);
 	if (hit)
 	{
 		/* Is ptr actually a t? If not, we're in trouble!
@@ -883,22 +910,22 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 		/* HMM. Commented this abort out since I'm now less sure that it's a good idea.
 		 * See the bounds-toint test case. */
 		/* Does "obj" include "derivedfrom"? */
-		return __make_bounds((unsigned long) hit->obj_base, (unsigned long) hit->obj_limit);
+		return __make_bounds((unsigned long) hit->range_base, (unsigned long) hit->range_limit);
 	}
-	else if (unlikely((hit = __liballocs_memrange_cache_lookup_notype(
-			&__libcrunch_fake_bounds_cache, testptr, /* t->pos_maxoff */ t_sz), hit != (void*)0)))
+	else if (unlikely((hit = __liballocs_memrange_cache_lookup(
+			&__libcrunch_fake_bounds_cache, testptr, NULL, /* t->pos_maxoff */ t_sz), hit != (void*)0)))
 	{
-		/* We hit an entry with no alloc base. This means it's a "fake" entry that
-		 * we use to suppress repeated failures for unknown allocations. Bump up the
-		 * cached limit to that it includes the derived pointer. 
+		/* We hit a "fake" entry that we use to suppress repeated failures for
+		 * unknown allocations. Bump up the cached limit to that it includes
+		 * the derived pointer. 
 		 * 
 		 * ALWAYS return max bounds! These will only propagate with the pointer we're
 		 * checking, so don't have a global effect (whereas the cache does). */
 		char *limit_from_derived = (char*) derived
-			 + (hit->uniqtype ? ((struct uniqtype *)(unsigned long) hit->uniqtype)->pos_maxoff : 1);
-		if (limit_from_derived > (char*) hit->obj_limit)
+			 + (hit->t ? ((struct uniqtype *)(unsigned long) hit->t)->pos_maxoff : 1);
+		if (limit_from_derived > (char*) hit->range_limit)
 		{
-			hit->obj_limit = limit_from_derived;
+			hit->range_limit = limit_from_derived;
 		}
 		return __libcrunch_max_bounds(derived);
 	}

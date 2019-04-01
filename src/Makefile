@@ -14,6 +14,12 @@ LIBDLBIND ?= $(realpath $(SRCROOT)/../libdlbind)
 default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_stubs.o \
     libcrunch_wrappers.o
 
+# for old-style cache behaviour, uncomment this
+# (and make sure the same is done elsewhere... HMM FIXME figure this out better)
+#CFLAGS +=  -DLIBALLOCS_CACHE_LINEAR  -DLIBALLOCS_CACHE_REPLACE_FIFO -DLIBALLOCS_MEMRANGE_CACHE_MAX_SIZE=4
+
+#CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS 
+# -DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH
 CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
   tr -s '[:space:]' ' ')
 libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_abi_md5sum=0x$(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | md5sum | head -c16 )
@@ -26,7 +32,7 @@ CFLAGS += -std=gnu99 -g -fPIC -I../include
 #CFLAGS += -Wall -Wextra -Wno-unused-parameter
 # debugging version
 ifneq ($(DEBUG),)
-CFLAGS += -O0 -flto
+CFLAGS += -O0 -flto -DDEBUG
 else
 # experiment to see what's faster -- plain old -O4 -flto seems marginally faster than with -Os
 #CFLAGS += -O4 -flto -DNDEBUG

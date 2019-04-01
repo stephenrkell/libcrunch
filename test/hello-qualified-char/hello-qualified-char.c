@@ -8,13 +8,14 @@ int main(void)
 {
 	void *fake = &blah;
 
-	/* NOTE: the point of this test case is that libcrunch should 
-	 * NOT be inited. */
 	const char *recovered = (const char *) fake;
 
 	printf("It says: %s\n", recovered);
-	
-	assert(!__libcrunch_is_initialized);
+
+	/* The point of this test used to be that libcrunch should
+	 * NOT be inited. Now that __libcrunch_global_init is a
+	 * constructor, we need some other way. */
+	assert(__libcrunch_begun == 0);
 
 	return 0;
 }

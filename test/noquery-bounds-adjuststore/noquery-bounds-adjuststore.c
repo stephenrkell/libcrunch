@@ -1,10 +1,13 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <assert.h>
 
 /* Check we can adjust a pointer and store it somewhere
  * without the __store_pointer_nonlocal causing a call to __fetch_bounds_ool. 
  * This is about picking up the locally cached bounds for the 
  * __cil_adjexpr_NN temporary. */
+
+extern unsigned long __libcrunch_fetch_bounds_called;
 
 int main(void)
 {
@@ -20,5 +23,6 @@ int main(void)
 	}
 
 	printf("The 20th integer is: %d\n", *p_xs[19]);
+	assert(__libcrunch_fetch_bounds_called == 0);
 	return 0;
 }
