@@ -24,13 +24,15 @@
 
 void **__libcrunch_bounds_bases_region_00;
 void **__libcrunch_bounds_bases_region_2a;
+void **__libcrunch_bounds_bases_region_55;
 void **__libcrunch_bounds_bases_region_7a;
 unsigned long *__libcrunch_bounds_sizes_region_00;
 unsigned long *__libcrunch_bounds_sizes_region_2a;
+unsigned long *__libcrunch_bounds_sizes_region_55;
 unsigned long *__libcrunch_bounds_sizes_region_7a;
 
 static void *first_2a_free;
-static void *first_30_free = (void*) 0x300000000000ul;
+static void *first_30_free = (void*) 0x332aaaaab000ul;
 
 static int check_maps_cb(struct maps_entry *ent, char *linebuf, void *arg)
 {
@@ -55,6 +57,7 @@ static int check_maps_cb(struct maps_entry *ent, char *linebuf, void *arg)
 	if (
 		   is_in_range(0x000000000000ul, 0x055555555554ul, ent->first, ent->second - 1)
 		|| is_in_range(0x2aaaaaaab000ul, 0x2ffffffffffful, ent->first, ent->second - 1)
+		|| is_in_range(0x555555556000ul, 0x565555556000ul, ent->first, ent->second - 1)
 		|| is_in_range(0x7aaaaaaab000ul, 0x7ffffffffffful, ent->first, ent->second - 1)
 		)
 	{
@@ -68,7 +71,7 @@ static int check_maps_cb(struct maps_entry *ent, char *linebuf, void *arg)
 	{
 		// we assume the 3s and 4s are controlled by us -- HMM
 	}
-	else abort();
+	else { raw_write(2, "bad mapping address\n", sizeof "bad mapping address\n" - 1); abort(); }
 }
 /* This is a constructor, since it's important that it happens before
  * much stuff has been memory-mapped. Unlike the main libcrunch/liballocs
@@ -187,12 +190,13 @@ static void init_shadow_space(void) // constructor (declared above)
 	for_each_maps_entry(fd, get_a_line_from_maps_fd,
 		linebuf, sizeof linebuf, &entry, check_maps_cb, NULL);
 	if (!first_2a_free) first_2a_free = (void*) 0x2aaaaaaab000ul;
-	if (!first_30_free) first_30_free = (void*) 0x300000000000ul;
+	if (!first_30_free) first_30_free = (void*) 0x332aaaaab000ul;
 	close(fd);
 	
 	/* HMM. Stick with XOR top-three-bits thing for the base.
 	 * we need {0000,0555} -> {7000,7555}
 	 *         {2aaa,2fff} -> {5aaa,5fff}
+	 *         {5555,5600} -> {2555,2600}
 	 *         {7aaa,7fff} -> {0aaa,0fff}
 	 * What about sizes? 
 	 * First we want to divide the addr by 2
@@ -205,6 +209,7 @@ static void init_shadow_space(void) // constructor (declared above)
 	 * How about 0800?
 	 * giving  {0800,0aaa} 
 	 *         {1d55,22aa} 
+	 *         {32aa,3300}
 	 *         {4555,47ff}.
 	 * Okay, let's try it.
 	 */
@@ -216,6 +221,10 @@ static void init_shadow_space(void) // constructor (declared above)
 		/* size */ 0x600000000000ul - 0x5aaaaaaab000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
 	if (__libcrunch_bounds_bases_region_2a != (void*) 0x5aaaaaaab000ul) abort();
+	__libcrunch_bounds_bases_region_55 = mmap(/* base */ (void*) 0x255555556000ul,
+		/* size */ 0x265555556000ul - 0x255555556000ul, PROT_READ|PROT_WRITE,
+		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
+	if (__libcrunch_bounds_bases_region_55 != (void*) 0x255555556000) abort();
 	__libcrunch_bounds_bases_region_7a = mmap(/* base */ (void*) 0x0aaaaaaab000ul, 
 		/* size */ 0x100000000000ul - 0x0aaaaaaab000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED, -1, 0);
@@ -248,6 +257,10 @@ static void init_shadow_space(void) // constructor (declared above)
 		/* size */ 0x22aaaaaab000ul - 0x1d5555556000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
 	if (__libcrunch_bounds_sizes_region_2a != (void*) 0x1d5555556000ul) abort();
+	__libcrunch_bounds_sizes_region_55 = mmap(/* base */ (void*) 0x32aa80000000ul,
+		/* size */ 0x332aaaaab000ul - 0x32aa80000000ul, PROT_READ|PROT_WRITE,
+		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
+	if (__libcrunch_bounds_sizes_region_55 != (void*) 0x32aa80000000ul) abort();
 	__libcrunch_bounds_sizes_region_7a = mmap(/* base */ (void*) 0x455555556000ul, 
 		/* size */ 0x480000000000ul - 0x455555556000ul, PROT_READ|PROT_WRITE, 
 		MAP_PRIVATE|flags|MAP_NORESERVE|MAP_FIXED, fd, 0);
