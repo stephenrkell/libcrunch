@@ -2391,7 +2391,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		{
 			// bounds are the whole array
 			const char *lower = (char*) alloc_start + arg.innermost_containing_array_type_span_start_offset;
-			const char *upper = (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) == 0) ? /* use the allocation's limit */ 
+			const char *upper = !UNIQTYPE_HAS_KNOWN_LENGTH(arg.innermost_containing_array_t) ? /* use the allocation's limit */
 					alloc_start + alloc_size_bytes
 					: (char*) alloc_start + arg.innermost_containing_array_type_span_start_offset
 						+ (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) * t->pos_maxoff);
