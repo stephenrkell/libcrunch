@@ -2193,10 +2193,10 @@ can_hold_pointer_failed:
 out:
 	return 1; // fail, but program continues
 }
-extern void *__real___notify_copy(void *dest, const void *src, size_t n);
+extern void __real___notify_copy(void *dest, const void *src, size_t n);
 void **__libcrunch_ool_base_stored_addr(void *const *stored_ptr_addr);
 unsigned *__libcrunch_ool_size_stored_addr(void *const *stored_ptr_addr);
-void *__wrap___notify_copy(void *dest, const void *src, size_t n)
+void __wrap___notify_copy(void *dest, const void *src, size_t n)
 {
 	/* Do nothing if the shadow space is not initialized. */
 	/* WEIRD. If I replace "goto out" with "return dest" here, 
@@ -2224,8 +2224,9 @@ void *__wrap___notify_copy(void *dest, const void *src, size_t n)
 	orig_memmove(__libcrunch_ool_size_stored_addr(dest), 
 		__libcrunch_ool_size_stored_addr(src),
 		n * sizeof (unsigned) / sizeof (void*));
+
 out:
-	return __real___notify_copy(dest, src, n);
+	__real___notify_copy(dest, src, n);
 }
 
 struct bounds_cb_arg
