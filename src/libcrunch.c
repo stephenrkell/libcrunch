@@ -2230,13 +2230,13 @@ out:
 
 struct bounds_cb_arg
 {
-	struct uniqtype *passed_in_t;
+	const struct uniqtype *passed_in_t;
 	unsigned target_offset;
 	_Bool success;
-	struct uniqtype *matched_t;
-	struct uniqtype *innermost_containing_array_t;
+	const struct uniqtype *matched_t;
+	const struct uniqtype *innermost_containing_array_t;
 	unsigned innermost_containing_array_type_span_start_offset;
-	struct uniqtype *outermost_containing_array_t;
+	const struct uniqtype *outermost_containing_array_t;
 	unsigned outermost_containing_array_type_span_start_offset;
 	size_t accum_array_bounds;
 };
@@ -2327,7 +2327,7 @@ static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigne
 	assert(0);
 }
 
-__libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derived, struct uniqtype *t)
+__libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derived, const struct uniqtype *t)
 {
 	if (!obj) goto return_min_bounds;
 	
@@ -2667,7 +2667,7 @@ __libcrunch_bounds_t
 
 /* Use this naive libdl-based version */
 __libcrunch_bounds_t 
-(__attribute__((pure,__const__)) __fetch_bounds_ool_via_dladdr)
+(__attribute__((const)) __fetch_bounds_ool_via_dladdr)
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
 	if (!ptr) return __make_bounds(0, 1);

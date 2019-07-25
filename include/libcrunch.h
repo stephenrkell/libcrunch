@@ -47,7 +47,7 @@ int __can_hold_pointer_internal(const void *target, const void *value) __attribu
 #ifndef CIL
 #include "libcrunch_cil_inlines.h"
 #endif
-__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived_ptr, struct uniqtype *u);
+__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived_ptr, const struct uniqtype *u);
 void * __check_derive_ptr_internal(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t *derivedfrom_bounds, struct uniqtype *t) PURE;
 
