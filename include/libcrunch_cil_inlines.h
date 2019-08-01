@@ -37,6 +37,8 @@
  * the dummy return value to a global or something. */
 void warnx(const char *fmt, ...);
 void vwarnx(const char *fmt, __builtin_va_list ap);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
 static void ( __attribute__((pure,noinline)) warnx_pure )(const char *fmt, ...)
 {
 	__builtin_va_list ap;
@@ -44,6 +46,7 @@ static void ( __attribute__((pure,noinline)) warnx_pure )(const char *fmt, ...)
 	vwarnx(fmt, ap);
 	__builtin_va_end(ap);
 }
+#pragma GCC diagnostic pop
 
 /* Ideally we really want to fit in 64 bits on x86-64. 
  * This makes life a bit trickier, however. 
@@ -117,7 +120,7 @@ int __is_a_pointer_of_degree_internal(const void *obj, int d) PURE;
 int __can_hold_pointer_internal(const void *obj, const void *value) PURE;
 
 /* Bounds checking */
-__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived_ptr, struct uniqtype *u) PURE;
+__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived_ptr, const struct uniqtype *u) PURE;
 void __libcrunch_bounds_error(const void *derived, const void *derivedfrom, 
 		__libcrunch_bounds_t bounds);
 void __libcrunch_soft_bounds_error_at(const void *ptr, __libcrunch_bounds_t bounds, const void *addr);
@@ -590,8 +593,8 @@ extern inline void *(__attribute__((always_inline,gnu_inline,used)) __libcrunch_
 //	|   /* Bottom bits of ptr */
 //		((((unsigned long long) ptr) << (8*sizeof(long long)-LIBCRUNCH_TRAP_TAG_SHIFT)
 //			>> (8*sizeof(long long) - LIBCRUNCH_TRAP_TAG_SHIFT)))
-		((unsigned long long) maybe_trapped) & ~LIBCRUNCH_TRAP_BOTTOM_MASK
-			| ((unsigned long long) ptr) & LIBCRUNCH_TRAP_BOTTOM_MASK
+		(((unsigned long long) maybe_trapped) & ~LIBCRUNCH_TRAP_BOTTOM_MASK)
+			| (((unsigned long long) ptr) & LIBCRUNCH_TRAP_BOTTOM_MASK)
 	);
 #else
 	return ptr;
@@ -909,7 +912,7 @@ extern __libcrunch_bounds_t (__attribute__((pure)) __fetch_bounds_ool)(const voi
 /* __fetch_bounds_ool_via_dladdr is not only pure, but also const since it only
  * works on static objects -- it is unaffected by changes in the global state. 
  * FIXME: this isn't really true if we get into loading/unloading shared objs! */
-extern __libcrunch_bounds_t (__attribute__((pure,__const__)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
+extern __libcrunch_bounds_t (__attribute__((const)) __fetch_bounds_ool_via_dladdr)(const void *ptr, const void *derived_ptr, struct uniqtype *t);
 #ifdef LIBCRUNCH_NO_POINTER_TYPE_INFO
 #define __fetch_bounds_ool_to_use __fetch_bounds_ool_via_dladdr
 #else
@@ -1247,7 +1250,7 @@ extern inline unsigned long (__attribute__((always_inline,gnu_inline)) __clear_l
 extern inline void **(__attribute__((always_inline,gnu_inline/*,pure,__const__*/)) __libcrunch_base_stored_loc)(void *ptr)
 {
 	/* Produce the output in the clobbered register */
-	void **ret;
+	//void **ret;
 	//__asm__ ("mov $0x70, %0 \n"
 	//		 "shl $0x28, %0 \n"
 	//		 "xor %1, %0 \n": "=r"(ret) : "r"(ptr));
@@ -1257,7 +1260,7 @@ extern inline void **(__attribute__((always_inline,gnu_inline/*,pure,__const__*/
 extern inline unsigned *(__attribute__((always_inline,gnu_inline/*,pure,__const__*/)) __libcrunch_size_stored_loc)(void *ptr)
 {
 	/* Produce the output in the clobbered register */
-	unsigned *ret;
+	//unsigned *ret;
 	//__asm__ ("mov $0x08, %0 \n"
 	//		 "shl $0x28, %0 \n"
 	//		 "add %1, %0 \n": "=r"(ret) : "r"(((unsigned long) ptr)>>1));

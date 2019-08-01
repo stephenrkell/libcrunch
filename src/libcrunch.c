@@ -2193,10 +2193,10 @@ can_hold_pointer_failed:
 out:
 	return 1; // fail, but program continues
 }
-extern void *__real___notify_copy(void *dest, const void *src, size_t n);
+extern void __real___notify_copy(void *dest, const void *src, size_t n);
 void **__libcrunch_ool_base_stored_addr(void *const *stored_ptr_addr);
 unsigned *__libcrunch_ool_size_stored_addr(void *const *stored_ptr_addr);
-void *__wrap___notify_copy(void *dest, const void *src, size_t n)
+void __wrap___notify_copy(void *dest, const void *src, size_t n)
 {
 	/* Do nothing if the shadow space is not initialized. */
 	/* WEIRD. If I replace "goto out" with "return dest" here, 
@@ -2224,19 +2224,20 @@ void *__wrap___notify_copy(void *dest, const void *src, size_t n)
 	orig_memmove(__libcrunch_ool_size_stored_addr(dest), 
 		__libcrunch_ool_size_stored_addr(src),
 		n * sizeof (unsigned) / sizeof (void*));
+
 out:
-	return __real___notify_copy(dest, src, n);
+	__real___notify_copy(dest, src, n);
 }
 
 struct bounds_cb_arg
 {
-	struct uniqtype *passed_in_t;
+	const struct uniqtype *passed_in_t;
 	unsigned target_offset;
 	_Bool success;
-	struct uniqtype *matched_t;
-	struct uniqtype *innermost_containing_array_t;
+	const struct uniqtype *matched_t;
+	const struct uniqtype *innermost_containing_array_t;
 	unsigned innermost_containing_array_type_span_start_offset;
-	struct uniqtype *outermost_containing_array_t;
+	const struct uniqtype *outermost_containing_array_t;
 	unsigned outermost_containing_array_type_span_start_offset;
 	size_t accum_array_bounds;
 };
@@ -2327,7 +2328,7 @@ static int bounds_cb(struct uniqtype *spans, unsigned span_start_offset, unsigne
 	assert(0);
 }
 
-__libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derived, struct uniqtype *t)
+__libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derived, const struct uniqtype *t)
 {
 	if (!obj) goto return_min_bounds;
 	
@@ -2390,7 +2391,7 @@ __libcrunch_bounds_t __fetch_bounds_internal(const void *obj, const void *derive
 		{
 			// bounds are the whole array
 			const char *lower = (char*) alloc_start + arg.innermost_containing_array_type_span_start_offset;
-			const char *upper = (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) == 0) ? /* use the allocation's limit */ 
+			const char *upper = !UNIQTYPE_HAS_KNOWN_LENGTH(arg.innermost_containing_array_t) ? /* use the allocation's limit */
 					alloc_start + alloc_size_bytes
 					: (char*) alloc_start + arg.innermost_containing_array_type_span_start_offset
 						+ (UNIQTYPE_ARRAY_LENGTH(arg.innermost_containing_array_t) * t->pos_maxoff);
@@ -2667,7 +2668,7 @@ __libcrunch_bounds_t
 
 /* Use this naive libdl-based version */
 __libcrunch_bounds_t 
-(__attribute__((pure,__const__)) __fetch_bounds_ool_via_dladdr)
+(__attribute__((const)) __fetch_bounds_ool_via_dladdr)
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
 	if (!ptr) return __make_bounds(0, 1);

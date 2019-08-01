@@ -290,7 +290,7 @@ static void init_shadow_entries(void)
 {
 	/* It's not just about wrapping functions. Initialise the globals.
 	 * FIXME: not sure why SoftBound doesn't do this. */
-	Elf64_auxv_t *auxv_array_start = get_auxv((const char **) environ, environ[0]);
+	Elf64_auxv_t *auxv_array_start = get_auxv((char **) environ, environ[0]);
 	if (!auxv_array_start) return;
 
 	struct auxv_limits lims = get_auxv_limits(auxv_array_start);
