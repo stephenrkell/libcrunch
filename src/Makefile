@@ -53,12 +53,12 @@ ifeq ($(notdir $(CC)),crunchcc)
 export CC := cc
 endif
 
-ifeq ($(USE_REAL_LIBUNWIND),)
+ifeq ($(USE_FAKE_LIBUNWIND),)
+CFLAGS += -DUSE_REAL_LIBUNWIND
+LIBUNWIND_LDLIBS := -lunwind -lunwind-$(shell uname -m)
+else
 CFLAGS += -fno-omit-frame-pointer
 LIBUNWIND_LDLIBS :=
-else
-LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
-CFLAGS += -DUSE_REAL_LIBUNWIND
 endif
 
 # until binutils bug 13600 is fixed, gold is the linker we need

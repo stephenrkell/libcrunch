@@ -124,7 +124,7 @@ int __can_hold_pointer_internal(const void *obj, const void *target)
 	return 1;
 }
 
-__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived, struct uniqtype *t)
+__libcrunch_bounds_t __fetch_bounds_internal(const void *ptr, const void *derived, const struct uniqtype *t)
 {
 	return __libcrunch_max_bounds(ptr);
 }
