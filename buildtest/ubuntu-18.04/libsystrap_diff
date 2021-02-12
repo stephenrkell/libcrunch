@@ -1,0 +1,27 @@
+diff --git src/Makefile src/Makefile
+index 6afec07..34c1a02 100644
+--- src/Makefile
++++ src/Makefile
+@@ -34,6 +34,7 @@ else
+ endif
+ 
+ CFLAGS += -I/usr/include/$(shell $(CC) -dumpmachine)
++CFLAGS += -I$(srcroot)/contrib/libx86emulate/src/
+ 
+ C_SRC := $(wildcard *.c)
+ S_SRC := $(wildcard *.s)
+diff --git test/Makefile test/Makefile
+index 8e1b3bf..5400a89 100644
+--- test/Makefile
++++ test/Makefile
+@@ -1,8 +1,8 @@
+-CFLAGS += -g
++CFLAGS += -g -fPIC
+ 
+ default: hello true getpid time read write
+ 
+-true getpid time read write: LDFLAGS += -Wl,-nostdlib -nostartfiles -ffreestanding
++true getpid time read write: LDFLAGS += -no-pie -Wl,-nostdlib -nostartfiles -ffreestanding
+ 
+ x86-decode: CFLAGS += -I../libsystrap -std=gnu11
+ x86-decode: LDLIBS += ../libsystrap/x86_decode.o -ludis86
