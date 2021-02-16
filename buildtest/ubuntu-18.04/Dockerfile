@@ -19,3 +19,11 @@ COPY libcrunch_diff /usr/local/src/libcrunch/
 
 RUN cd /usr/local/src/libcrunch && patch -p0 < libcrunch_diff
 RUN cd /usr/local/src/libcrunch/src && make -j1
+RUN cd /usr/local/src/libcrunch/lib && make -j1
+
+COPY liballocs_diff /usr/local/src/liballocs/
+RUN cd /usr/local/src/liballocs/ && patch -p0 < liballocs_diff
+
+RUN cd /usr/local/src/libcrunch/src && make -j1
+
+RUN cd /usr/local/src/libcrunch && make -j1

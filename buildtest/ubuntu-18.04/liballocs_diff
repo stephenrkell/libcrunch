@@ -1,0 +1,27 @@
+diff --git tools/allocscompilerwrapper.py tools/allocscompilerwrapper.py
+index a8a7005..415ffdf 100644
+--- tools/allocscompilerwrapper.py
++++ tools/allocscompilerwrapper.py
+@@ -69,8 +69,11 @@ class AllocsCompilerWrapper(CompilerWrapper):
+         return -1
+         
+     def getLibAllocsBaseDir(self):
+-        # FIXME: don't assume we're run in-place
+-        return os.path.dirname(__file__) + "/../"
++        # FIXME: To be honest, this is worse, but hey :-)
++        return "/usr/local/src/liballocs/"
++        # # FIXME: don't assume we're run in-place
++        # return os.path.dirname(__file__) + "/../"
++        
+ 
+     def getLibNameStem(self):
+         return "allocs"
+@@ -509,7 +512,7 @@ class AllocsCompilerWrapper(CompilerWrapper):
+         if self.doingFinalLink() and not self.doingStaticLink() and not self.linkingSharedObject():
+             # we're building a dynamically linked executable
+             liballocsLinkArgs += ["-Wl,--dynamic-linker," + self.getRunPath() + "/allocsld.so"]
+-            liballocsLinkArgs += [self.getRunPath() + "/interp-pad.o"]
++            liballocsLinkArgs += [self.getLibAllocsBaseDir() + "lib/interp-pad.o"]
+             liballocsLinkArgs += ["-Wl,-rpath," + self.getRunPath()]
+             if "LIBALLOCS_USE_PRELOAD" in os.environ and os.environ["LIBALLOCS_USE_PRELOAD"] == "no":
+                 liballocsLinkArgs += [self.getLdLibBase()]
