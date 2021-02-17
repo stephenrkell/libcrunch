@@ -24,7 +24,7 @@ index b444d4d..925ea25 100755
                  os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h"] \
                    if (len(sourceFiles) > 0 and self.areAllSourceFilesC(sourceFiles)) else [])
 diff --git src/Makefile src/Makefile
-index 41df2ad..fe0c35e 100644
+index 41df2ad..df59f11 100644
 --- src/Makefile
 +++ src/Makefile
 @@ -18,21 +18,21 @@ CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
@@ -34,7 +34,7 @@ index 41df2ad..fe0c35e 100644
 -CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBRUNT)/include -I$(LIBDLBIND)/include
 -LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
 +CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(LIBSYSTRAP)/include -I$(LIBRUNT)/include -I$(LIBDLBIND)/include -I$(LIBALLOCS)/contrib/liballocstool/include
-+LDFLAGS += -L$(LIBALLOCS)/lib -L$(LIBALLOCS)/libsystrap -fno-lto -Wl,--allow-multiple-definition
++LDFLAGS += -L$(LIBALLOCS)/lib -L$(LIBALLOCS)/libsystrap -fno-lto
  
  #CFLAGS += -fkeep-inline-functions
  CFLAGS += -std=gnu99 -g -fPIC -I../include
@@ -74,7 +74,7 @@ index 41df2ad..fe0c35e 100644
  -Wl,--wrap,dlfree -Wl,--wrap,dlrealloc -Wl,--wrap,dlmemalign -Wl,--wrap,dlposix_memalign \
  -Wl,--whole-archive dlmalloc.a  -Wl,--no-whole-archive \
   -Wl,--defsym,__private_malloc=__wrap_dlmalloc \
-@@ -101,15 +101,33 @@ libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
+@@ -101,17 +101,34 @@ libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
   -Bsymbolic # important for _etext in preload hooks
  # -Wl,--wrap,__liballocs_nudge_mmap \
  
@@ -108,18 +108,20 @@ index 41df2ad..fe0c35e 100644
 +libcrunch_preload.so libcrunch_stubs.so: LDFLAGS += -L$(LIBDLBIND)/lib $(LIBALLOCS)/lib/liballocs_preload.a
 +libcrunch_preload.so libcrunch_stubs.so: LDLIBS += $(LIBUNWIND_LDLIBS) -ldlbind -ldl
 +libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBDLBIND)/lib/libdlbind.a $(LIBALLOCS)/lib/liballocs_systrap.o $(LIBSYSTRAP)/lib/libsystrap.a
-+	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %librunt.a,$(filter-out %libdlbind.a,$(filter-out %allocs_preload.a,$+))) \
++	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out dlmalloc.a,$(filter-out %librunt_preload.a,$(filter-out %libdlbind.a,$(filter-out %allocs_preload.a,$+)))) \
  $(LDFLAGS) \
- -Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
+--Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
  -Wl,--no-whole-archive -Wl,-Bdynamic \
-@@ -134,10 +152,10 @@ stubs.o: CFLAGS += -fPIC
+ $(LDLIBS)
+ #-Wl,--wrap,__liballocs_nudge_mmap \
+@@ -134,10 +151,10 @@ stubs.o: CFLAGS += -fPIC
  libcrunch_nomemtable.o: libcrunch.c
  	$(CC) $(CFLAGS) -DNO_MEMTABLE -c -o "$@" $+
  
 -libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 -	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz -Wl,--wrap,__liballocs_nudge_mmap -ldlbind
 +libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(LIBSYSTRAP)/lib/libsystrap.a
-+	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) $(LDLIBS) -lz -Wl,--wrap,__liballocs_nudge_mmap -ldlbind
++	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %librunt_preload.a,$(filter-out %liballocs_dummyweaks.o,$+)) $(LDFLAGS) $(LDLIBS) -lz -Wl,--wrap,__liballocs_nudge_mmap -ldlbind
  
 -libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
 +libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(LIBSYSTRAP)/lib/libsystrap.a
