@@ -1,11 +1,10 @@
 -include $(dir $(lastword $(MAKEFILE_LIST)))/local-config.mk
 
 LIBALLOCS ?= $(realpath $(SRCROOT)/../liballocs)
-LIBCXXGEN ?= $(LIBALLOCS)/contrib/libcxxgen
-LIBDWARFPP ?= $(LIBALLOCS)/contrib/libdwarfpp
-LIBSRK31CXX ?= $(LIBALLOCS)/contrib/libsrk31cxx
-LIBCXXFILENO ?= $(LIBALLOCS)/contrib/libcxxfileno
+LIBCXXGEN ?= $(LIBALLOCS)/contrib/dwarfidl/contrib/libcxxgen
+LIBDWARFPP ?= $(LIBALLOCS)/contrib/dwarfidl/contrib/libdwarfpp
+LIBSRK31CXX ?= $(LIBALLOCS)/contrib/dwarfidl/contrib/libdwarfpp/contrib/libsrk31c++
+LIBCXXFILENO ?= $(LIBALLOCS)/contrib/dwarfidl/contrib/libdwarfpp/contrib/libc++fileno
 LIBDLBIND ?= $(LIBALLOCS)/contrib/libdlbind
-TRAP_SYSCALLS ?= $(LIBALLOCS)/contrib/trap-syscalls
-LIBSYSTRAP ?= $(TRAP_SYSCALLS)/libsystrap
-LIBRUNT ?= $(LIBALLOCS)/contrib/librunt
+LIBSYSTRAP ?= $(LIBALLOCS)/contrib/libsystrap
+LIBRUNT ?= $(LIBALLOCS)/contrib/libsystrap/contrib/librunt
