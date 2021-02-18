@@ -23,7 +23,7 @@ class CrunchCC(AllocsCC):
         # PROBLEM: if we have a mixture of C and preprocessed-but-non-C, this will break.
         return AllocsCC.getIncludeArgs(self, sourceFiles) + \
              (["-I" + self.getLibAllocsBaseDir() + "/include", \
-                "-include", self.getLibAllocsBaseDir() + "/include/uniqtype-defs.h", \
+                "-include", self.getLibAllocsBaseDir() + "/contrib/liballocstool/include/uniqtype-defs.h", \
                  "-include", \
                 os.path.dirname(__file__) + "/../../../include/libcrunch_cil_inlines.h"] \
                   if (len(sourceFiles) > 0 and self.areAllSourceFilesC(sourceFiles)) else [])
