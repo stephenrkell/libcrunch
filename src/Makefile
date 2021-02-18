@@ -18,21 +18,21 @@ CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
   tr -s '[:space:]' ' ')
 libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_abi_md5sum=0x$(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | md5sum | head -c16 )
 
-CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBRUNT)/include -I$(LIBDLBIND)/include
-LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
+CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(LIBSYSTRAP)/include -I$(LIBRUNT)/include -I$(LIBDLBIND)/include -I$(LIBALLOCS)/contrib/liballocstool/include
+LDFLAGS += -L$(LIBALLOCS)/lib -L$(LIBALLOCS)/libsystrap -fno-lto
 
 #CFLAGS += -fkeep-inline-functions
 CFLAGS += -std=gnu99 -g -fPIC -I../include
 #CFLAGS += -Wall -Wextra -Wno-unused-parameter
 # debugging version
 ifneq ($(DEBUG),)
-CFLAGS += -O0 -flto
+CFLAGS += -O0 -fno-lto
 else
 # experiment to see what's faster -- plain old -O4 -flto seems marginally faster than with -Os
 #CFLAGS += -O4 -flto -DNDEBUG
 #CFLAGS += -Os -flto -DNDEBUG
-CFLAGS += -O3 -flto -ffat-lto-objects -DNDEBUG
-FINAL_LDFLAGS += -O4 -flto -Bsymbolic -Wl,-O2
+CFLAGS += -O3 -fno-lto -ffat-lto-objects -DNDEBUG
+FINAL_LDFLAGS += -O4 -fno-lto -Bsymbolic -Wl,-O2
 endif
 #CFLAGS += -O0 
 
@@ -79,9 +79,9 @@ $(CC_DEPS): .%.d : %.cc
 # linked in the fastest possible way.
 libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDFLAGS += $(FINAL_LDFLAGS)
 libcrunch_preload.so libcrunch_nomemtable_preload.so: LDFLAGS += -Wl,--wrap,malloc_usable_size -Wl,--wrap,__notify_copy
-libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDLIBS += -lsystrap -lz -Wl,--no-as-needed -ldl
+libcrunch_preload.so libcrunch_nomemtable_preload.so libcrunch.so: LDLIBS += -L$(LIBSYSTRAP)/lib -lsystrap -lz -Wl,--no-as-needed -ldl
 
-vpath dlmalloc.c $(TRAP_SYSCALLS)/src
+vpath dlmalloc.c $(LIBSYSTRAP)/contrib/
 # We put dlmalloc in a library so that --exclude-libs=dlmalloc.a will hide its symbols
 # in our output .so, so that they don't override anything in the rest of the program.
 dlmalloc.a: dlmalloc.o
@@ -101,17 +101,61 @@ libcrunch_preload.so: LDFLAGS += -Wl,--wrap,dlmalloc -Wl,--wrap,dlcalloc \
  -Bsymbolic # important for _etext in preload hooks
 # -Wl,--wrap,__liballocs_nudge_mmap \
 
+# FIXME: all this guff is because librunt is logically incomplete.
+# Can we package it into some kind of librunt.lds linker script
+# that pulls in the library but also sets up all this other stuff?
+libcrunch_stubs.so: LDFLAGS += -Wl,--whole-archive dlmalloc.a  -Wl,--no-whole-archive \
+ -Wl,--defsym,__private_malloc=dlmalloc \
+ -Wl,--defsym,__private_calloc=dlcalloc \
+ -Wl,--defsym,__private_free=dlfree \
+ -Wl,--defsym,__private_realloc=dlrealloc \
+ -Wl,--defsym,__private_memalign=dlmemalign \
+ -Wl,--defsym,__private_posix_memalign=dlposix_memalign \
+ -Wl,--exclude-libs=dlmalloc.a \
+ -Bsymbolic # important for _etext in preload hooks
+# + see the giant __private_strdup hack in liballocs/src/dummyweaks.c
+
+## Direct copy paste s/allocs/crunch/g from liballocs/src/Makefile
+RUNT_LDFLAGS := -Wl,--wrap,__runt_files_notify_load \
+-Wl,--wrap,__runt_files_notify_unload \
+-Wl,--wrap,__runt_files_metadata_by_addr \
+-Wl,--wrap,__runt_segments_notify_define_segment \
+-Wl,--wrap,__runt_segments_notify_destroy_segment \
+-Wl,--wrap,__runt_sections_notify_define_section # there is no 'destroy section'
+# if we don't do --whole-archive, then the wrapping of __runt_* doesn't work...
+# ... though with a behaviour that makes no sense: librunt still calls itself rather
+# than its wrapper __static_file_allocator notify_load.
+libcrunch_preload.so: LDFLAGS += $(RUNT_LDFLAGS) -Wl,-O0
+libcrunch_preload.so: LDLIBS +=  -Wl,--whole-archive $(LIBRUNT)/lib/librunt_preload.a -Wl,--no-whole-archive
+# dependency for make
+libcrunch_preload.so: $(LIBRUNT)/lib/librunt_preload.a
+# NOTE that libcrunch_stubs.so is a little different: it doesn't need to wrap anything
+# in librunt (because it doesn't contain a full liballocs), so just link it as a normal archive.
+# BUT we need to sew up the wrappable seam in librunt.
+libcrunch_stubs.so: $(LIBRUNT)/lib/librunt.a
+libcrunch_stubs.so: LDLIBS += $(LIBRUNT)/lib/librunt.a
+libcrunch_stubs.so: LDFLAGS += -Wl,--defsym,__wrap___runt_files_notify_load=__runt_files_notify_load \
+-Wl,--defsym,__wrap___runt_files_notify_unload=__runt_files_notify_unload \
+-Wl,--defsym,__wrap___runt_files_metadata_by_addr=__runt_files_metadata_by_addr \
+-Wl,--defsym,__wrap___runt_segments_notify_define_segment=__runt_segments_notify_define_segment\
+-Wl,--defsym,__wrap___runt_segments_notify_destroy_segment=__runt_segments_notify_destroy_segment \
+-Wl,--defsym,__wrap___runt_sections_notify_define_section=__runt_sections_notify_define_section # there is no 'destroy section'
+
+# (This matters because we don't want multiple copies of the liballocs/librunt preload
+# functions in the process! It breaks RTLD_NEXT, which we use to locate the 'real'
+# dl_iterate_phdr and friends... we end up finding our own stub version.)
+
 # FIXME: in preload case, can be clever with stubs? 
 # HMM. We still have to --wrap the allocation funcs, but we could put the wrappers in the preload lib...
 # BUT since they're generated per-build from the LIBCRUNCH_ALLOC_FNS content, this doesn't work --
 # stick with stubs!
 
 libcrunch_preload.so libcrunch_stubs.so: LDFLAGS += -L$(LIBDLBIND)/lib
-libcrunch_preload.so: LDLIBS += $(LIBUNWIND_LDLIBS) -ldlbind -ldl
-libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBDLBIND)/lib/libdlbind.a $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
-	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out %libdlbind.a,$(filter-out %allocs_preload.a,$+)) \
+libcrunch_preload.so: LDFLAGS += $(LIBALLOCS)/lib/liballocs_preload.a
+libcrunch_preload.so libcrunch_stubs.so: LDLIBS += $(LIBUNWIND_LDLIBS) -ldlbind -ldl
+libcrunch_preload.so: libcrunch.o $(LIBALLOCS)/lib/liballocs_preload.a $(LIBDLBIND)/lib/libdlbind.a $(LIBALLOCS)/lib/liballocs_systrap.o $(LIBSYSTRAP)/lib/libsystrap.a
+	$(CC) $(CFLAGS) -shared -o "$@" $(filter-out dlmalloc.a,$(filter-out %librunt_preload.a,$(filter-out %libdlbind.a,$(filter-out %allocs_preload.a,$+)))) \
 $(LDFLAGS) \
--Wl,--whole-archive -Wl,-Bstatic -lallocs_preload \
 -Wl,--no-whole-archive -Wl,-Bdynamic \
 $(LDLIBS)
 #-Wl,--wrap,__liballocs_nudge_mmap \
@@ -134,10 +178,10 @@ stubs.o: CFLAGS += -fPIC
 libcrunch_nomemtable.o: libcrunch.c
 	$(CC) $(CFLAGS) -DNO_MEMTABLE -c -o "$@" $+
 
-libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
-	$(CC) $(CFLAGS) -shared -o "$@" $+ $(LDFLAGS) -lz -Wl,--wrap,__liballocs_nudge_mmap -ldlbind
+libcrunch_stubs.so: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(LIBSYSTRAP)/lib/libsystrap.a
+	$(CC) $(CFLAGS) -Wl,-Map,$@.map -shared -o "$@" $(filter-out %librunt_preload.a,$+) $(LDFLAGS) $(LDLIBS) -lz -Wl,--wrap,__liballocs_nudge_mmap -ldlbind
 
-libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(TRAP_SYSCALLS)/libsystrap/libsystrap.a
+libcrunch_stubs.o: stubs.o shadow.o $(LIBALLOCS)/lib/liballocs_dummyweaks.o $(LIBALLOCS)/lib/liballocs_systrap.o $(LIBSYSTRAP)/lib/libsystrap.a
 	$(LD) -r -o "$@" $+ --wrap __liballocs_nudge_mmap
 
 libcrunch_wrappers.o: softbound-libc-wrappers.c
