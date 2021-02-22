@@ -9,9 +9,13 @@ export CFLAGS
 
 UNIQTYPES_BASE ?= /usr/lib/allocsites
 ALLOCSITES_BASE ?= /usr/lib/allocsites
-LIBALLOCS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../liballocs)
+srcroot := $(realpath $(dir $(THIS_MAKEFILE))/..)
+-include $(srcroot)/config.mk
+LIBALLOCS ?= $(realpath $(srcroot)/../liballocs)
 LIBALLOCS_BASE ?= $(LIBALLOCS)
-
+# FIXME: eliminate the _BASE
+#$(info LIBALLOCS is $(LIBALLOCS))
+#$(info LIBRUNT is $(LIBRUNT))
 export UNIQTYPES_BASE
 export ALLOCSITES_BASE
 export LIBALLOCS
@@ -19,6 +23,7 @@ export LIBALLOCS_BASE
 
 export LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/..)
 export LIBCRUNCH_BASE := $(LIBCRUNCH)
+# FIXME: eliminate the _BASE
 export LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY := 1
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
@@ -26,7 +31,7 @@ CFLAGS += -fno-omit-frame-pointer
 CXXFLAGS += -fno-omit-frame-pointer
 LIBUNWIND_LDLIBS :=
 else
-LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
+LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m`
 endif
 
 cases := $(filter-out checks.sh,$(filter-out rename-case.sh,$(notdir $(wildcard $(TESTDIR)/[-a-z]*))))
@@ -84,8 +89,8 @@ endif
 #$(warning in $(MAKEFILE_LIST), CXX is $(CXX))
 export CC
 export CXX
-export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include -I$(LIBALLOCS)/include
-export LDFLAGS += -L$(LIBALLOCS)/lib
+export CFLAGS += -I$(srcroot)/include -I$(LIBALLOCS)/include -I$(LIBALLOCSTOOL)/include -I$(LIBRUNT)/include
+export LDFLAGS += -L$(LIBALLOCS)/lib # FIXME: why?
 
 # We want to filter the list of cases, to include only those
 # relevant to the current FRONTEND.
@@ -112,7 +117,7 @@ set_configs_for_case = $(foreach c,$(2),$(eval CASES_CONFIG_$(c) := $(CASES_CONF
 # set CASES_fe and CASES_CONFIG_c for each test's {( fe, c )}
 -include */frontend.mk
 
-# some cases don't set 
+# some cases don't set the frontend
 explicit_fe_cases := $(foreach c,$(cases),$(notdir $(realpath $(dir $(wildcard $(TESTDIR)/$(c)/frontend.mk)))))
 no_explicit_fe_cases := $(filter-out $(explicit_fe_cases),$(cases))
 #$(warning explicit_fe_cases is $(explicit_fe_cases))
@@ -348,7 +353,7 @@ gdbcleanrun-%:
 endif # end assuming we have FRONTEND
 
 clean-%:
-	if [ -z "$(FRONTEND)" ]; then frontends="$(frontends)"; else frontends=$(FRONTEND); fi; \
+	@if [ -z "$(FRONTEND)" ]; then frontends="$(frontends)"; else frontends=$(FRONTEND); fi; \
 	if [ -z "$(CONFIG)" ]; then configs="$(configs)"; else configs=$(CONFIG); fi; \
 	for c in $$configs; do \
 	for f in $$frontends; do \
