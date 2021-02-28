@@ -159,6 +159,8 @@ checkalltests: $(patsubst %,checkrun-%,$(fccases))
 # List of everything which, if changed, should prompt re-running tests.
 RERUN_TESTS_ON_CHANGE := $(LIBCRUNCH) $(shell find $(dir $(THIS_MAKEFILE))/../frontend | grep '\.cmxs$$' )
 
+NLINES := 30
+
 # Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
 # Note that bounds errors never do this. HMM. Soon, type errors might not either.
 checkrun-fail-bounds-type-%: fail-bounds-type-%/$(FRONTEND)+$(CONFIG)/check-stamp
@@ -168,10 +170,10 @@ fail-bounds-type-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-bounds-type-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "       failed otherwise" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 checkrun-fail-bounds-%: fail-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp
 	true # remembered pass of fail-bounds-$*
 fail-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
@@ -179,10 +181,10 @@ fail-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-bounds-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "out-of-bounds pointers created" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
 checkrun-fail-%: fail-%/$(FRONTEND)+$(CONFIG)/check-stamp
@@ -192,10 +194,10 @@ fail-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
-		    match "       failed otherwise" '[1-9][0-9]*' >/dev/null && \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
+		    match " failed otherwise" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # some cases are ignored
 checkrun-ignore-%:
@@ -227,7 +229,7 @@ softbound-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	if $(MAKE) cleanrun-softbound-$* 1>$$out 2>$$err && \
-           . ./checks.sh && tail -n26 "$$err" | \
+           . ./checks.sh && tail -n$(NLINES) "$$err" | \
                 match "out-of-bounds pointers created" '0' >/dev/null && \
                 ! grep 'calls to __fetch_bounds:.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
@@ -239,9 +241,9 @@ bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-bounds-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # Trap bounds cases should report OOB pointers
 checkrun-trap-bounds-%: trap-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp
@@ -251,10 +253,10 @@ trap-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "tout is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "terr is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-trap-bounds-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "out-of-bounds pointers created" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # Most test cases should output a libcrunch summary in which 
 # -- zero or more checks passed (trivially or by lazy typing)
@@ -307,12 +309,12 @@ XXXdisabed-lazy-typing/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANG
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-lazy-typing 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "of which did lazy heap type assignment" '[1-9][0-9]*' | \
 		    match "       failed inside"        '0' | \
 		    match "       failed otherwise"     '0' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # These targets run with pwd of the test build dir
 _onlyrun-%:
