@@ -342,9 +342,9 @@ extern inline int (__attribute__((always_inline,gnu_inline,used)) __is_aU )(cons
 	// now we're really started 
 	__libcrunch_begun++; 
 
-	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup(
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup_with_type(
 		&__liballocs_ool_cache,
-		obj, (struct uniqtype*) uniqtype, 0);
+		obj, (struct uniqtype*) uniqtype);
 	if (hit)
 	{
 		// hit!
@@ -568,9 +568,9 @@ extern inline int (__attribute__((always_inline,gnu_inline,used)) __can_hold_poi
 	__libcrunch_begun++;
 	/* First we look in the cache for any pointer-sized object
 	 * at the target site. Then if it's a pointer... */
-	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup(
+	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup_with_size(
 		&__liballocs_ool_cache,
-		target, NULL, 0);
+		target, sizeof (void*));
 	if (hit)
 	{
 		/* We succeed iff hit->t is a pointer type
@@ -578,12 +578,11 @@ extern inline int (__attribute__((always_inline,gnu_inline,used)) __can_hold_poi
 		// FIXME: replace these nasty hardcoded constants with
 		// use of macros that we can generate from dwarfidl of struct uniqtype
 		// (for clients that can't afford to include uniqtype-defs.h)
-		char kind = *((char*)(unsigned long) hit->t + 0xc);
-		if (UNIQTYPE_QD_KIND(hit->t) == 8)
+		if (UNIQTYPE_QD_KIND(hit->t) == 8 /* pointer */)
 		{
-			struct __liballocs_memrange_cache_entry_s *hit2 = __liballocs_memrange_cache_lookup(
+			struct __liballocs_memrange_cache_entry_s *hit2 = __liballocs_memrange_cache_lookup_with_type(
 				&__liballocs_ool_cache,
-				value, UNIQTYPE_QD_RELATED0_T(hit->t), 0);
+				value, UNIQTYPE_QD_RELATED0_T(hit->t));
 			if (hit2)
 			{
 				++__libcrunch_is_a_hit_cache;
@@ -905,12 +904,13 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 	} else testptr = ptr;
 	const void *derived = (const void *) __libcrunch_detrap(derived_ptr_maybetrapped);
 	
-	/* If we hit the is-a cache, we can return an answer inline. */
+	/* If we hit the is-a cache, we can return an answer inline. There are several
+	 * different ways this can pan out. See the cases listed in liballocs_cil_inlines.h */
 	struct __liballocs_memrange_cache_entry_s *hit = __liballocs_memrange_cache_lookup_range(
 			&__liballocs_ool_cache, testptr);
+	// case 1: top-level match
 	if (hit &&
-		hit->period == t_sz &&
-		0 == ((char*) obj - (char*) hit->range_base) % hit->period // the "mod check" is important
+		QUERY_SIZE_MATCHES_TOPLEVEL_RANGE(*hit, ptr, t_sz)
 	)
 	{
 		/* Is ptr actually a t? If not, we're in trouble!
@@ -918,11 +918,53 @@ extern inline __libcrunch_bounds_t (__attribute__((always_inline,gnu_inline,used
 		 * NO, we handle that in caller. */
 		return __make_bounds((unsigned long) hit->range_base, (unsigned long) hit->range_limit);
 	}
-	// TODO: else if hit but not a period match... is it congruent to X modulo period,
-	// where X is the offset of the contained-range fact currently cached? also check sz
+	// case 2a: offset range match (singleton)
+	// means that obj points at a single instance of t
+	else if (hit &&
+		QUERY_SIZE_MATCHES_OFFSET_RANGE_SINGLETON(*hit, ptr, t_sz)
+	)
+	{
+		return __make_bounds((unsigned long) ptr, (unsigned long) ptr + t_sz);
+	}
+	// case 2b: offset range match (array)
+	// means that obj points at/into an array, with the right modulus for that array
+	// so we want to return the bounds of the whole array
+	else if (hit &&
+		QUERY_SIZE_MATCHES_OFFSET_RANGE_ARRAY(*hit, ptr, t_sz)
+	)
+	{
+		/* What are the array bounds? They're
+		 * range_base + (diff-rounded-down-to-range-period) + offset_to_t,
+		 * the same + size of array */
+		unsigned long base = (unsigned long) hit->range_base +
+				( /* round down */ hit->period * ((DIFF(*hit, ptr)) / hit->period)) +
+				hit->offset_to_t;
+		return __make_bounds(base, base + UNIQTYPE_QD_SIZE(hit->t));
+	}
+	// case 3a: contained range match (in uniqtype), singleton
+	else if (hit &&
+		QUERY_SIZE_MATCHES_CACHED_CONTAINED_RANGE_SINGLETON(*hit, ptr, t_sz)
+	)
+	{
+		return __make_bounds((unsigned long) ptr, (unsigned long) ptr + t_sz);
+	}
+	// case 3b: contained range match (in uniqtype), array
+	else if (hit &&
+		QUERY_SIZE_MATCHES_CACHED_CONTAINED_RANGE_ARRAY(*hit, ptr, t_sz)
+	)
+	{
+		/* What are the array bounds? They're
+		 * range_base + (diff-rounded-down-to-period) + offset_to_t,
+		 * the same + size of array */
+		unsigned long base = (unsigned long) hit->range_base +
+				( /* round down */ hit->period * ((DIFF(*hit, ptr)) / hit->period)) +
+				hit->offset_to_t +
+				UNIQTYPE_QD_CACHE_WORD(ENTRY_TYPE(*hit)).bits;
+		return __make_bounds(base, base + UNIQTYPE_QD_SIZE(UNIQTYPE_QD_CACHE_WORD(ENTRY_TYPE(*hit)).addr));
+	}
 
-	if (unlikely((hit = __liballocs_memrange_cache_lookup(
-			&__libcrunch_fake_bounds_cache, testptr, NULL, /* t->pos_maxoff */ t_sz), hit != (void*)0)))
+	if (unlikely((hit = __liballocs_memrange_cache_lookup_with_size(
+			&__libcrunch_fake_bounds_cache, testptr, /* t->pos_maxoff */ t_sz), hit != (void*)0)))
 	{
 		/* We hit a "fake" entry that we use to suppress repeated failures for
 		 * unknown allocations. Bump up the cached limit to that it includes

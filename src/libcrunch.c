@@ -1727,9 +1727,10 @@ static _Bool holds_pointer_of_degree(struct uniqtype *u, int d, unsigned target_
 	/* Descend the subobject hierarchy until we can't go any further (since pointers
 	 * are atomic. */
 	unsigned distance_traversed = 0;
+	struct uniqtype *containing_t = NULL;
 	struct uniqtype_rel_info *contained_pos = NULL;
 	struct uniqtype *deepest = __liballocs_deepest_span(u, target_offset,
-			&distance_traversed, NULL);
+			&distance_traversed, &contained_pos, &containing_t);
 	if (distance_traversed == target_offset && UNIQTYPE_IS_POINTER_TYPE(deepest))
 	{
 		_Bool depth_okay = pointer_has_degree(deepest, d);
@@ -2175,7 +2176,7 @@ int __can_hold_pointer_internal(const void *obj, const void *value)
 	unsigned distance_traversed;
 	struct uniqtype *type_of_pointer_being_stored_to = __liballocs_deepest_span(
 		cur_obj_within_alloc_uniqtype, obj_target_offset_within_uniqtype,
-		&distance_traversed, NULL
+		&distance_traversed, NULL, NULL
 	);
 	
 	struct allocator *value_pointee_a = NULL;
@@ -2944,7 +2945,7 @@ void (__attribute__((nonnull(1))) __store_pointer_nonlocal_via_voidptrptr)(const
 		struct uniqtype_rel_info *cur_contained_pos = NULL;
 		unsigned distance_traversed = 0;
 		struct uniqtype *deepest = __liballocs_deepest_span(
-				cached_target_alloc_type, target_offset, &distance_traversed, NULL);
+				cached_target_alloc_type, target_offset, &distance_traversed, NULL, NULL);
 		if (distance_traversed != target_offset ||
 				!UNIQTYPE_IS_POINTER_TYPE(deepest)) cached_target_alloc_type = NULL;
 		else cached_target_alloc_type = deepest;
@@ -3010,12 +3011,17 @@ void __libcrunch_ool_check_cache_sanity(struct __liballocs_memrange_cache *cache
 	__liballocs_check_cache_sanity(cache);
 }
 
-struct __liballocs_memrange_cache_entry_s *__libcrunch_ool_cache_lookup(struct __liballocs_memrange_cache *cache, const void *obj, struct uniqtype *t, unsigned long require_period)
+struct __liballocs_memrange_cache_entry_s *__libcrunch_ool_cache_lookup_with_type(struct __liballocs_memrange_cache *cache, const void *obj, struct uniqtype *t)
 {
-	return __liballocs_memrange_cache_lookup(cache, obj, t, require_period);
+	return __liballocs_memrange_cache_lookup_with_type(cache, obj, t);
 }
 
-struct uniqtype * __libcrunch__ool_get_cached_object_type(const void *addr)
+struct __liballocs_memrange_cache_entry_s *__libcrunch_ool_cache_lookup_with_size(struct __liballocs_memrange_cache *cache, const void *obj, struct uniqtype *t, unsigned sz)
+{
+	return __liballocs_memrange_cache_lookup_with_size(cache, obj, sz);
+}
+
+struct uniqtype * __libcrunch_ool_get_cached_object_type(const void *addr)
 {
 	return __liballocs_get_cached_object_type(addr);
 }
