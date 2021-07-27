@@ -21,6 +21,14 @@
 //#endif
 #endif
 
+#ifdef IN_LIBCRUNCH
+extern struct uniqtype *pointer_to___uniqtype__signed_char;
+extern struct uniqtype *pointer_to___uniqtype__unsigned_char;
+#else
+extern struct uniqtype __uniqtype__signed_char$8;
+extern struct uniqtype __uniqtype__unsigned_char$8;
+#endif
+
 // #define LIBCRUNCH_WORDSIZE_BOUNDS 1 /* HACK temporary */
 
 /* NO -- assume uniqtype is already defined, e.g. by -include */
@@ -1171,7 +1179,21 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	/* We've failed a primary check, so tell the compiler what that means. */
 	if (!(pre_detrap_addr - naive_base >= size)) __builtin_unreachable();
 	// ensure valid bounds
-	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom))
+	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom) ||
+			/* Since we're 'experimentally' not widening bounds on cast to char*,
+			 * we need the secondary path to re-fetch them. FIXME: I think it'd
+			 * be better to use (after defining it) UNIQTYPE_IS_CHAR_8BIT_TYPE()
+			 * rather than linking to specific uniqtypes. */
+#ifdef IN_LIBCRUNCH
+			(  t == pointer_to___uniqtype__signed_char
+			|| t == pointer_to___uniqtype__unsigned_char
+			)
+#else
+			(  t == &__uniqtype__signed_char$8
+			|| t == &__uniqtype__unsigned_char$8
+			)
+#endif
+	)
 	{
 		/* In the out-of-line fetch-bounds path is the code for cache lookup, 
 		 * fake bounds handling and calling liballocs. 

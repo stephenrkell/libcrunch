@@ -16,20 +16,20 @@ void *alloc(size_t elemsize)
 	 * is a void* and char** is a generic pointer pointer. However, we get the bounds
 	 * [cpp, cpp+8bytes).*/
 	char **cpp = freelist = (char **) calloc(NBLOCK, elemsize);
-	/* We should now get the bounds of the whole allocation. */
-	char *cp = (char *) cpp;
-	for (int j = NBLOCK - 1; j > 0; --j)
-	{
-		cp += elemsize;
-		*cpp = cp;
-		cpp = (char **)cp;
-	}
-	*cpp = NULL;
+	/* We should now get the bounds of the whole allocation. BUT WE DON'T. What's going on? */
+	char *cp = (char *) cpp; // loop goes backwards but this has absolutely no significance
+	for (int j = NBLOCK - 1; j > 0; --j)     // This loop is threading a free list through *all 50*
+	{                                        // elements in the calloc'd array, including the one
+		cp += elemsize;                      // we will shortly unlink and issue. <-- pre-increment
+		*cpp = cp;                           // cp to the next entry in the block, then point *cpp
+		cpp = (char **)cp; /* succeeds! ^^ */// to that next element, then advance cpp to point at
+	}                                        // that element for the next run
+	*cpp = NULL;                             // set the next-in-freelist ptr to NULL, in last elt
 	
-	// unlink one and return it
+	// unlink one and return it... the next-free pointer is still intact, just trashable by caller
 	cp = (char *)freelist;
-	freelist = (char **)(*freelist);
-	return cp;
+	freelist = (char **)(*freelist);         // update freelist (remember it's static)
+	return cp; // (a real version of this allocator would check for a non-empty freelist *first*)
 }
 
 
