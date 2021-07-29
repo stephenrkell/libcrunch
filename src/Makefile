@@ -20,13 +20,20 @@ default: libcrunch_preload.so libcrunch_preload.a libcrunch_stubs.so libcrunch_s
 
 #CFLAGS += -DLIBCRUNCH_WORDSIZE_BOUNDS 
 # -DLIBCRUNCH_NO_SECONDARY_DERIVE_PATH
-CFLAGS += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
+bounds_flags += $(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | \
   tr -s '[:space:]' ' ')
+$(info Building libcrunch with bounds config: $(bounds_flags))
+CFLAGS += $(bounds_flags)
+# In the name of trying to be generic, the bounds-abi doesn't set
+# the config for trap pointers. Instead it leaves this to the instrumentation.
+# But when building libcrunch we pretend that trap pointers are always active.
+CFLAGS += -DLIBCRUNCH_USING_TRAP_PTRS
 libcrunch_preload.so: LDFLAGS += -Wl,--defsym,__libcrunch_bounds_abi_md5sum=0x$(shell cat $(SRCROOT)/frontend/c/lib/bounds-abi | md5sum | head -c16 )
 
 # some of the CIL inline code cares about whether we're in the runtime...
 # in the runtime it's not OK to emit references to uniqtypes, for uniquifying reasons
 CFLAGS += -DIN_LIBCRUNCH
+
 CFLAGS += -I$(LIBALLOCS)/include -I$(LIBALLOCS)/src -I$(TRAP_SYSCALLS)/libsystrap -I$(LIBRUNT)/include -I$(LIBDLBIND)/include
 LDFLAGS += -L$(LIBALLOCS)/lib -L$(TRAP_SYSCALLS)/libsystrap
 

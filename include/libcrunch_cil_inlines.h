@@ -1179,11 +1179,17 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 	/* We've failed a primary check, so tell the compiler what that means. */
 	if (!(pre_detrap_addr - naive_base >= size)) __builtin_unreachable();
 	// ensure valid bounds
-	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom) ||
+	if (__libcrunch_bounds_invalid(*p_derivedfrom_bounds, derivedfrom)
+#ifndef LIBCRUNCH_NO_POINTER_TYPE_INFO
+			||
 			/* Since we're 'experimentally' not widening bounds on cast to char*,
 			 * we need the secondary path to re-fetch them. FIXME: I think it'd
 			 * be better to use (after defining it) UNIQTYPE_IS_CHAR_8BIT_TYPE()
-			 * rather than linking to specific uniqtypes. */
+			 * rather than linking to specific uniqtypes.
+			 *
+			 * Note that this only applies if we have type info. Otherwise we
+			 * should never be narrowing the bounds beyond the allocation limits,
+			 * or at least not expecting a cast to char* to widen them again. */
 #ifdef IN_LIBCRUNCH
 			(  t == pointer_to___uniqtype__signed_char
 			|| t == pointer_to___uniqtype__unsigned_char
@@ -1193,6 +1199,7 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 			|| t == &__uniqtype__unsigned_char$8
 			)
 #endif
+#endif
 	)
 	{
 		/* In the out-of-line fetch-bounds path is the code for cache lookup, 
@@ -1201,7 +1208,9 @@ extern inline _Bool (__attribute__((always_inline,gnu_inline,used,nonnull(1,3)))
 		 * both *p_derived and derivedfrom.
 		 * -- not much solution that I can see, because of fake bounds creation
 		 * PROBLEM: one of these pointers might currently be trapped.
-		 * -- AH, fetch_bounds deals with this.
+		 * -- AH, fetch_bounds (inline) deals with this. Only for one-past?
+		 * PROBLEM: if we are without type info, we might be calling dladdr,
+		 * but our pointer 
 		 */
 		*p_derivedfrom_bounds = __fetch_bounds_ool_to_use(derivedfrom, *p_derived, t);
 	}

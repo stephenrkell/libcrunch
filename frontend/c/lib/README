@@ -1,0 +1,11 @@
+bounds-abi          -- contains cross-cutting config of bounds (size etc)
+bounds-config-f     -- crunchbound, all checking in primary path
+bounds-config-m     -- crunchbound, minimalist secondary path
+bounds-config-p     -- crunchbound, standard secondary path
+bounds-config-s     -- SoftBound [but continue on failure]
+bounds-config-t     -- SoftBound [but continue on failure] with trap pointers instead of check-on-deref
+bounds-config-F     -- as f but stop on failure
+bounds-config-M     -- as m but stop on failure (of primary check?)
+bounds-config-P     -- as p but stop on failure (of primary check?)
+bounds-config-S     -- as s but stop on failure
+bounds-config-T     -- as t but stop on failure (creation of trap pointer is failure?)

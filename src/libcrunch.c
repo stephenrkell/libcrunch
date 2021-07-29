@@ -2851,7 +2851,8 @@ __libcrunch_bounds_t
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
 	++__libcrunch_fetch_bounds_called; // TEMP
-	/* If we have one-past pointers, pretend we're asking for one before. */
+	/* If we have one-past pointers, pretend we're asking for one before.
+	 * FIXME: why not blanket-detrap? why just one-past? */
 	if (__libcrunch_ptr_trap_bits(ptr) == LIBCRUNCH_TRAP_ONE_PAST)
 	{
 		ptr = (void*) __libcrunch_detrap((char*) ptr - t->pos_maxoff);
@@ -2876,6 +2877,16 @@ __libcrunch_bounds_t
 (const void *ptr, const void *derived_ptr, struct uniqtype *t)
 {
 	if (!ptr) return __make_bounds(0, 1);
+	/* If we have one-past pointers, pretend we're asking for one before.
+	 * FIXME: why not blanket-detrap? why just one-past? */
+	if (__libcrunch_ptr_trap_bits(ptr) == LIBCRUNCH_TRAP_ONE_PAST)
+	{
+		ptr = (void*) __libcrunch_detrap((char*) ptr - t->pos_maxoff);
+	}
+	if (__libcrunch_ptr_trap_bits(derived_ptr) == LIBCRUNCH_TRAP_ONE_PAST)
+	{
+		derived_ptr = (void*) __libcrunch_detrap((char*) derived_ptr - t->pos_maxoff);
+	}
 	Dl_info i = dladdr_with_cache(ptr);
 	if (i.dli_fname && i.dli_sname)
 	{
