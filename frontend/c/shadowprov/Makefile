@@ -1,7 +1,7 @@
 # This will build any one-file C program as a test
 
--include $(dir $(lastword $(MAKEFILE_LIST)))/../../../config.mk
 LIBCRUNCH_BASE ?= ../../..
+-include $(LIBCRUNCH_BASE)/config.mk
 
 export USE_LD=ld.gold
 
@@ -12,6 +12,13 @@ C_DEPS := $(patsubst %.c,.%.d,$(C_SRC))
 $(C_DEPS): .%.d : %.c
 	$(CC) -MM $(CFLAGS) $(CPPFLAGS) "$<"  > "$@" || (rm -f "$@"; false)
 -include $(C_DEPS)
+
+ifeq ($(LIBRUNT),)
+$(error LIBRUNT not set)
+endif
+ifeq ($(LIBALLOCS),)
+$(error LIBALLOCS not set)
+endif
 
 CPPFLAGS += -I$(LIBRUNT)/include
 
@@ -26,7 +33,8 @@ stubs.o: shadowprov_libc_wrappers.o
 shadowprov_libc_wrappers.o: shadowprov_libc_wrappers.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o "$@" "$<"
 shadowprov_libc_wrappers.o .shadowprov_libc_wrappers.d: CFLAGS += -g -fPIC -std=c11
-shadowprov_libc_wrappers.o .shadowprov_libc_wrappers.d: CFLAGS += -I$(LIBCRUNCH_BASE)/include \
+shadowprov_libc_wrappers.o .shadowprov_libc_wrappers.d: \
+CFLAGS += -I$(LIBCRUNCH_BASE)/include \
   -I$(LIBCRUNCH_BASE)/src \
   -I$(LIBALLOCS)/include \
   -I$(LIBALLOCS)/src \

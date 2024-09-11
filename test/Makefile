@@ -9,9 +9,13 @@ export CFLAGS
 
 UNIQTYPES_BASE ?= /usr/lib/allocsites
 ALLOCSITES_BASE ?= /usr/lib/allocsites
-LIBALLOCS ?= $(realpath $(dir $(THIS_MAKEFILE))/../../liballocs)
+srcroot := $(realpath $(dir $(THIS_MAKEFILE))/..)
+-include $(srcroot)/config.mk
+LIBALLOCS ?= $(realpath $(srcroot)/../liballocs)
 LIBALLOCS_BASE ?= $(LIBALLOCS)
-
+# FIXME: eliminate the _BASE
+#$(info LIBALLOCS is $(LIBALLOCS))
+#$(info LIBRUNT is $(LIBRUNT))
 export UNIQTYPES_BASE
 export ALLOCSITES_BASE
 export LIBALLOCS
@@ -19,6 +23,7 @@ export LIBALLOCS_BASE
 
 export LIBCRUNCH := $(realpath $(dir $(THIS_MAKEFILE))/..)
 export LIBCRUNCH_BASE := $(LIBCRUNCH)
+# FIXME: eliminate the _BASE
 export LIBCRUNCH_ALWAYS_PRINT_EXIT_SUMMARY := 1
 
 ifneq ($(USE_FAKE_LIBUNWIND),)
@@ -26,7 +31,7 @@ CFLAGS += -fno-omit-frame-pointer
 CXXFLAGS += -fno-omit-frame-pointer
 LIBUNWIND_LDLIBS :=
 else
-LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m` 
+LIBUNWIND_LDLIBS := -lunwind -lunwind-`uname -m`
 endif
 
 cases := $(filter-out checks.sh,$(filter-out rename-case.sh,$(notdir $(wildcard $(TESTDIR)/[-a-z]*))))
@@ -84,8 +89,8 @@ endif
 #$(warning in $(MAKEFILE_LIST), CXX is $(CXX))
 export CC
 export CXX
-export CFLAGS += -I$(realpath $(dir $(THIS_MAKEFILE)))/../include -I$(LIBALLOCS)/include
-export LDFLAGS += -L$(LIBALLOCS)/lib
+export CFLAGS += -I$(srcroot)/include -I$(LIBALLOCS)/include -I$(LIBALLOCSTOOL)/include -I$(LIBRUNT)/include
+export LDFLAGS += -L$(LIBALLOCS)/lib # FIXME: why?
 
 # We want to filter the list of cases, to include only those
 # relevant to the current FRONTEND.
@@ -112,7 +117,7 @@ set_configs_for_case = $(foreach c,$(2),$(eval CASES_CONFIG_$(c) := $(CASES_CONF
 # set CASES_fe and CASES_CONFIG_c for each test's {( fe, c )}
 -include */frontend.mk
 
-# some cases don't set 
+# some cases don't set the frontend
 explicit_fe_cases := $(foreach c,$(cases),$(notdir $(realpath $(dir $(wildcard $(TESTDIR)/$(c)/frontend.mk)))))
 no_explicit_fe_cases := $(filter-out $(explicit_fe_cases),$(cases))
 #$(warning explicit_fe_cases is $(explicit_fe_cases))
@@ -154,6 +159,8 @@ checkalltests: $(patsubst %,checkrun-%,$(fccases))
 # List of everything which, if changed, should prompt re-running tests.
 RERUN_TESTS_ON_CHANGE := $(LIBCRUNCH) $(shell find $(dir $(THIS_MAKEFILE))/../frontend | grep '\.cmxs$$' )
 
+NLINES := 30
+
 # Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
 # Note that bounds errors never do this. HMM. Soon, type errors might not either.
 checkrun-fail-bounds-type-%: fail-bounds-type-%/$(FRONTEND)+$(CONFIG)/check-stamp
@@ -163,10 +170,10 @@ fail-bounds-type-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-bounds-type-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "       failed otherwise" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 checkrun-fail-bounds-%: fail-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp
 	true # remembered pass of fail-bounds-$*
 fail-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
@@ -174,10 +181,10 @@ fail-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-bounds-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "out-of-bounds pointers created" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # Some cases are expected to fail, i.e. generate libcrunch "check failed" stats.
 checkrun-fail-%: fail-%/$(FRONTEND)+$(CONFIG)/check-stamp
@@ -187,10 +194,10 @@ fail-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-fail-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
-		    match "       failed otherwise" '[1-9][0-9]*' >/dev/null && \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
+		    match " failed otherwise" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # some cases are ignored
 checkrun-ignore-%:
@@ -222,7 +229,7 @@ softbound-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	if $(MAKE) cleanrun-softbound-$* 1>$$out 2>$$err && \
-           . ./checks.sh && tail -n26 "$$err" | \
+           . ./checks.sh && tail -n$(NLINES) "$$err" | \
                 match "out-of-bounds pointers created" '0' >/dev/null && \
                 ! grep 'calls to __fetch_bounds:.* [1-9]\+[0-9]*$$' $$err; then touch "$@"; else false; fi
 
@@ -234,9 +241,9 @@ bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-bounds-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # Trap bounds cases should report OOB pointers
 checkrun-trap-bounds-%: trap-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp
@@ -246,10 +253,10 @@ trap-bounds-%/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANGE)
 	out=$$( echo -n "tout is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "terr is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-trap-bounds-$* 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "out-of-bounds pointers created" '[1-9][0-9]*' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
+		(tail -n$(NLINES) $$err; false)
 
 # Most test cases should output a libcrunch summary in which 
 # -- zero or more checks passed (trivially or by lazy typing)
@@ -302,13 +309,13 @@ XXXdisabed-lazy-typing/$(FRONTEND)+$(CONFIG)/check-stamp: $(RERUN_TESTS_ON_CHANG
 	out=$$( echo -n "out is " 1>&2; mktemp | tee /dev/stderr ) && \
 	err=$$( echo -n "err is " 1>&2; mktemp | tee /dev/stderr ) && \
 	$(MAKE) cleanrun-lazy-typing 1>$$out 2>$$err && \
-		. ./checks.sh && tail -n26 "$$err" | \
+		. ./checks.sh && tail -n$(NLINES) "$$err" | \
 		    match "of which did lazy heap type assignment" '[1-9][0-9]*' | \
 		    match "       failed inside"        '0' | \
 		    match "       failed otherwise"     '0' >/dev/null && \
 		    touch "$@" || \
-		(tail -n26 $$err; false)
-# we disabled the cache prefill, so this one isn't expected to pass
+		(tail -n$(NLINES) $$err; false)
+# we disabled the cache prefill in 53c1481, so this one isn't expected to pass
 checkrun-noquery-bounds-viacache:
 	true
 
@@ -351,7 +358,7 @@ gdbcleanrun-%:
 endif # end assuming we have FRONTEND
 
 clean-%:
-	if [ -z "$(FRONTEND)" ]; then frontends="$(frontends)"; else frontends=$(FRONTEND); fi; \
+	@if [ -z "$(FRONTEND)" ]; then frontends="$(frontends)"; else frontends=$(FRONTEND); fi; \
 	if [ -z "$(CONFIG)" ]; then configs="$(configs)"; else configs=$(CONFIG); fi; \
 	for c in $$configs; do \
 	for f in $$frontends; do \
